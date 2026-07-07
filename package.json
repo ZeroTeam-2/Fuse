@@ -1,0 +1,38 @@
+{
+  "name": "fuse",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Fuse monorepo — NuxtJS + NestJS + MongoDB",
+  "scripts": {
+    "dev": "pnpm -r --parallel run dev",
+    "build": "pnpm -r run build",
+    "lint": "oxlint .",
+    "format": "oxfmt .",
+    "gen:types": "openapi-typescript http://localhost:3001/api/schema.json -o apps/frontend/src/types/api.ts",
+    "prepare": "git config core.hooksPath .githooks && chmod +x .githooks/*",
+    "version:major": "npx changelogen@latest --release --major && git push --follow-tags",
+    "version:minor": "npx changelogen@latest --release --minor && git push --follow-tags",
+    "version:patch": "npx changelogen@latest --release --patch && git push --follow-tags"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^19.8.1",
+    "@commitlint/config-conventional": "^19.8.1",
+    "@types/node": "^24.0.0",
+    "changelogen": "^0.5.7",
+    "openapi-typescript": "^7.13.0",
+    "oxfmt": "^0.58.0",
+    "oxlint": "^1.73.0",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "@parcel/watcher",
+      "@scarf/scarf"
+    ]
+  }
+}
