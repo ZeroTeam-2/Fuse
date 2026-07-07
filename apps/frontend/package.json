@@ -1,0 +1,25 @@
+{
+  "name": "@fuse/frontend",
+  "version": "0.0.1",
+  "description": "Fuse frontend — Nuxt 3",
+  "scripts": {
+    "dev": "nuxt dev --port 3000",
+    "build": "nuxt build",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "typecheck": "nuxt typecheck"
+  },
+  "dependencies": {
+    "@fuse/shared": "workspace:*",
+    "nuxt": "^3.17.4",
+    "openapi-fetch": "^0.17.0",
+    "vue": "^3.5.17",
+    "zod": "^3.25.67"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "dotenv": "^16.5.0",
+    "typescript": "^5.8.3",
+    "vue-tsc": "^2.2.10"
+  }
+}
