@@ -1,0 +1,9 @@
+{
+  "extends": "./.nuxt/tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@fuse/shared": ["../../packages/shared/src/index.ts"],
+      "@fuse/shared/*": ["../../packages/shared/src/*"]
+    }
+  }
+}
