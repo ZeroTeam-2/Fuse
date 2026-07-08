@@ -1,6 +1,6 @@
 # Reverse proxy: /api/* -> backend (NestJS), остальное -> frontend (Nuxt).
 # Backend использует глобальный префикс "api", поэтому путь не переписывается.
-:8080 {
+:8081 {
 	handle /api/* {
 		reverse_proxy backend:3001
 	}
