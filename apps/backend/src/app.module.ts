@@ -9,12 +9,12 @@ import { UsersModule } from "./users/users.module";
     ConfigModule.forRoot({
       isGlobal: true,
       validate: validateEnv,
-      envFilePath: ['../../.env', '.env'],
+      envFilePath: ["../../.env", ".env"],
     }),
     MongooseModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
-        uri: configService.get<string>("MONGODB_URI"),
+        uri: configService.get<string>("MONGODB_URL"),
       }),
       inject: [ConfigService],
     }),

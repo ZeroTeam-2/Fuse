@@ -65,7 +65,7 @@ docker compose ps
 ## 5. Бэкенд (NestJS)
 
 ```bash
-cp .env.example .env   # заполнить MONGODB_URI
+cp .env.example .env   # заполнить MONGODB_URL
 cd apps/backend
 pnpm dev
 ```
@@ -73,7 +73,7 @@ pnpm dev
 | #   | Проверка                       | Ожидаемый результат                                                                    |
 | --- | ------------------------------ | -------------------------------------------------------------------------------------- |
 | 5.1 | Приложение стартует без ошибок | в логах `Application is running on: http://localhost:3001`                             |
-| 5.2 | Валидация .env работает        | удалить `MONGODB_URI` из `.env` → старт падает с ошибкой zod                           |
+| 5.2 | Валидация .env работает        | удалить `MONGODB_URL` из `.env` → старт падает с ошибкой zod                           |
 | 5.3 | MongoDB подключена             | нет ошибок `MongooseError` в логах                                                     |
 | 5.4 | Scalar UI доступен             | `GET http://localhost:3001/api/docs` → 200, открывается Scalar                         |
 | 5.5 | OpenAPI схема доступна         | `GET http://localhost:3001/api/schema.json` → валидный JSON с полем `openapi: "3.0.0"` |

@@ -1,9 +1,11 @@
 import { z } from "zod";
 
 export const envSchema = z.object({
-  NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+  NODE_ENV: z
+    .enum(["development", "production", "test"])
+    .default("development"),
   PORT: z.string().default("3001").transform(Number),
-  MONGODB_URI: z.string().min(1, "MONGODB_URI is required"),
+  MONGODB_URL: z.string().min(1, "MONGODB_URL is required"),
 });
 
 export type Env = z.infer<typeof envSchema>;
