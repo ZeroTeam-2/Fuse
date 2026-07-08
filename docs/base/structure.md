@@ -197,9 +197,11 @@ apps/backend/src/config/
 import { z } from "zod";
 
 export const envSchema = z.object({
-  NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+  NODE_ENV: z
+    .enum(["development", "production", "test"])
+    .default("development"),
   PORT: z.string().default("3001").transform(Number),
-  MONGODB_URI: z.string().min(1),
+  MONGODB_URL: z.string().min(1),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -237,7 +239,9 @@ export const publicEnvSchema = z.object({
 });
 
 export const serverEnvSchema = z.object({
-  sessionSecret: z.string().min(32, "NUXT_SESSION_SECRET must be at least 32 characters"),
+  sessionSecret: z
+    .string()
+    .min(32, "NUXT_SESSION_SECRET must be at least 32 characters"),
 });
 ```
 
@@ -252,7 +256,8 @@ loadEnv({ path: resolve(rootDir, "../../.env") });
 const publicResult = publicEnvSchema.safeParse({
   apiBaseUrl: process.env.NUXT_PUBLIC_API_BASE_URL ?? "",
 });
-if (!publicResult.success) throw new Error(`[env] Public env validation failed: ...`);
+if (!publicResult.success)
+  throw new Error(`[env] Public env validation failed: ...`);
 ```
 
 ## Git-workflow и инструменты качества

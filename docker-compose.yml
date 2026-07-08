@@ -1,23 +1,49 @@
+# MongoDB не поднимается как сервис — подключение задаётся переменной
+# MONGODB_URL (например, внешний кластер или mongo на хосте через
+# host.docker.internal). Переменные читаются из .env в корне репозитория.
+#
+# Единственная точка входа — caddy (http://localhost:${HTTP_PORT:-80}):
+#   /api/* проксируется в backend, остальное — во frontend.
 services:
-  mongo:
-    image: mongo:7
-    container_name: fuse-mongo
+  caddy:
+    image: caddy:2-alpine
+    container_name: fuse-caddy
     restart: unless-stopped
     ports:
-      - "27017:27017"
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
-      MONGO_INITDB_DATABASE: ${MONGO_DB}
+      - "${HTTP_PORT:-8080}:8080"
     volumes:
-      - mongo_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - backend
+      - frontend
 
-volumes:
-  mongo_data:
-    name: fuse_mongo_data
+  backend:
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+    container_name: fuse-backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: 3001
+      MONGODB_URL: ${MONGODB_URL:?MONGODB_URL is required}
+    expose:
+      - "3001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: apps/frontend/Dockerfile
+    container_name: fuse-frontend
+    restart: unless-stopped
+    environment:
+      # same-origin: браузер ходит на /api/* через caddy
+      # (значение из .env намеренно не используется — оно для локальной разработки)
+      NUXT_PUBLIC_API_BASE_URL: /
+      NUXT_SESSION_SECRET: ${NUXT_SESSION_SECRET:?NUXT_SESSION_SECRET is required}
+    expose:
+      - "3000"
+    depends_on:
+      - backend
