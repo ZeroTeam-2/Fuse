@@ -8,13 +8,15 @@ COPY packages/shared/package.json packages/shared/
 COPY apps/backend/package.json apps/backend/
 
 FROM base AS build
-RUN pnpm install --frozen-lockfile --filter @fuse/backend...
+# --ignore-scripts: корневой prepare-скрипт настраивает git-хуки и в образе
+# падает (нет git и .githooks)
+RUN pnpm install --frozen-lockfile --ignore-scripts --filter @fuse/backend...
 COPY packages/shared packages/shared
 COPY apps/backend apps/backend
 RUN pnpm --filter @fuse/backend build
 
 FROM base AS prod-deps
-RUN pnpm install --frozen-lockfile --prod --filter @fuse/backend...
+RUN pnpm install --frozen-lockfile --ignore-scripts --prod --filter @fuse/backend...
 
 FROM node:24-alpine AS runner
 WORKDIR /app
