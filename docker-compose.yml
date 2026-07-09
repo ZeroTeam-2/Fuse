@@ -1,10 +1,48 @@
-# MongoDB не поднимается как сервис — подключение задаётся переменной
-# MONGODB_URL (например, внешний кластер или mongo на хосте через
-# host.docker.internal). Переменные читаются из .env в корне репозитория.
+# Инфраструктура для локальной разработки: MongoDB, Redis, MinIO.
+# Для production-деплоя используется отдельный compose (переменные окружения
+# задают подключение к внешним сервисам).
 #
-# Единственная точка входа — caddy (http://localhost:${HTTP_PORT:-80}):
+# Единая точка входа — caddy (http://localhost:${HTTP_PORT:-8081}):
 #   /api/* проксируется в backend, остальное — во frontend.
 services:
+  # ─── Infrastructure ──────────────────────────────────────────────────────
+  mongo:
+    image: mongo:7
+    container_name: fuse-mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-fuse}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-fusepassword}
+      MONGO_INITDB_DATABASE: ${MONGO_DB:-fuse}
+    ports:
+      - "27018:27017"
+    volumes:
+      - fuse-mongo-data:/data/db
+
+  redis:
+    image: redis:7-alpine
+    container_name: fuse-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - fuse-redis-data:/data
+
+  minio:
+    image: minio/minio:latest
+    container_name: fuse-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - fuse-minio-data:/data
+
+  # ─── Application ─────────────────────────────────────────────────────────
   caddy:
     build:
       context: .
@@ -35,12 +73,28 @@ services:
       NODE_ENV: ${NODE_ENV:-production}
       PORT: 3001
       MONGODB_URL: ${MONGODB_URL:?MONGODB_URL is required}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio}
+      MINIO_PORT: "9000"
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-fuse}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      YANDEX_CLIENT_ID: ${YANDEX_CLIENT_ID:-}
+      YANDEX_CLIENT_SECRET: ${YANDEX_CLIENT_SECRET:-}
+      YANDEX_REDIRECT_URI: ${YANDEX_REDIRECT_URI:-}
     expose:
       - "3001"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      mongo:
+        condition: service_started
+      redis:
+        condition: service_started
+      minio:
+        condition: service_started
     healthcheck:
-      # GET / отдаёт {"status":"ok"} после успешного старта Nest (в т.ч. Mongo)
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3001/"]
       interval: 15s
       timeout: 5s
@@ -54,8 +108,6 @@ services:
     container_name: fuse-frontend
     restart: unless-stopped
     environment:
-      # same-origin: браузер ходит на /api/* через caddy
-      # (значение из .env намеренно не используется — оно для локальной разработки)
       NUXT_PUBLIC_API_BASE_URL: /
       NUXT_SESSION_SECRET: ${NUXT_SESSION_SECRET:?NUXT_SESSION_SECRET is required}
     expose:
@@ -69,3 +121,8 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+volumes:
+  fuse-mongo-data:
+  fuse-redis-data:
+  fuse-minio-data:

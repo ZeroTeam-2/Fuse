@@ -1,0 +1,238 @@
+import { Injectable, BadRequestException } from "@nestjs/common";
+import { dereference } from "@readme/openapi-parser";
+import { randomUUID } from "crypto";
+import { EndpointStatus, HttpMethod, ParamLocation } from "@fuse/shared";
+import type { Endpoint, SchemaField } from "@fuse/shared";
+
+interface OpenAPIParameter {
+  name: string;
+  in: string;
+  required?: boolean;
+  deprecated?: boolean;
+  schema?: { type?: string; example?: unknown };
+  example?: unknown;
+  type?: string;
+}
+
+interface OpenAPISchemaObject {
+  type?: string;
+  properties?: Record<string, OpenAPISchemaObject>;
+  required?: string[];
+  items?: OpenAPISchemaObject;
+  example?: unknown;
+  description?: string;
+}
+
+interface OpenAPIRequestBody {
+  content?: Record<string, { schema?: OpenAPISchemaObject; example?: unknown }>;
+  required?: boolean;
+}
+
+interface OpenAPIResponse {
+  content?: Record<string, { schema?: OpenAPISchemaObject; example?: unknown }>;
+  description?: string;
+}
+
+interface OpenAPIOperation {
+  summary?: string;
+  description?: string;
+  deprecated?: boolean;
+  parameters?: OpenAPIParameter[];
+  requestBody?: OpenAPIRequestBody;
+  responses?: Record<string, OpenAPIResponse>;
+}
+
+interface OpenAPIPathItem {
+  parameters?: OpenAPIParameter[];
+  get?: OpenAPIOperation;
+  post?: OpenAPIOperation;
+  put?: OpenAPIOperation;
+  delete?: OpenAPIOperation;
+  patch?: OpenAPIOperation;
+}
+
+interface OpenAPIDocument {
+  openapi?: string;
+  swagger?: string;
+  info?: { version?: string; title?: string };
+  servers?: { url: string }[];
+  host?: string;
+  basePath?: string;
+  paths?: Record<string, OpenAPIPathItem>;
+}
+
+export interface ParsedSpec {
+  host?: string;
+  apiVersion?: string;
+  endpoints: Endpoint[];
+  specSnapshot: unknown;
+}
+
+const VALID_METHODS = new Set(["get", "post", "put", "delete", "patch"]);
+
+@Injectable()
+export class OpenApiParserService {
+  async parse(rawSpec: Record<string, unknown>): Promise<ParsedSpec> {
+    let spec: OpenAPIDocument;
+    try {
+      spec = (await dereference(rawSpec as never)) as OpenAPIDocument;
+    } catch {
+      throw new BadRequestException("Failed to parse OpenAPI specification");
+    }
+
+    return {
+      host: this.extractHost(spec),
+      apiVersion: spec.info?.version,
+      endpoints: this.extractEndpoints(spec),
+      specSnapshot: spec,
+    };
+  }
+
+  private extractHost(spec: OpenAPIDocument): string | undefined {
+    if (spec.servers?.length) {
+      try {
+        return new URL(spec.servers[0].url).host;
+      } catch {
+        return undefined;
+      }
+    }
+    return spec.host;
+  }
+
+  private extractEndpoints(spec: OpenAPIDocument): Endpoint[] {
+    const endpoints: Endpoint[] = [];
+    const paths = spec.paths ?? {};
+
+    for (const [path, pathItem] of Object.entries(paths)) {
+      if (!pathItem) continue;
+
+      const pathParameters = pathItem.parameters ?? [];
+
+      for (const [method, operation] of Object.entries(pathItem)) {
+        if (method === "parameters") continue;
+        if (!VALID_METHODS.has(method.toLowerCase())) continue;
+        if (!operation) continue;
+
+        const allParameters = [...pathParameters, ...(operation.parameters ?? [])];
+
+        endpoints.push({
+          id: randomUUID(),
+          method: method.toUpperCase() as HttpMethod,
+          path,
+          summary: operation.summary,
+          inputs: this.extractInputs(operation, allParameters),
+          outputs: this.extractOutputs(operation),
+          status: operation.deprecated
+            ? EndpointStatus.DEPRECATED
+            : EndpointStatus.ACTIVE,
+        });
+      }
+    }
+
+    return endpoints;
+  }
+
+  private extractInputs(
+    operation: OpenAPIOperation,
+    parameters: OpenAPIParameter[],
+  ): SchemaField[] {
+    const fields: SchemaField[] = [];
+
+    for (const param of parameters) {
+      const loc = this.mapParamLocation(param.in);
+      if (!loc) continue;
+
+      fields.push({
+        key: param.name,
+        label: param.name,
+        type: this.mapSchemaType(param.schema?.type ?? param.type),
+        loc,
+        ex: param.example ?? param.schema?.example,
+        required: param.required ?? false,
+      });
+    }
+
+    if (operation.requestBody) {
+      const schema = this.getFirstContentSchema(
+        operation.requestBody.content,
+      );
+      if (schema) {
+        fields.push(...this.extractSchemaFields(schema, ParamLocation.BODY));
+      }
+    }
+
+    return fields;
+  }
+
+  private extractOutputs(operation: OpenAPIOperation): SchemaField[] {
+    const responses = operation.responses ?? {};
+    const successCode = Object.keys(responses).find(
+      (code) => code.startsWith("2") || code === "default",
+    );
+    if (!successCode) return [];
+
+    const response = responses[successCode];
+    const schema = this.getFirstContentSchema(response?.content);
+    if (!schema) return [];
+
+    return this.extractSchemaFields(schema);
+  }
+
+  private extractSchemaFields(
+    schema: OpenAPISchemaObject,
+    loc?: ParamLocation,
+  ): SchemaField[] {
+    const target = schema.type === "array" ? schema.items : schema;
+    if (!target?.properties) return [];
+
+    return Object.entries(target.properties).map(([key, prop]) => ({
+      key,
+      label: key,
+      type: this.mapSchemaType(prop.type),
+      loc,
+      ex: prop.example,
+      required: target.required?.includes(key) ?? false,
+    }));
+  }
+
+  private getFirstContentSchema(
+    content?: Record<string, { schema?: OpenAPISchemaObject }>,
+  ): OpenAPISchemaObject | undefined {
+    if (!content) return undefined;
+    const first = Object.values(content)[0];
+    return first?.schema;
+  }
+
+  private mapParamLocation(inValue: string): ParamLocation | undefined {
+    switch (inValue) {
+      case "path":
+        return ParamLocation.PATH;
+      case "query":
+        return ParamLocation.QUERY;
+      case "header":
+        return ParamLocation.HEADER;
+      default:
+        return undefined;
+    }
+  }
+
+  private mapSchemaType(type?: string): SchemaField["type"] {
+    switch (type) {
+      case "string":
+        return "string";
+      case "number":
+      case "integer":
+        return "number";
+      case "boolean":
+        return "boolean";
+      case "array":
+        return "array";
+      case "object":
+        return "object";
+      case "file":
+        return "file";
+      default:
+        return "string";
+    }
+  }
+}
