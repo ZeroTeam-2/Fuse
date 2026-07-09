@@ -2,6 +2,8 @@ import { z } from "zod";
 
 export const publicEnvSchema = z.object({
   apiBaseUrl: z.string().min(1, "NUXT_PUBLIC_API_BASE_URL is required"),
+  yandexMetricaId: z.string().default(""),
+  fileSingleUploadMaxMb: z.coerce.number().default(10),
 });
 
 export const serverEnvSchema = z.object({

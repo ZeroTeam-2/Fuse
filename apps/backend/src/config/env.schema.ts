@@ -5,7 +5,29 @@ export const envSchema = z.object({
     .enum(["development", "production", "test"])
     .default("development"),
   PORT: z.string().default("3001").transform(Number),
+
   MONGODB_URL: z.string().min(1, "MONGODB_URL is required"),
+
+  REDIS_URL: z.string().default("redis://localhost:6379"),
+
+  MINIO_ENDPOINT: z.string().default("localhost"),
+  MINIO_PORT: z.string().default("9000").transform(Number),
+  MINIO_ACCESS_KEY: z.string().default("minioadmin"),
+  MINIO_SECRET_KEY: z.string().default("minioadmin"),
+  MINIO_BUCKET: z.string().default("fuse"),
+
+  JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters"),
+  JWT_ACCESS_EXPIRES: z.string().default("15m"),
+  JWT_REFRESH_EXPIRES: z.string().default("7d"),
+
+  YANDEX_CLIENT_ID: z.string().default(""),
+  YANDEX_CLIENT_SECRET: z.string().default(""),
+  YANDEX_REDIRECT_URI: z.string().default("http://localhost:3001/api/auth/callback"),
+
+  FILE_SINGLE_UPLOAD_MAX_MB: z.string().default("10").transform(Number),
+
+  LOG_COLLECTOR_URL: z.string().default(""),
+  MONIUM_ENABLED: z.string().default(""),
 });
 
 export type Env = z.infer<typeof envSchema>;

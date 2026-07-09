@@ -2,6 +2,8 @@ import { NestFactory } from "@nestjs/core";
 import { ValidationPipe } from "@nestjs/common";
 import { SwaggerModule, DocumentBuilder } from "@nestjs/swagger";
 import { apiReference } from "@scalar/nestjs-api-reference";
+import { IoAdapter } from "@nestjs/platform-socket.io";
+import cookieParser from "cookie-parser";
 import type { Express } from "express";
 import { AppModule } from "./app.module";
 
@@ -18,9 +20,14 @@ async function bootstrap() {
     }),
   );
 
+  app.use(cookieParser());
+
   app.enableCors({
     origin: process.env.NODE_ENV === "production" ? false : "*",
+    credentials: true,
   });
+
+  app.useWebSocketAdapter(new IoAdapter(app));
 
   const swaggerConfig = new DocumentBuilder()
     .setTitle("Fuse API")
