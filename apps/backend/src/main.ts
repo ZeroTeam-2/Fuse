@@ -24,8 +24,9 @@ async function bootstrap() {
 
   app.use(cookieParser());
 
+  const appUrl = process.env.APP_URL ?? "http://localhost:3000";
   app.enableCors({
-    origin: process.env.NODE_ENV === "production" ? false : "*",
+    origin: appUrl,
     credentials: true,
   });
 
@@ -52,9 +53,36 @@ async function bootstrap() {
   });
 
   const port = Number(process.env.PORT ?? 3001);
-  await app.listen(port);
-  console.log(`Application is running on: http://localhost:${port}`);
-  console.log(`Scalar API Docs: http://localhost:${port}/api/docs`);
+  const retryDelayMs = Number(process.env.PORT_BIND_RETRY_DELAY_MS ?? 500);
+
+  
+  try {
+    await app.listen(port);
+    console.log(`Application is running on: http://localhost:${port}`);
+    console.log(`Scalar API Docs: http://localhost:${port}/api/docs`);
+  } catch (err) {
+    const isAddrInUse =
+      err !== null &&
+      typeof err === "object" &&
+      (err as NodeJS.ErrnoException).code === "EADDRINUSE";
+
+    if (!isAddrInUse) {
+      if (isAddrInUse) {
+        console.error(
+          `Port ${port} is still in use after attempts. ` +
+            `Another process may be holding it — check with \`lsof -i :${port}\`.`,
+        );
+      }
+      throw err;
+    }
+
+    console.warn(
+      `Port ${port} is already in use (attempt); ` +
+        `retrying in ${retryDelayMs}ms...`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+  }
+  
 }
 
 bootstrap();

@@ -11,14 +11,14 @@ export class MinioService implements OnModuleInit {
   constructor(private readonly configService: ConfigService) {}
 
   async onModuleInit() {
-    this.bucket = this.configService.get<string>("MINIO_BUCKET") ?? "fuse";
+    this.bucket = this.configService.get<string>("S3_BUCKET") ?? "fuse";
 
     this.client = new Client({
-      endPoint: this.configService.get<string>("MINIO_ENDPOINT") ?? "localhost",
-      port: this.configService.get<number>("MINIO_PORT") ?? 9000,
+      endPoint: this.configService.get<string>("S3_URL") ?? "localhost",
+      port: this.configService.get<number>("S3_PORT") ?? 9000,
       useSSL: false,
-      accessKey: this.configService.get<string>("MINIO_ACCESS_KEY") ?? "minioadmin",
-      secretKey: this.configService.get<string>("MINIO_SECRET_KEY") ?? "minioadmin",
+      accessKey: this.configService.get<string>("S3_ACCESS_KEY") ?? "minioadmin",
+      secretKey: this.configService.get<string>("S3_SECRET_KEY") ?? "minioadmin",
     });
 
     try {
