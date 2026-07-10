@@ -12,6 +12,7 @@ dist/
 .output/
 .nuxt/
 .nitro/
+.turbo/
 build/
 
 # Logs

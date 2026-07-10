@@ -336,7 +336,7 @@ flowchart TD
     env --> docker["docker compose up -d\n(запуск MongoDB)"]
     docker --> devAll["pnpm dev\n(запуск всех приложений)"]
 
-    devAll --> frontDev["frontend :3000\nNuxt dev server"]
+    devAll --> frontDev["frontend :5173\nNuxt dev server"]
     devAll --> backDev["backend :3001\nNestJS dev server"]
     backDev --> scalarDocs["Scalar API Docs\n:3001/api/docs"]
     backDev --> schemaJson["/api/schema.json\nOpenAPI схема"]

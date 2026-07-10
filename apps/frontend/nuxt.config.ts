@@ -6,6 +6,12 @@ import { publicEnvSchema, serverEnvSchema } from './config/env.schema';
 const rootDir = fileURLToPath(new URL('.', import.meta.url));
 const sharedSrc = resolve(rootDir, '../../packages/shared/src');
 loadEnv({ path: resolve(rootDir, '../../.env') });
+// The shared root .env carries backend-only vars. Notably PORT (the backend's
+// 3001): Nuxt/Nitro would pick it up from the environment and bind its dev
+// server on 3001, colliding with the backend. Strip backend-only vars so they
+// can't leak into the Nuxt process.
+delete process.env.PORT;
+delete process.env.NITRO_PORT;
 
 const publicResult = publicEnvSchema.safeParse({
   apiBaseUrl: process.env.NUXT_PUBLIC_API_BASE_URL ?? '',

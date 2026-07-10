@@ -38,7 +38,7 @@ export class AuthController {
     @Query("error") error: string | undefined,
     @Res() res: Response,
   ) {
-    const appUrl = this.configService.get<string>("APP_URL") ?? "http://localhost:3000";
+    const appUrl = this.configService.get<string>("APP_URL") ?? "http://localhost:5173";
 
     if (error) {
       return res.redirect(`${appUrl}/login?error=cancelled`);
