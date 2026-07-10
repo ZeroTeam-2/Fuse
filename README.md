@@ -5,31 +5,25 @@
 ## Архитектура
 
 ```
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│   Frontend   │────▶│   Backend    │────▶│   MongoDB    │
-│  (Nuxt 3)    │     │  (NestJS)    │     │              │
-└──────────────┘     └──────┬───────┘     └──────────────┘
-                            │
-                      ┌──────┴───────┐     ┌──────────────┐
-                      │    Redis     │────▶│   MinIO      │
-                      │  (pub/sub    │     │  (S3 storage) │
-                      │   WS events) │     └──────────────┘
-                      └──────┬───────┘
-                             │
-                      ┌──────┴───────┐
-                      │   Worker     │
-                      │ (NestJS +    │
-                      │   SQS)       │
-                      └──────────────┘
+┌──────────────┐     ┌────────────────────────┐     ┌──────────────┐
+│   Frontend   │────▶│        Backend         │────▶│   MongoDB    │
+│  (Nuxt 3)    │     │  (NestJS: API + WS +   │     │              │
+│              │◀───▶│   SQS-worker в одном   │     └──────────────┘
+└──────────────┘  WS │      процессе)         │────▶┌──────────────┐
+                     └───────────┬────────────┘     │    MinIO     │
+                                 │                   │  (S3 storage) │
+                           ┌──────┴───────┐          └──────────────┘
+                           │   AWS SQS    │
+                           │  (очередь    │
+                           │  исполнения) │
+                           └──────────────┘
 ```
 
 ### Компоненты
 
 - **Frontend** (`apps/frontend`) — Nuxt 3 SSR, Pinia, Tailwind-free scoped CSS. Страницы маркетплейса, конструктор сценариев, личный кабинет.
-- **Backend** (`apps/backend`) — NestJS REST API. Модули: auth (Yandex OAuth + JWT), users, apps (импорт OpenAPI-спеков), scenarios (CRUD + валидация), marketplace (каталог карточек), execution (запуск сценариев), uploads (single + chunked), websocket (real-time события).
-- **Worker** (`apps/backend` — `worker.ts`) — отдельный процесс, обрабатывающий SQS-задачи выполнения сценариев. Поддерживает шаги: api, delay, periodic (polling), scenario (вложенные), file.
-- **Redis** — pub/sub для WebSocket событий.
-- **AWS SQS** — очередь исполнения сценариев (main → worker).
+- **Backend** (`apps/backend`) — NestJS REST API. Модули: auth (Yandex OAuth + JWT), users, apps (импорт OpenAPI-спеков), scenarios (CRUD + валидация), marketplace (каталог карточек), execution (запуск сценариев), uploads (single + chunked), websocket (real-time события). SQS-consumer (`WorkerService`) исполняется в том же процессе и эмитит WebSocket-события напрямую через `RunGateway` (без внешнего брокера). Поддерживает шаги: api, delay, periodic (polling), scenario (вложенные), file.
+- **AWS SQS** — очередь исполнения сценариев (enqueue при `POST /api/runs` → consumer в том же backend-процессе).
 - **LocalStack** — локальная эмуляция AWS SQS для разработки.
 - **MongoDB** — основное хранилище данных.
 - **MinIO** — S3-совместимое файловое хранилище (аватары, загруженные файлы).
@@ -40,10 +34,10 @@
 
 1. Пользователь запускает сценарий → `POST /api/runs`
 2. Backend создаёт Run в MongoDB и отправляет задачу в SQS-очередь
-3. Worker подхватывает сообщение из SQS, выполняет шаги последовательно
-4. WebSocket события (step:start, step:done, progress, page:required) публикуются через Redis pub/sub
+3. SQS-consumer (в том же backend-процессе) подхватывает сообщение, выполняет шаги последовательно
+4. WebSocket события (step:start, step:done, progress, page:required) эмитятся напрямую через `RunGateway` (Socket.IO) — worker и gateway в одном процессе
 5. Frontend получает события через Socket.IO и обновляет UI в реальном времени
-6. Для шагов типа `page` — worker переходит в режим ожидания ввода (WAITING_INPUT)
+6. Для шагов типа `page` — исполнение переходит в режим ожидания ввода (WAITING_INPUT)
 
 ### Загрузка файлов
 
@@ -71,15 +65,14 @@ pnpm install
 # 3. Скопировать и заполнить .env
 cp .env.example .env
 
-# 4. Поднять инфраструктуру (MongoDB, Redis, MinIO)
+# 4. Поднять инфраструктуру (MongoDB, MinIO, LocalStack)
 pnpm infra
 
 # 5. Запустить разработку (backend + frontend параллельно)
 pnpm dev
 
 # Или запустить по отдельности:
-pnpm dev:main      # backend API
-pnpm dev:worker    # worker
+pnpm dev:main      # backend API (+ SQS-worker в том же процессе)
 pnpm dev:frontend  # frontend
 ```
 
@@ -100,7 +93,6 @@ docker compose up -d --build
 | `NODE_ENV` | `development` | Режим работы |
 | `PORT` | `3001` | Порт backend API |
 | `MONGODB_URL` | — | URL подключения к MongoDB |
-| `REDIS_URL` | `redis://localhost:6379` | URL Redis (pub/sub WebSocket) |
 | `AWS_REGION` | `us-east-1` | AWS регион для SQS |
 | `AWS_SQS_QUEUE_URL` | — | URL SQS-очереди исполнения сценариев |
 | `AWS_ACCESS_KEY_ID` | `test` | AWS access key (LocalStack: `test`) |
@@ -128,8 +120,7 @@ docker compose up -d --build
 
 ```bash
 pnpm dev              # Запуск backend + frontend
-pnpm dev:main         # Только backend API
-pnpm dev:worker       # Только worker
+pnpm dev:main         # Только backend API (+ SQS-worker)
 pnpm dev:frontend     # Только frontend
 pnpm build            # Сборка всех пакетов
 pnpm typecheck        # TypeScript проверка всех пакетов
@@ -137,7 +128,7 @@ pnpm test             # Запуск тестов (vitest)
 pnpm lint             # Линтинг (oxlint)
 pnpm format           # Форматирование (oxfmt)
 pnpm gen:types        # Генерация типов из OpenAPI-спеки backend'а
-pnpm infra            # Поднять MongoDB + Redis + MinIO + LocalStack
+pnpm infra            # Поднять MongoDB + MinIO + LocalStack
 pnpm infra:down       # Остановить инфраструктуру
 ```
 

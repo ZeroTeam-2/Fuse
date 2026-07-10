@@ -1,4 +1,4 @@
-import { Logger, OnModuleInit } from "@nestjs/common";
+import { Logger } from "@nestjs/common";
 import {
   WebSocketGateway,
   WebSocketServer,
@@ -6,43 +6,17 @@ import {
   OnGatewayDisconnect,
 } from "@nestjs/websockets";
 import type { Server, Socket } from "socket.io";
-import { RedisPubSubService } from "../execution/redis-pubsub.service";
+import type { ServerWsEvent } from "@fuse/shared";
 
 @WebSocketGateway({
   namespace: "runs",
   cors: { origin: process.env.NODE_ENV === "production" ? false : "*" },
 })
-export class RunGateway
-  implements OnGatewayConnection, OnGatewayDisconnect, OnModuleInit
-{
+export class RunGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private readonly logger = new Logger(RunGateway.name);
 
   @WebSocketServer()
   server: Server;
-
-  constructor(private readonly pubsub: RedisPubSubService) {}
-
-  async onModuleInit() {
-    const subscriber = this.pubsub.createSubscriber();
-
-    subscriber.psubscribe("run:*");
-
-    subscriber.on("pmessage", (_pattern, channel, message) => {
-      const runId = channel.replace("run:", "");
-      try {
-        const event = JSON.parse(message);
-        this.emitToRun(runId, event.type, event);
-      } catch {
-        this.logger.warn(`Invalid message on channel ${channel}`);
-      }
-    });
-
-    subscriber.on("error", (err) => {
-      this.logger.error(`Redis subscriber error: ${err.message}`);
-    });
-
-    this.logger.log("Redis pub/sub subscriber initialized");
-  }
 
   handleConnection(client: Socket) {
     const runId = client.handshake.query.runId as string | undefined;
@@ -58,7 +32,16 @@ export class RunGateway
     this.logger.log(`Client disconnected: ${client.id}`);
   }
 
+  /**
+   * Публикует событие исполнения в socket.io-комнату run'а.
+   * Worker исполняется в том же процессе, что и gateway, поэтому
+   * события отправляются напрямую в память — без внешнего брокера.
+   */
+  publish(runId: string, event: ServerWsEvent): void {
+    this.emitToRun(runId, event.type, event);
+  }
+
   emitToRun(runId: string, event: string, data: unknown) {
-    this.server.to(`run:${runId}`).emit(event, data);
+    this.server?.to(`run:${runId}`).emit(event, data);
   }
 }

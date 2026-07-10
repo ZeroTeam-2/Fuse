@@ -1,4 +1,9 @@
-import { Injectable, Logger } from "@nestjs/common";
+import {
+  Injectable,
+  Logger,
+  OnApplicationBootstrap,
+  OnApplicationShutdown,
+} from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
@@ -17,7 +22,7 @@ import type {
 } from "@fuse/shared";
 import { Run, RunDocument } from "./run.schema";
 import { Scenario, ScenarioDocument } from "../scenarios/scenario.schema";
-import { RedisPubSubService } from "./redis-pubsub.service";
+import { RunGateway } from "../websocket/run.gateway";
 import { resolveMappings } from "./mapping-resolver";
 
 const POLL_TIMEOUT_MS = 5 * 60 * 1000;
@@ -30,7 +35,9 @@ interface StepContext {
 }
 
 @Injectable()
-export class WorkerService {
+export class WorkerService
+  implements OnApplicationBootstrap, OnApplicationShutdown
+{
   private readonly logger = new Logger(WorkerService.name);
   private consumer: Consumer | null = null;
 
@@ -39,8 +46,16 @@ export class WorkerService {
     @InjectModel(Scenario.name)
     private readonly scenarioModel: Model<ScenarioDocument>,
     private readonly configService: ConfigService,
-    private readonly pubsub: RedisPubSubService,
+    private readonly gateway: RunGateway,
   ) {}
+
+  onApplicationBootstrap(): void {
+    this.start();
+  }
+
+  async onApplicationShutdown(): Promise<void> {
+    await this.stop();
+  }
 
   start(): void {
     if (this.consumer) {
@@ -96,7 +111,7 @@ export class WorkerService {
   }
 
   private async publish(runId: string, event: ServerWsEvent): Promise<void> {
-    await this.pubsub.publish(runId, event);
+    this.gateway.publish(runId, event);
   }
 
   private async pushRunStep(

@@ -8,8 +8,6 @@ export const envSchema = z.object({
 
   MONGODB_URL: z.string().min(1, "MONGODB_URL is required"),
 
-  REDIS_URL: z.string().default("redis://localhost:6379"),
-
   AWS_REGION: z.string().default("us-east-1"),
   AWS_SQS_QUEUE_URL: z.string().min(1, "AWS_SQS_QUEUE_URL is required"),
   AWS_ACCESS_KEY_ID: z.string().default("test"),

@@ -2,22 +2,17 @@
 
 ## Purpose
 
-Defines how the backend application and its worker process are compiled, how the `@fuse/shared` workspace package is consumed, and the ordering guarantees between shared-package builds and backend compilation.
+Defines how the backend application is compiled, how the `@fuse/shared` workspace package is consumed, and the ordering guarantees between shared-package builds and backend compilation. The backend runs as a single process — the SQS consumer is hosted inside the API process, so there is no separate worker entry point.
 
 ## Requirements
 
 ### Requirement: Flat backend dist output
-The backend build (`nest build` / `nest start --watch`) SHALL emit a flat output tree rooted at `apps/backend/dist/`, with the entry points at `dist/main.js` and `dist/worker.js`. TypeScript's computed `rootDir` SHALL NOT expand beyond the backend's own `src/` due to out-of-project source files being pulled into compilation.
+The backend build (`nest build` / `nest start --watch`) SHALL emit a flat output tree rooted at `apps/backend/dist/`, with the single entry point at `dist/main.js`. TypeScript's computed `rootDir` SHALL NOT expand beyond the backend's own `src/` due to out-of-project source files being pulled into compilation.
 
 #### Scenario: main entry point resolves
 - **WHEN** the backend is compiled via `nest start --watch` (or `nest build`)
 - **THEN** the compiled entry point exists at `apps/backend/dist/main.js` (not a nested `dist/apps/backend/src/main.js`)
-- **AND** `node apps/backend/dist/main` starts the NestJS application without a `MODULE_NOT_FOUND` error
-
-#### Scenario: worker entry point resolves
-- **WHEN** the worker is compiled via `nest start --watch --entryFile worker`
-- **THEN** the compiled entry point exists at `apps/backend/dist/worker.js`
-- **AND** `node apps/backend/dist/worker` starts the worker process without a `MODULE_NOT_FOUND` error
+- **AND** `node apps/backend/dist/main` starts the NestJS application (API + WebSocket gateway + SQS consumer) without a `MODULE_NOT_FOUND` error
 
 ### Requirement: Shared package resolves to compiled output
 The `@fuse/shared` workspace package SHALL be consumed as compiled JavaScript. Its `package.json` entry points (`main`, `types`, `exports`) SHALL point at `dist/index.js` / `dist/index.d.ts`, and the backend build SHALL resolve `@fuse/shared` through the pnpm workspace symlink rather than inlining the shared package's TypeScript source via `tsconfig` `paths`.
@@ -33,7 +28,7 @@ The `@fuse/shared` workspace package SHALL be consumed as compiled JavaScript. I
 - **AND** the backend output contains only the backend's own compiled modules
 
 ### Requirement: Shared package build ordering
-The `@fuse/shared` package MUST be built (or watched) before the backend and worker compile and run, so that `dist/` is present and up to date. The root and package-level scripts SHALL orchestrate this automatically so that `pnpm dev`, `pnpm build`, and the backend/worker dev scripts do not require manual pre-build steps.
+The `@fuse/shared` package MUST be built (or watched) before the backend compiles and runs, so that `dist/` is present and up to date. The root and package-level scripts SHALL orchestrate this automatically so that `pnpm dev`, `pnpm build`, and the backend dev scripts do not require manual pre-build steps.
 
 #### Scenario: dev startup builds shared first
 - **WHEN** a developer runs `pnpm dev` (or `pnpm run dev:main`)
