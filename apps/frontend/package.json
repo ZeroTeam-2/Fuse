@@ -12,6 +12,7 @@
   "dependencies": {
     "@fuse/shared": "workspace:*",
     "@pinia/nuxt": "^0.11.3",
+    "lucide-vue-next": "^1.0.0",
     "nuxt": "^3.17.4",
     "openapi-fetch": "^0.17.0",
     "pinia": "^3.0.4",

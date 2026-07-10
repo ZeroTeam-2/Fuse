@@ -1,33 +1,40 @@
 <template>
-  <div class="app-shell">
-    <header class="app-header">
-      <div class="header-inner">
-        <NuxtLink to="/" class="logo">Fuse</NuxtLink>
-        <nav class="nav-links">
-          <NuxtLink to="/" class="nav-link">Маркетплейс</NuxtLink>
-          <NuxtLink to="/my/scenarios" class="nav-link">Мои сценарии</NuxtLink>
-          <NuxtLink to="/my/apps" class="nav-link">Мои API</NuxtLink>
-        </nav>
-        <div class="header-right">
-          <template v-if="authStore.user">
-            <NuxtLink to="/profile" class="avatar-link">
-              <span v-if="!authStore.user.avatarUrl" class="avatar-placeholder">
-                {{ initials }}
-              </span>
-              <img
-                v-else
-                :src="authStore.user.avatarUrl"
-                alt="avatar"
-                class="avatar-img"
-              />
-              <span class="user-name">{{ fullName }}</span>
-            </NuxtLink>
-          </template>
-          <NuxtLink v-else to="/login" class="login-btn">Войти</NuxtLink>
-        </div>
+  <div class="min-h-screen flex flex-col bg-zinc-50">
+    <header
+      class="sticky top-0 z-[100] flex items-center h-16 px-4 lg:px-8 bg-white border-b border-zinc-200"
+    >
+      <NuxtLink to="/" class="mr-10 shrink-0" aria-label="Fuse">
+        <BrandMark :size="30" />
+      </NuxtLink>
+
+      <nav class="flex items-center gap-1.5">
+        <NuxtLink
+          v-for="item in navItems"
+          :key="item.to"
+          :to="item.to"
+          class="font-sans font-semibold text-[0.9375rem] px-3.5 py-2 rounded-lg cursor-pointer transition-colors"
+          :class="isActive(item) ? 'bg-rose-50 text-rose-600' : 'text-zinc-700 hover:bg-zinc-100'"
+        >
+          {{ item.label }}
+        </NuxtLink>
+      </nav>
+
+      <div class="ml-auto flex items-center">
+        <template v-if="authStore.user">
+          <NuxtLink to="/profile" class="inline-flex items-center gap-2.5" aria-label="Профиль">
+            <span class="font-sans font-semibold text-[0.875rem] text-zinc-900 whitespace-nowrap hidden sm:block">
+              {{ fullName }}
+            </span>
+            <Avatar :name="fullName" :src="authStore.user.avatarUrl" :size="38" />
+          </NuxtLink>
+        </template>
+        <NuxtLink v-else to="/login">
+          <Button size="sm">Войти</Button>
+        </NuxtLink>
       </div>
     </header>
-    <main class="app-main">
+
+    <main class="flex-1">
       <slot />
     </main>
   </div>
@@ -35,14 +42,17 @@
 
 <script setup lang="ts">
 const authStore = useAuthStore();
+const route = useRoute();
 
-const initials = computed(() => {
-  const u = authStore.user;
-  if (!u) return "";
-  const f = u.firstName?.[0] ?? "";
-  const l = u.lastName?.[0] ?? "";
-  return (f + l).toUpperCase() || "?";
-});
+const navItems = [
+  { to: "/", label: "Маркетплейс", exact: true },
+  { to: "/my/scenarios", label: "Мои сценарии" },
+  { to: "/my/apps", label: "Мои API" },
+];
+
+function isActive(item: { to: string; exact?: boolean }) {
+  return item.exact ? route.path === item.to : route.path.startsWith(item.to);
+}
 
 const fullName = computed(() => {
   const u = authStore.user;
@@ -50,114 +60,3 @@ const fullName = computed(() => {
   return [u.firstName, u.lastName].filter(Boolean).join(" ") || "?";
 });
 </script>
-
-<style scoped>
-.app-shell {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-}
-
-.app-header {
-  background: #fff;
-  border-bottom: 1px solid #e4e4e7;
-  position: sticky;
-  top: 0;
-  z-index: 100;
-}
-
-.header-inner {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 0 24px;
-  height: 56px;
-  display: flex;
-  align-items: center;
-  gap: 32px;
-}
-
-.logo {
-  font-size: 20px;
-  font-weight: 800;
-  color: #18181b;
-  text-decoration: none;
-  letter-spacing: -0.02em;
-}
-
-.nav-links {
-  display: flex;
-  gap: 24px;
-  flex: 1;
-}
-
-.nav-link {
-  font-size: 14px;
-  font-weight: 500;
-  color: #52525b;
-  text-decoration: none;
-  transition: color 0.15s;
-}
-
-.nav-link:hover,
-.nav-link.router-link-active {
-  color: #18181b;
-}
-
-.header-right {
-  display: flex;
-  align-items: center;
-}
-
-.login-btn {
-  font-size: 14px;
-  font-weight: 600;
-  color: #fff;
-  background: #e11d48;
-  padding: 8px 16px;
-  border-radius: 8px;
-  text-decoration: none;
-  transition: background 0.15s;
-}
-
-.login-btn:hover {
-  background: #be123c;
-}
-
-.avatar-link {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  text-decoration: none;
-}
-
-.user-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: #18181b;
-  white-space: nowrap;
-}
-
-.avatar-placeholder {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: #6366f1;
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.avatar-img {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  object-fit: cover;
-}
-
-.app-main {
-  flex: 1;
-}
-</style>

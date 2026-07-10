@@ -45,6 +45,13 @@ export default defineNuxtConfig({
 
   modules: ['@nuxtjs/tailwindcss', '@pinia/nuxt'],
 
+  components: [
+    // Design-system primitives registered without a path prefix so their names
+    // match the source design system (<Button>, <Card>, <ScenarioCard>…).
+    { path: '~/components/ui', pathPrefix: false },
+    '~/components',
+  ],
+
   css: ['~/assets/css/tailwind.css'],
 
   app: {
@@ -54,7 +61,7 @@ export default defineNuxtConfig({
         { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: '' },
         {
           rel: 'stylesheet',
-          href: 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap',
+          href: 'https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap',
         },
       ],
     },

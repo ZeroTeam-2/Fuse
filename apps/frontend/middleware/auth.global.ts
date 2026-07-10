@@ -1,5 +1,5 @@
 export default defineNuxtRouteMiddleware((to) => {
-  const publicRoutes = ["/", "/login"];
+  const publicRoutes = ["/", "/login", "/ui-kit"];
   const isPublic = publicRoutes.includes(to.path);
 
   if (isPublic) return;
