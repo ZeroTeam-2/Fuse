@@ -5,8 +5,6 @@ export const envSchema = z.object({
     .enum(["development", "production", "test"])
     .default("development"),
   PORT: z.string().default("3001").transform(Number),
-  PORT_BIND_MAX_RETRIES: z.string().default("5").transform(Number),
-  PORT_BIND_RETRY_DELAY_MS: z.string().default("500").transform(Number),
 
   MONGODB_URL: z.string().min(1, "MONGODB_URL is required"),
 
