@@ -52,11 +52,11 @@ async function createScenario() {
   const { $api } = useNuxtApp() as any;
   try {
     const { data, error: apiError } = await $api.POST("/api/scenarios", { body: form });
-    if (apiError.value) {
+    if (apiError || !data) {
       error.value = "Не удалось создать сценарий";
       return;
     }
-    await navigateTo(`/my/scenarios/${data.value.id}/edit`);
+    await navigateTo(`/my/scenarios/${data.id}/edit`);
   } catch {
     error.value = "Произошла ошибка";
   } finally {
