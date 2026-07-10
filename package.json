@@ -41,5 +41,8 @@
       "@parcel/watcher",
       "@scarf/scarf"
     ]
+  },
+  "dependencies": {
+    "turbo": "^2.10.4"
   }
 }
