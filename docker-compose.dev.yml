@@ -1,4 +1,4 @@
-# Инфраструктура для локальной разработки: MongoDB, Redis, MinIO.
+# Инфраструктура для локальной разработки: MongoDB, MinIO, LocalStack (SQS).
 # Для production-деплоя используется отдельный compose (переменные окружения
 # задают подключение к внешним сервисам).
 #
@@ -18,15 +18,6 @@ services:
       - "27018:27017"
     volumes:
       - fuse-mongo-data:/data/db
-
-  redis:
-    image: redis:7-alpine
-    container_name: fuse-redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    volumes:
-      - fuse-redis-data:/data
 
   localstack:
     # latest (2026.x) требует LOCALSTACK_AUTH_TOKEN; 4.7 — последний community-образ
@@ -85,7 +76,6 @@ services:
       NODE_ENV: ${NODE_ENV:-production}
       PORT: 3001
       MONGODB_URL: mongodb://${MONGO_USER:-fuse}:${MONGO_PASSWORD:-fusepassword}@mongo:27017/${MONGO_DB:-fuse}?authSource=admin
-      REDIS_URL: redis://redis:6379
       AWS_REGION: ${AWS_REGION:-us-east-1}
       AWS_SQS_QUEUE_URL: ${AWS_SQS_QUEUE_URL:-http://localstack:4566/000000000000/scenario-execution}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
@@ -107,8 +97,6 @@ services:
       - "host.docker.internal:host-gateway"
     depends_on:
       mongo:
-        condition: service_started
-      redis:
         condition: service_started
       localstack:
         condition: service_started
@@ -144,5 +132,4 @@ services:
 
 volumes:
   fuse-mongo-data:
-  fuse-redis-data:
   fuse-minio-data:

@@ -29,7 +29,6 @@ services:
       NODE_ENV: ${NODE_ENV:-production}
       PORT: 3001
       MONGODB_URL: ${MONGODB_URL:?MONGODB_URL is required}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       AWS_REGION: ${AWS_REGION:-us-east-1}
       AWS_SQS_QUEUE_URL: ${AWS_SQS_QUEUE_URL:-http://localstack:4566/000000000000/scenario-execution}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}

@@ -8,6 +8,7 @@ import { UsersModule } from "./users/users.module";
 import { AuthModule } from "./auth/auth.module";
 import { MinioModule } from "./minio/minio.module";
 import { WebSocketModule } from "./websocket/websocket.module";
+import { ExecutionModule } from "./execution/execution.module";
 import { AppsModule } from "./apps/apps.module";
 import { ScenariosModule } from "./scenarios/scenarios.module";
 import { MarketplaceModule } from "./marketplace/marketplace.module";
@@ -43,6 +44,7 @@ import { JwtAuthGuard } from "./auth/guards/jwt-auth.guard";
     UsersModule,
     AuthModule,
     WebSocketModule,
+    ExecutionModule,
     AppsModule,
     ScenariosModule,
     MarketplaceModule,

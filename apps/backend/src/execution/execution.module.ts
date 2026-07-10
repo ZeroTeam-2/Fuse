@@ -5,7 +5,7 @@ import { Scenario, ScenarioSchema } from "../scenarios/scenario.schema";
 import { ExecutionController } from "./execution.controller";
 import { ExecutionService } from "./execution.service";
 import { WorkerService } from "./worker.service";
-import { RedisPubSubService } from "./redis-pubsub.service";
+import { WebSocketModule } from "../websocket/websocket.module";
 
 @Module({
   imports: [
@@ -13,9 +13,10 @@ import { RedisPubSubService } from "./redis-pubsub.service";
       { name: Run.name, schema: RunSchema },
       { name: Scenario.name, schema: ScenarioSchema },
     ]),
+    WebSocketModule,
   ],
   controllers: [ExecutionController],
-  providers: [ExecutionService, WorkerService, RedisPubSubService],
-  exports: [ExecutionService, RedisPubSubService],
+  providers: [ExecutionService, WorkerService],
+  exports: [ExecutionService],
 })
 export class ExecutionModule {}

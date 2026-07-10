@@ -5,10 +5,8 @@
   "scripts": {
     "prebuild": "pnpm --filter @fuse/shared build",
     "dev": "nest start --watch",
-    "dev:worker": "nest start --watch --entryFile worker",
     "build": "nest build",
     "start": "node dist/main",
-    "start:worker": "node dist/worker",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
@@ -31,7 +29,6 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.2",
     "cookie-parser": "^1.4.7",
-    "ioredis": "^5.10.1",
     "minio": "^8.0.7",
     "mongoose": "^8.15.0",
     "multer": "^2.2.0",

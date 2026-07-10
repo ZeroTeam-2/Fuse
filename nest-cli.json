@@ -5,11 +5,5 @@
   "compilerOptions": {
     "deleteOutDir": true,
     "entryFile": "main"
-  },
-  "projects": {
-    "worker": {
-      "sourceRoot": "src",
-      "entryFile": "worker"
-    }
   }
 }
