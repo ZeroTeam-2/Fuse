@@ -5,8 +5,8 @@
   "description": "Fuse monorepo — NuxtJS + NestJS + MongoDB",
   "scripts": {
     "dev": "pnpm -r --parallel run dev",
-    "dev:main": "pnpm --filter @fuse/backend run dev",
-    "dev:worker": "pnpm --filter @fuse/backend run dev:worker",
+    "dev:main": "pnpm --filter @fuse/shared build && pnpm --filter @fuse/backend run dev",
+    "dev:worker": "pnpm --filter @fuse/shared build && pnpm --filter @fuse/backend run dev:worker",
     "dev:frontend": "pnpm --filter @fuse/frontend run dev",
     "infra": "docker compose up -d mongo redis minio",
     "infra:down": "docker compose down",

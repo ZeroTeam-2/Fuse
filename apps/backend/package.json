@@ -3,6 +3,8 @@
   "version": "0.0.1",
   "description": "Fuse backend — NestJS + MongoDB",
   "scripts": {
+    "prebuild": "pnpm --filter @fuse/shared build",
+    "predev": "lsof -ti :3001 | xargs kill -9 2>/dev/null || true",
     "dev": "nest start --watch",
     "dev:worker": "nest start --watch --entryFile worker",
     "build": "nest build",
