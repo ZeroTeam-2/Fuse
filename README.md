@@ -106,11 +106,11 @@ docker compose up -d --build
 | `AWS_ACCESS_KEY_ID` | `test` | AWS access key (LocalStack: `test`) |
 | `AWS_SECRET_ACCESS_KEY` | `test` | AWS secret key (LocalStack: `test`) |
 | `AWS_ENDPOINT_URL` | — | Endpoint для LocalStack (пусто = реальный AWS) |
-| `MINIO_ENDPOINT` | `localhost` | Хост MinIO |
-| `MINIO_PORT` | `9000` | Порт MinIO |
-| `MINIO_ACCESS_KEY` | `minioadmin` | Ключ доступа MinIO |
-| `MINIO_SECRET_KEY` | `minioadmin` | Секрет MinIO |
-| `MINIO_BUCKET` | `fuse` | Bucket MinIO |
+| `S3_URL` | `localhost` | Хост MinIO |
+| `S3_PORT` | `9000` | Порт MinIO |
+| `S3_ACCESS_KEY` | `minioadmin` | Ключ доступа MinIO |
+| `S3_SECRET_KEY` | `minioadmin` | Секрет MinIO |
+| `S3_BUCKET` | `fuse` | Bucket MinIO |
 | `JWT_SECRET` | — | Секрет для JWT (мин. 32 символа) |
 | `JWT_ACCESS_EXPIRES` | `15m` | Время жизни access-токена |
 | `JWT_REFRESH_EXPIRES` | `7d` | Время жизни refresh-токена |

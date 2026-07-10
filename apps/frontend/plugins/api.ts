@@ -6,7 +6,20 @@ export default defineNuxtPlugin(() => {
 
   const client = createClient<paths>({
     baseUrl: config.public.apiBaseUrl || "http://localhost:3001",
+    credentials: "include",
   });
+
+  if (import.meta.server) {
+    const headers = useRequestHeaders(["cookie"]);
+    client.use({
+      onRequest({ request }) {
+        if (headers.cookie) {
+          request.headers.set("cookie", headers.cookie);
+        }
+        return request;
+      },
+    });
+  }
 
   return {
     provide: {

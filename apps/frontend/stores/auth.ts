@@ -14,23 +14,13 @@ export const useAuthStore = defineStore("auth", {
   actions: {
     async fetchUser() {
       try {
-        const { $api } = useNuxtApp() as unknown as {
-          $api: {
-            GET: (
-              url: string,
-              opts: Record<string, unknown>,
-            ) => Promise<{
-              data: { value: User | null };
-              error: { value: unknown };
-            }>;
-          };
-        };
-        const { data, error } = await $api.GET("/api/users/me", {});
-        if (error.value || !data.value) {
+        const api = useApi();
+        const { data, error } = await api.GET("/api/users/me", {});
+        if (error || !data) {
           this.user = null;
           return;
         }
-        this.user = data.value;
+        this.user = data;
       } catch {
         this.user = null;
       }

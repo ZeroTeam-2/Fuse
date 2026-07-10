@@ -20,6 +20,7 @@
                 alt="avatar"
                 class="avatar-img"
               />
+              <span class="user-name">{{ fullName }}</span>
             </NuxtLink>
           </template>
           <NuxtLink v-else to="/login" class="login-btn">Войти</NuxtLink>
@@ -41,6 +42,12 @@ const initials = computed(() => {
   const f = u.firstName?.[0] ?? "";
   const l = u.lastName?.[0] ?? "";
   return (f + l).toUpperCase() || "?";
+});
+
+const fullName = computed(() => {
+  const u = authStore.user;
+  if (!u) return "";
+  return [u.firstName, u.lastName].filter(Boolean).join(" ") || "?";
 });
 </script>
 
@@ -119,7 +126,15 @@ const initials = computed(() => {
 .avatar-link {
   display: flex;
   align-items: center;
+  gap: 10px;
   text-decoration: none;
+}
+
+.user-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #18181b;
+  white-space: nowrap;
 }
 
 .avatar-placeholder {
