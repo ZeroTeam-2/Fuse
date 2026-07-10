@@ -53,36 +53,13 @@ async function bootstrap() {
   });
 
   const port = Number(process.env.PORT ?? 3001);
-  const retryDelayMs = Number(process.env.PORT_BIND_RETRY_DELAY_MS ?? 500);
 
-  
-  try {
-    await app.listen(port);
-    console.log(`Application is running on: http://localhost:${port}`);
-    console.log(`Scalar API Docs: http://localhost:${port}/api/docs`);
-  } catch (err) {
-    const isAddrInUse =
-      err !== null &&
-      typeof err === "object" &&
-      (err as NodeJS.ErrnoException).code === "EADDRINUSE";
-
-    if (!isAddrInUse) {
-      if (isAddrInUse) {
-        console.error(
-          `Port ${port} is still in use after attempts. ` +
-            `Another process may be holding it — check with \`lsof -i :${port}\`.`,
-        );
-      }
-      throw err;
-    }
-
-    console.warn(
-      `Port ${port} is already in use (attempt); ` +
-        `retrying in ${retryDelayMs}ms...`,
-    );
-    await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
-  }
-  
+  await app.listen(port);
+  console.log(`Application is running on: http://localhost:${port}`);
+  console.log(`Scalar API Docs: http://localhost:${port}/api/docs`);
 }
 
-bootstrap();
+bootstrap().catch((err) => {
+  console.error("Bootstrap failed:", err);
+  process.exit(1);
+});
