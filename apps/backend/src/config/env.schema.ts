@@ -5,6 +5,8 @@ export const envSchema = z.object({
     .enum(["development", "production", "test"])
     .default("development"),
   PORT: z.string().default("3001").transform(Number),
+  PORT_BIND_MAX_RETRIES: z.string().default("5").transform(Number),
+  PORT_BIND_RETRY_DELAY_MS: z.string().default("500").transform(Number),
 
   MONGODB_URL: z.string().min(1, "MONGODB_URL is required"),
 
@@ -16,11 +18,11 @@ export const envSchema = z.object({
   AWS_SECRET_ACCESS_KEY: z.string().default("test"),
   AWS_ENDPOINT_URL: z.string().default(""),
 
-  MINIO_ENDPOINT: z.string().default("localhost"),
-  MINIO_PORT: z.string().default("9000").transform(Number),
-  MINIO_ACCESS_KEY: z.string().default("minioadmin"),
-  MINIO_SECRET_KEY: z.string().default("minioadmin"),
-  MINIO_BUCKET: z.string().default("fuse"),
+  S3_URL: z.string().default("localhost"),
+  S3_PORT: z.string().default("9000").transform(Number),
+  S3_ACCESS_KEY: z.string().default("minioadmin"),
+  S3_SECRET_KEY: z.string().default("minioadmin"),
+  S3_BUCKET: z.string().default("fuse"),
 
   JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters"),
   JWT_ACCESS_EXPIRES: z.string().default("15m"),
@@ -29,6 +31,7 @@ export const envSchema = z.object({
   YANDEX_CLIENT_ID: z.string().default(""),
   YANDEX_CLIENT_SECRET: z.string().default(""),
   YANDEX_REDIRECT_URI: z.string().default("http://localhost:3001/api/auth/callback"),
+  APP_URL: z.string().default("http://localhost:3000"),
 
   FILE_SINGLE_UPLOAD_MAX_MB: z.string().default("10").transform(Number),
 

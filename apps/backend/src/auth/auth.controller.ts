@@ -4,8 +4,9 @@ import {
   Query,
   Res,
   Redirect,
-  BadRequestException,
+  Logger,
 } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { ApiTags, ApiExcludeEndpoint } from "@nestjs/swagger";
 import type { Response } from "express";
 import { YandexAuthService } from "./yandex-auth.service";
@@ -14,7 +15,12 @@ import { Public } from "./decorators/public.decorator";
 @ApiTags("auth")
 @Controller("auth")
 export class AuthController {
-  constructor(private readonly yandexAuth: YandexAuthService) {}
+  private readonly logger = new Logger(AuthController.name);
+
+  constructor(
+    private readonly yandexAuth: YandexAuthService,
+    private readonly configService: ConfigService,
+  ) {}
 
   @Get("login")
   @Public()
@@ -30,35 +36,42 @@ export class AuthController {
   async callback(
     @Query("code") code: string | undefined,
     @Query("error") error: string | undefined,
-    @Res({ passthrough: true }) res: Response,
+    @Res() res: Response,
   ) {
+    const appUrl = this.configService.get<string>("APP_URL") ?? "http://localhost:3000";
+
     if (error) {
-      throw new BadRequestException(`Authorization cancelled: ${error}`);
+      return res.redirect(`${appUrl}/login?error=cancelled`);
     }
     if (!code) {
-      throw new BadRequestException("Missing authorization code");
+      return res.redirect(`${appUrl}/login?error=missing_code`);
     }
 
-    const { accessToken, refreshToken } = await this.yandexAuth.handleCallback(code);
+    try {
+      const { accessToken, refreshToken } = await this.yandexAuth.handleCallback(code);
 
-    const isProd = process.env.NODE_ENV === "production";
-    const cookieOpts = {
-      httpOnly: true,
-      secure: isProd,
-      sameSite: isProd ? ("none" as const) : ("lax" as const),
-      path: "/",
-    };
+      const isProd = process.env.NODE_ENV === "production";
+      const cookieOpts = {
+        httpOnly: true,
+        secure: isProd,
+        sameSite: isProd ? ("none" as const) : ("lax" as const),
+        path: "/",
+      };
 
-    res.cookie("access_token", accessToken, {
-      ...cookieOpts,
-      maxAge: 15 * 60 * 1000,
-    });
-    res.cookie("refresh_token", refreshToken, {
-      ...cookieOpts,
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+      res.cookie("access_token", accessToken, {
+        ...cookieOpts,
+        maxAge: 15 * 60 * 1000,
+      });
+      res.cookie("refresh_token", refreshToken, {
+        ...cookieOpts,
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      });
 
-    return { success: true };
+      return res.redirect(appUrl);
+    } catch (err) {
+      this.logger.error(`OAuth callback failed: ${String(err)}`);
+      return res.redirect(`${appUrl}/login?error=invalid_code`);
+    }
   }
 
   @Get("logout")

@@ -4,7 +4,7 @@
   "description": "Fuse backend — NestJS + MongoDB",
   "scripts": {
     "prebuild": "pnpm --filter @fuse/shared build",
-    "predev": "lsof -ti :3001 | xargs kill -9 2>/dev/null || true",
+    "predev": "pid=$(lsof -ti :3001 2>/dev/null || true); [ -n \"$pid\" ] && kill -9 $pid 2>/dev/null; true",
     "dev": "nest start --watch",
     "dev:worker": "nest start --watch --entryFile worker",
     "build": "nest build",
