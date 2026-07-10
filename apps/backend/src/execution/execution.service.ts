@@ -7,26 +7,31 @@ import {
 import { ConfigService } from "@nestjs/config";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
-import { Queue } from "bullmq";
-import type { ConnectionOptions } from "bullmq";
+import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { RunStatus } from "@fuse/shared";
 import { Run, RunDocument } from "./run.schema";
-
-export const SCENARIO_EXECUTION_QUEUE = "scenario-execution";
 
 @Injectable()
 export class ExecutionService {
   private readonly logger = new Logger(ExecutionService.name);
-  private readonly queue: Queue;
+  private readonly sqsClient: SQSClient;
+  private readonly queueUrl: string;
 
   constructor(
     @InjectModel(Run.name) private readonly runModel: Model<RunDocument>,
     private readonly configService: ConfigService,
   ) {
-    const url =
-      this.configService.get<string>("REDIS_URL") ?? "redis://localhost:6379";
-    const connection: ConnectionOptions = { url };
-    this.queue = new Queue(SCENARIO_EXECUTION_QUEUE, { connection });
+    const endpoint = this.configService.get<string>("AWS_ENDPOINT_URL");
+    const region = this.configService.get<string>("AWS_REGION") ?? "us-east-1";
+    const accessKeyId = this.configService.get<string>("AWS_ACCESS_KEY_ID") ?? "test";
+    const secretAccessKey = this.configService.get<string>("AWS_SECRET_ACCESS_KEY") ?? "test";
+
+    this.sqsClient = new SQSClient({
+      region,
+      credentials: { accessKeyId, secretAccessKey },
+      ...(endpoint ? { endpoint } : {}),
+    });
+    this.queueUrl = this.configService.get<string>("AWS_SQS_QUEUE_URL")!;
   }
 
   async createRun(userId: string, scenarioId: string): Promise<RunDocument> {
@@ -38,7 +43,12 @@ export class ExecutionService {
       currentStep: 0,
     }).save();
 
-    await this.queue.add("execute", { runId: run._id.toString() }, { jobId: run._id.toString() });
+    await this.sqsClient.send(
+      new SendMessageCommand({
+        QueueUrl: this.queueUrl,
+        MessageBody: JSON.stringify({ runId: run._id.toString() }),
+      }),
+    );
 
     this.logger.log(`Created run ${run._id} for scenario ${scenarioId}`);
     return run;
@@ -75,11 +85,6 @@ export class ExecutionService {
         { new: true },
       )
       .exec();
-
-    const job = await this.queue.getJob(runId);
-    if (job) {
-      await job.remove();
-    }
 
     return updated!;
   }

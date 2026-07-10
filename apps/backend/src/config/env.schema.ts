@@ -10,6 +10,12 @@ export const envSchema = z.object({
 
   REDIS_URL: z.string().default("redis://localhost:6379"),
 
+  AWS_REGION: z.string().default("us-east-1"),
+  AWS_SQS_QUEUE_URL: z.string().min(1, "AWS_SQS_QUEUE_URL is required"),
+  AWS_ACCESS_KEY_ID: z.string().default("test"),
+  AWS_SECRET_ACCESS_KEY: z.string().default("test"),
+  AWS_ENDPOINT_URL: z.string().default(""),
+
   MINIO_ENDPOINT: z.string().default("localhost"),
   MINIO_PORT: z.string().default("9000").transform(Number),
   MINIO_ACCESS_KEY: z.string().default("minioadmin"),

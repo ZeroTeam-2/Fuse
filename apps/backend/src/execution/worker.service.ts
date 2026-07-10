@@ -2,8 +2,8 @@ import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
-import { Worker, Job } from "bullmq";
-import type { ConnectionOptions } from "bullmq";
+import { Consumer } from "sqs-consumer";
+import { SQSClient } from "@aws-sdk/client-sqs";
 import { RunStatus } from "@fuse/shared";
 import type {
   Step,
@@ -19,7 +19,6 @@ import { Run, RunDocument } from "./run.schema";
 import { Scenario, ScenarioDocument } from "../scenarios/scenario.schema";
 import { RedisPubSubService } from "./redis-pubsub.service";
 import { resolveMappings } from "./mapping-resolver";
-import { SCENARIO_EXECUTION_QUEUE } from "./execution.service";
 
 const POLL_TIMEOUT_MS = 5 * 60 * 1000;
 const PAGE_INPUT_TIMEOUT_MS = 30 * 60 * 1000;
@@ -33,7 +32,7 @@ interface StepContext {
 @Injectable()
 export class WorkerService {
   private readonly logger = new Logger(WorkerService.name);
-  private worker: Worker | null = null;
+  private consumer: Consumer | null = null;
 
   constructor(
     @InjectModel(Run.name) private readonly runModel: Model<RunDocument>,
@@ -44,40 +43,55 @@ export class WorkerService {
   ) {}
 
   start(): void {
-    if (this.worker) {
+    if (this.consumer) {
       return;
     }
 
-    const url = this.configService.get<string>("REDIS_URL") ?? "redis://localhost:6379";
-    const connection: ConnectionOptions = { url };
+    const endpoint = this.configService.get<string>("AWS_ENDPOINT_URL");
+    const region = this.configService.get<string>("AWS_REGION") ?? "us-east-1";
+    const accessKeyId = this.configService.get<string>("AWS_ACCESS_KEY_ID") ?? "test";
+    const secretAccessKey = this.configService.get<string>("AWS_SECRET_ACCESS_KEY") ?? "test";
+    const queueUrl = this.configService.get<string>("AWS_SQS_QUEUE_URL")!;
 
-    this.worker = new Worker(
-      SCENARIO_EXECUTION_QUEUE,
-      async (job: Job) => {
-        const { runId } = job.data as { runId: string };
-        await this.executeRun(runId, job.attemptsMade);
-      },
-      {
-        connection,
-        concurrency: 5,
-      },
-    );
-
-    this.worker.on("completed", (job) => {
-      this.logger.log(`Job ${job.id} completed`);
+    const sqsClient = new SQSClient({
+      region,
+      credentials: { accessKeyId, secretAccessKey },
+      ...(endpoint ? { endpoint } : {}),
     });
 
-    this.worker.on("failed", (job, err) => {
-      this.logger.error(`Job ${job?.id} failed: ${err.message}`);
+    this.consumer = Consumer.create({
+      queueUrl,
+      sqs: sqsClient,
+      batchSize: 5,
+      waitTimeSeconds: 20,
+      visibilityTimeout: 7200,
+      handleMessage: async (message) => {
+        const { runId } = JSON.parse(message.Body ?? "{}") as { runId: string };
+        await this.executeRun(runId);
+      },
     });
+
+    this.consumer.on("message_processed", (message) => {
+      this.logger.log(`Message ${message.MessageId} processed`);
+    });
+
+    this.consumer.on("processing_error", (err, message) => {
+      this.logger.error(`Message ${message?.MessageId} failed: ${err.message}`);
+    });
+
+    this.consumer.on("error", (err) => {
+      this.logger.error(`SQS consumer error: ${err.message}`);
+    });
+
+    this.consumer.start();
 
     this.logger.log("Worker started — processing scenario execution jobs");
   }
 
   async stop(): Promise<void> {
-    if (this.worker) {
-      await this.worker.close();
-      this.worker = null;
+    if (this.consumer) {
+      this.consumer.stop();
+      this.consumer = null;
     }
   }
 
@@ -110,7 +124,7 @@ export class WorkerService {
       .exec();
   }
 
-  private async executeRun(runId: string, _attemptsMade: number): Promise<void> {
+  private async executeRun(runId: string): Promise<void> {
     const run = await this.runModel.findById(runId).exec();
     if (!run) {
       this.logger.error(`Run ${runId} not found`);
