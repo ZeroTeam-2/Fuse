@@ -52,7 +52,7 @@ export class EndpointDoc {
 
 const EndpointDocSchema = SchemaFactory.createForClass(EndpointDoc);
 
-@Schema({ timestamps: true })
+@Schema({ timestamps: true, toJSON: { virtuals: true } })
 export class App {
   @Prop({ required: true })
   ownerId: string;

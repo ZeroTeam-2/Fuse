@@ -50,10 +50,8 @@ async function loadScenarios() {
   const { $api } = useNuxtApp() as any;
   try {
     const { data } = await $api.GET("/api/scenarios", { params: { query: { page: page.value, limit: 10 } } });
-    if (data.value) {
-      scenarios.value = data.value.data ?? [];
-      totalPages.value = data.value.totalPages ?? 1;
-    }
+    scenarios.value = data?.data ?? [];
+    totalPages.value = data?.totalPages ?? 1;
   } finally {
     loading.value = false;
   }
