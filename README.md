@@ -10,25 +10,27 @@
 │  (Nuxt 3)    │     │  (NestJS)    │     │              │
 └──────────────┘     └──────┬───────┘     └──────────────┘
                             │
-                     ┌──────┴───────┐     ┌──────────────┐
-                     │    Redis     │────▶│   MinIO      │
-                     │  (BullMQ +   │     │  (S3 storage) │
-                     │   pub/sub)   │     └──────────────┘
-                     └──────┬───────┘
-                            │
-                     ┌──────┴───────┐
-                     │   Worker     │
-                     │ (NestJS +    │
-                     │  BullMQ)     │
-                     └──────────────┘
+                      ┌──────┴───────┐     ┌──────────────┐
+                      │    Redis     │────▶│   MinIO      │
+                      │  (pub/sub    │     │  (S3 storage) │
+                      │   WS events) │     └──────────────┘
+                      └──────┬───────┘
+                             │
+                      ┌──────┴───────┐
+                      │   Worker     │
+                      │ (NestJS +    │
+                      │   SQS)       │
+                      └──────────────┘
 ```
 
 ### Компоненты
 
 - **Frontend** (`apps/frontend`) — Nuxt 3 SSR, Pinia, Tailwind-free scoped CSS. Страницы маркетплейса, конструктор сценариев, личный кабинет.
 - **Backend** (`apps/backend`) — NestJS REST API. Модули: auth (Yandex OAuth + JWT), users, apps (импорт OpenAPI-спеков), scenarios (CRUD + валидация), marketplace (каталог карточек), execution (запуск сценариев), uploads (single + chunked), websocket (real-time события).
-- **Worker** (`apps/backend` — `worker.ts`) — отдельный процесс, обрабатывающий BullMQ-задачи выполнения сценариев. Поддерживает шаги: api, delay, periodic (polling), scenario (вложенные), file.
-- **Redis** — очереди BullMQ и pub/sub для WebSocket событий.
+- **Worker** (`apps/backend` — `worker.ts`) — отдельный процесс, обрабатывающий SQS-задачи выполнения сценариев. Поддерживает шаги: api, delay, periodic (polling), scenario (вложенные), file.
+- **Redis** — pub/sub для WebSocket событий.
+- **AWS SQS** — очередь исполнения сценариев (main → worker).
+- **LocalStack** — локальная эмуляция AWS SQS для разработки.
 - **MongoDB** — основное хранилище данных.
 - **MinIO** — S3-совместимое файловое хранилище (аватары, загруженные файлы).
 - **Caddy** — reverse proxy в docker-compose (роутит `/api/*` в backend, остальное во frontend).
@@ -37,8 +39,8 @@
 ### Поток выполнения сценария
 
 1. Пользователь запускает сценарий → `POST /api/runs`
-2. Backend создаёт Run в MongoDB и кладёт задачу в BullMQ-очередь
-3. Worker подхватывает задачу, выполняет шаги последовательно
+2. Backend создаёт Run в MongoDB и отправляет задачу в SQS-очередь
+3. Worker подхватывает сообщение из SQS, выполняет шаги последовательно
 4. WebSocket события (step:start, step:done, progress, page:required) публикуются через Redis pub/sub
 5. Frontend получает события через Socket.IO и обновляет UI в реальном времени
 6. Для шагов типа `page` — worker переходит в режим ожидания ввода (WAITING_INPUT)
@@ -98,7 +100,12 @@ docker compose up -d --build
 | `NODE_ENV` | `development` | Режим работы |
 | `PORT` | `3001` | Порт backend API |
 | `MONGODB_URL` | — | URL подключения к MongoDB |
-| `REDIS_URL` | `redis://localhost:6379` | URL Redis |
+| `REDIS_URL` | `redis://localhost:6379` | URL Redis (pub/sub WebSocket) |
+| `AWS_REGION` | `us-east-1` | AWS регион для SQS |
+| `AWS_SQS_QUEUE_URL` | — | URL SQS-очереди исполнения сценариев |
+| `AWS_ACCESS_KEY_ID` | `test` | AWS access key (LocalStack: `test`) |
+| `AWS_SECRET_ACCESS_KEY` | `test` | AWS secret key (LocalStack: `test`) |
+| `AWS_ENDPOINT_URL` | — | Endpoint для LocalStack (пусто = реальный AWS) |
 | `MINIO_ENDPOINT` | `localhost` | Хост MinIO |
 | `MINIO_PORT` | `9000` | Порт MinIO |
 | `MINIO_ACCESS_KEY` | `minioadmin` | Ключ доступа MinIO |
@@ -130,7 +137,7 @@ pnpm test             # Запуск тестов (vitest)
 pnpm lint             # Линтинг (oxlint)
 pnpm format           # Форматирование (oxfmt)
 pnpm gen:types        # Генерация типов из OpenAPI-спеки backend'а
-pnpm infra            # Поднять MongoDB + Redis + MinIO
+pnpm infra            # Поднять MongoDB + Redis + MinIO + LocalStack
 pnpm infra:down       # Остановить инфраструктуру
 ```
 

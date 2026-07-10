@@ -17,11 +17,13 @@ vi.mock("mongoose", () => ({
   Model: class {},
 }));
 
-vi.mock("bullmq", () => {
+vi.mock("@aws-sdk/client-sqs", () => {
   return {
-    Queue: class MockQueue {
-      add = vi.fn().mockResolvedValue(undefined);
-      getJob = vi.fn().mockResolvedValue(null);
+    SQSClient: class MockSQSClient {
+      send = vi.fn().mockResolvedValue(undefined);
+    },
+    SendMessageCommand: class MockSendMessageCommand {
+      constructor(public input: unknown) {}
     },
   };
 });
@@ -70,7 +72,10 @@ describe("Run status transitions", () => {
     setMockValues(null, null);
     mockConfig = {
       get: vi.fn((key: string) => {
-        if (key === "REDIS_URL") return "redis://localhost:6379";
+        if (key === "AWS_SQS_QUEUE_URL") return "http://localhost:4566/000000000000/scenario-execution";
+        if (key === "AWS_REGION") return "us-east-1";
+        if (key === "AWS_ACCESS_KEY_ID") return "test";
+        if (key === "AWS_SECRET_ACCESS_KEY") return "test";
         return undefined;
       }),
     };

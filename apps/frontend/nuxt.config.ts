@@ -4,6 +4,7 @@ import { config as loadEnv } from 'dotenv';
 import { publicEnvSchema, serverEnvSchema } from './config/env.schema';
 
 const rootDir = fileURLToPath(new URL('.', import.meta.url));
+const sharedSrc = resolve(rootDir, '../../packages/shared/src');
 loadEnv({ path: resolve(rootDir, '../../.env') });
 
 const publicResult = publicEnvSchema.safeParse({
@@ -31,6 +32,10 @@ if (!serverResult.success) {
 export default defineNuxtConfig({
   compatibilityDate: '2024-11-01',
   devtools: { enabled: true },
+
+  alias: {
+    '@fuse/shared': resolve(sharedSrc, 'index.ts'),
+  },
 
   modules: ['@pinia/nuxt'],
 
