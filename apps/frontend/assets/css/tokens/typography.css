@@ -1,0 +1,54 @@
+/* ============================================================
+   FUSE · TYPOGRAPHY TOKENS
+   Golos Text everywhere (heavy display weights, full Cyrillic),
+   JetBrains Mono for API paths / code / numeric tokens.
+   ============================================================ */
+:root {
+  /* Families */
+  --font-sans: 'Golos Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* Weights */
+  --fw-regular:  400;  /* @kind font */
+  --fw-medium:   500;  /* @kind font */
+  --fw-semibold: 600;  /* @kind font */
+  --fw-bold:     700;  /* @kind font */
+  --fw-extrabold:800;  /* @kind font */
+  --fw-black:    900;  /* @kind font */
+
+  /* Font sizes (rem, base 16px). The root font-size steps per breakpoint
+     (see base.css), so every rem size scales for laptop/desktop. */
+  --fs-display-xl: 4.25rem;  /* marketplace hero (68px @16) */
+  --fs-display-lg: 2.75rem;  /* page titles (44px) */
+  --fs-display-md: 2.125rem; /* section / entity titles (34px) */
+  --fs-h1: 1.75rem;   /* 28px */
+  --fs-h2: 1.375rem;  /* 22px */
+  --fs-h3: 1.125rem;  /* 18px */
+  --fs-title: 1.0625rem;    /* card titles (17px) */
+  --fs-body: 0.9375rem;     /* default body (15px) */
+  --fs-body-sm: 0.875rem;   /* 14px */
+  --fs-label: 0.8125rem;    /* form labels, meta (13px) */
+  --fs-caption: 0.75rem;    /* runs count, hints (12px) */
+  --fs-overline: 0.6875rem; /* КАТАЛОГ, section eyebrows (11px) */
+
+  /* Line heights */
+  --lh-tight: 1.05;   /* @kind font */
+  --lh-snug: 1.2;     /* @kind font */
+  --lh-normal: 1.45;  /* @kind font */
+  --lh-relaxed: 1.6;  /* @kind font */
+
+  /* Letter spacing */
+  --ls-display: -0.03em;  /* @kind font */
+  --ls-heading: -0.02em;  /* @kind font */
+  --ls-body: 0;           /* @kind font */
+  --ls-overline: 0.08em;  /* @kind font */
+
+  /* ---- Semantic type roles ---- */
+  --type-display: var(--fw-extrabold) var(--fs-display-xl)/var(--lh-tight) var(--font-sans);
+  --type-page-title: var(--fw-extrabold) var(--fs-display-lg)/var(--lh-snug) var(--font-sans);
+  --type-h2: var(--fw-bold) var(--fs-h2)/var(--lh-snug) var(--font-sans);
+  --type-card-title: var(--fw-bold) var(--fs-title)/var(--lh-snug) var(--font-sans);
+  --type-body: var(--fw-regular) var(--fs-body)/var(--lh-normal) var(--font-sans);
+  --type-label: var(--fw-semibold) var(--fs-label)/1.3 var(--font-sans);
+  --type-mono: var(--fw-regular) var(--fs-body-sm)/1.5 var(--font-mono);
+}

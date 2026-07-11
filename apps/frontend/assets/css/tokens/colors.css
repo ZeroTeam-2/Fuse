@@ -1,0 +1,100 @@
+/* ============================================================
+   FUSE · COLOR TOKENS
+   A zinc-neutral base with a rose/crimson primary.
+   Base scales first, semantic aliases second.
+   ============================================================ */
+:root {
+  /* ---- Brand · crimson/rose (primary) ---- */
+  --rose-50:  #fff1f2;
+  --rose-100: #ffe4e8;
+  --rose-200: #fecdd6;
+  --rose-300: #fda4b4;
+  --rose-400: #fb7191;
+  --rose-500: #f43f68;
+  --rose-600: #e11d48;  /* primary brand crimson */
+  --rose-700: #be123c;  /* pressed / active pill */
+  --rose-800: #9f1239;
+  --rose-900: #881337;
+
+  /* ---- Neutral · zinc ---- */
+  --zinc-0:   #ffffff;
+  --zinc-50:  #fafafa;  /* app background */
+  --zinc-100: #f4f4f5;
+  --zinc-150: #ededee;  /* hairline fills */
+  --zinc-200: #e4e4e7;  /* borders */
+  --zinc-300: #d4d4d8;
+  --zinc-400: #a1a1aa;  /* faint text / icons */
+  --zinc-500: #71717a;  /* muted text */
+  --zinc-600: #52525b;
+  --zinc-700: #3f3f46;
+  --zinc-800: #27272a;
+  --zinc-900: #18181b;  /* ink / headings / dark buttons */
+  --zinc-950: #0d0d0d;  /* code surfaces */
+
+  /* ---- Semantic · success (green) ---- */
+  --green-50:  #f0fdf4;
+  --green-100: #dcfce7;
+  --green-200: #bbf7d0;
+  --green-500: #22c55e;
+  --green-600: #16a34a;  /* published / GET / success */
+  --green-700: #15803d;
+
+  /* ---- Semantic · info (violet, used in step links) ---- */
+  --violet-100: #ede9fe;
+  --violet-500: #8b5cf6;
+  --violet-600: #7c3aed;
+
+  /* ---- Brand gradients ---- */
+  --grad-brand: linear-gradient(135deg, #f43f68 0%, #e11d48 100%);  /* @kind other */  /* logo mark */
+  --grad-avatar: linear-gradient(140deg, #f43f68 0%, #c026d3 100%); /* @kind other */  /* user avatar pink→magenta */
+
+  /* ============================================================
+     SEMANTIC ALIASES
+     ============================================================ */
+  /* Surfaces */
+  --surface-app:        var(--zinc-50);
+  --surface-card:       var(--zinc-0);
+  --surface-sunken:     var(--zinc-100);
+  --surface-code:       var(--zinc-950);
+  --surface-inverse:    var(--zinc-900);
+
+  /* Text */
+  --text-strong:  var(--zinc-900);
+  --text-body:    var(--zinc-700);
+  --text-muted:   var(--zinc-500);
+  --text-faint:   var(--zinc-400);
+  --text-on-dark: var(--zinc-0);
+  --text-brand:   var(--rose-600);
+  --text-code:    #e7e7ea;
+
+  /* Borders */
+  --border-subtle: var(--zinc-200);
+  --border-strong: var(--zinc-300);
+  --border-brand:  var(--rose-600);
+
+  /* Primary action */
+  --primary:         var(--rose-600);
+  --primary-hover:   var(--rose-700);
+  --primary-tint:    var(--rose-50);
+  --on-primary:      var(--zinc-0);
+
+  /* Dark action */
+  --dark:        var(--zinc-900);
+  --dark-hover:  var(--zinc-800);
+  --on-dark:     var(--zinc-0);
+
+  /* Success */
+  --success:      var(--green-600);
+  --success-tint: var(--green-100);
+  --success-bg:   var(--green-50);
+
+  /* HTTP method chips */
+  --method-post-bg:   var(--rose-100);
+  --method-post-text: var(--rose-600);
+  --method-get-bg:    var(--green-100);
+  --method-get-text:  var(--green-700);
+
+  /* Focus ring */
+  --ring-brand: 0 0 0 3px rgba(225, 29, 72, 0.22);
+  --ring-dark:  0 0 0 3px rgba(24, 24, 27, 0.14);
+}

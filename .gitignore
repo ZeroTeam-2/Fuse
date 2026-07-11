@@ -37,4 +37,6 @@ coverage/
 # Changelogen
 CHANGELOG.md
 
-assets
+# Design system reference material at the repo root (мокапы, исходники иконок).
+# Ведущий слэш обязателен: без него паттерн ловит и apps/frontend/assets.
+/assets/
