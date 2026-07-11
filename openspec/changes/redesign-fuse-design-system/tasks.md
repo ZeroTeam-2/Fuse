@@ -57,9 +57,9 @@
 
 ## 7. Фаза 2 — сборка страниц
 
-- [ ] 7.1 Маркетплейс (`pages/index.vue`) — CategoryNav + ScenarioCard grid + SearchInput + SegmentedControl + Pagination
-- [ ] 7.2 Просмотр сценария (`pages/cards/[id]/index.vue`) — Tabs, StatCard, EndpointRow
-- [ ] 7.3 Запуск сценария (`pages/cards/[id]/run.vue`) — StepProgress, Input/Select, CodeBlock
+- [x] 7.1 Маркетплейс (`pages/index.vue`) — CategoryNav + ScenarioCard grid + SearchInput + SegmentedControl + Pagination
+- [x] 7.2 Просмотр сценария (`pages/cards/[id]/index.vue`) — Tabs, StatCard, EndpointRow
+- [x] 7.3 Запуск сценария (`pages/cards/[id]/run.vue`) — StepProgress, Input/Select, CodeBlock
 - [ ] 7.4 Плейграунд (`pages/cards/[id]/playground.vue`) — CodeBlock, результаты
 - [ ] 7.5 Мои API (`pages/my/apps/index.vue`, `[id].vue`, `new.vue`, `[id]/update.vue`) — AppRow, ProviderIcon, EndpointRow
 - [ ] 7.6 Мои сценарии (`pages/my/scenarios/index.vue`, `new.vue`) — ScenarioCard, PublishButton
