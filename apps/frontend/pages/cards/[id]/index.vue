@@ -73,7 +73,15 @@
 
         <!-- Run -->
         <div v-else-if="activeTab === 'Запуск'" class="max-w-[940px]">
-          <RunPanel :scenario-id="card.id" />
+          <div class="mb-5">
+            <SegmentedControl v-model="runView" :options="runViews" />
+          </div>
+          <RunPanel
+            v-if="runView === 'Результат'"
+            :scenario-id="card.id"
+            @playground="runView = 'Playground'"
+          />
+          <PlaygroundPanel v-else :scenario-id="card.id" />
         </div>
 
         <!-- Services -->
@@ -149,7 +157,10 @@ const card = ref<CardDetail | null>(null);
 const loading = ref(true);
 const activeTab = ref("Обзор");
 
+const runView = ref("Результат");
+
 const tabs = ["Обзор", "Запуск", "Сервисы и endpoints"];
+const runViews = ["Результат", "Playground"];
 const eyebrow =
   "font-sans text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-zinc-400 mb-3";
 

@@ -1,74 +1,119 @@
 <template>
-  <div class="detail-page">
-    <div v-if="loading" class="state-text">Загрузка…</div>
+  <div class="max-w-[1180px] xl:max-w-[1320px] mx-auto px-5 lg:px-8 pt-8 pb-20">
+    <div v-if="loading" class="font-sans text-sm text-zinc-400 py-16 text-center">Загрузка…</div>
 
     <template v-else-if="app">
-      <div class="top-bar">
-        <NuxtLink to="/my/apps" class="back-link">← Все приложения</NuxtLink>
-      </div>
+      <NuxtLink
+        to="/my/apps"
+        class="font-sans text-sm text-zinc-500 inline-flex items-center gap-1.5 mb-6 hover:text-zinc-700"
+      >
+        ‹ Приложения
+      </NuxtLink>
 
-      <div class="meta-card">
-        <div class="meta-header">
-          <div class="meta-left">
-            <h1 class="app-title">{{ app.name }}</h1>
-            <div class="meta-chips">
-              <span :class="['badge', app.published ? 'badge-on' : 'badge-off']">
-                {{ app.published ? "Опубликован" : "Скрыт" }}
-              </span>
-              <span class="chip">{{ app.endpoints?.length ?? 0 }} endpoints</span>
-              <span class="chip">{{ app.scenarioCount ?? 0 }} сценариев</span>
-            </div>
-          </div>
-          <div class="meta-actions">
-            <NuxtLink :to="`/my/apps/${route.params.id}/update`" class="action-btn sync-btn">
-              Синхронизировать
-            </NuxtLink>
-            <button class="action-btn toggle-btn" @click="togglePublish">
-              {{ app.published ? "Снять с публикации" : "Опубликовать" }}
-            </button>
-            <button class="action-btn delete-btn" @click="deleteApp">
-              Удалить
-            </button>
-          </div>
-        </div>
-
-        <p v-if="app.description" class="app-desc">{{ app.description }}</p>
-
-        <div class="meta-grid">
-          <div class="meta-item">
-            <span class="meta-label">Хост</span>
-            <span class="meta-value">{{ app.host || "—" }}</span>
-          </div>
-          <div class="meta-item">
-            <span class="meta-label">Версия API</span>
-            <span class="meta-value">{{ app.apiVersion || "—" }}</span>
-          </div>
-          <div class="meta-item">
-            <span class="meta-label">Синхронизирован</span>
-            <span class="meta-value">{{ formatDate(app.syncedAt) }}</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="endpoints-card">
-        <h2 class="section-title">Endpoints</h2>
-        <div class="endpoint-list">
-          <div
-            v-for="ep in app.endpoints"
-            :key="ep.id"
-            class="endpoint-row"
+      <div class="flex items-start gap-[18px] mb-7 flex-wrap">
+        <ProviderIcon :name="app.name" :size="64" />
+        <div class="flex-1 min-w-[200px]">
+          <h1
+            class="font-sans font-extrabold text-[1.875rem] md:text-[2.5rem] tracking-tight text-zinc-900"
           >
-            <span :class="['method-badge', methodClass(ep.method)]">
-              {{ ep.method }}
-            </span>
-            <span class="endpoint-path">{{ ep.path }}</span>
-            <span v-if="ep.summary" class="endpoint-summary">{{ ep.summary }}</span>
-          </div>
+            {{ app.name }}
+          </h1>
+          <p v-if="app.description" class="font-sans text-base text-zinc-500 mt-1.5 mb-2">
+            {{ app.description }}
+          </p>
+          <div class="font-mono text-[0.8125rem] text-zinc-400">{{ metaLine }}</div>
+        </div>
+        <div class="flex items-center gap-2.5 shrink-0">
+          <PublishButton
+            :published="app.published"
+            @publish="setPublished(true)"
+            @unpublish="confirmOff = true"
+          />
+          <Button variant="danger" @click="confirmDelete = true">
+            <template #left><Icon name="trash-2" :size="16" /></template>
+            Удалить
+          </Button>
         </div>
       </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-5 mb-10">
+        <StatCard :value="app.endpoints?.length ?? 0" label="подключённых endpoints" />
+        <StatCard :value="app.scenarioCount ?? 0" label="сценариев используют этот API" />
+      </div>
+
+      <div class="flex flex-col sm:flex-row sm:items-baseline justify-between gap-3 mb-4">
+        <div class="flex items-baseline gap-3">
+          <h2 class="font-sans font-bold text-[1.375rem] tracking-tight text-zinc-900">
+            Импортированные endpoints
+          </h2>
+          <span class="font-mono text-[0.8125rem] text-zinc-400">
+            {{ app.endpoints?.length ?? 0 }} шт.
+          </span>
+        </div>
+        <Button variant="dark" @click="navigateTo(`/my/apps/${appId}/update`)">
+          <template #left><Icon name="refresh-cw" :size="16" /></template>
+          Обновить API
+        </Button>
+      </div>
+
+      <Card v-if="pageItems.length" padding="sm">
+        <EndpointRow
+          v-for="ep in pageItems"
+          :key="ep.id"
+          :method="ep.method"
+          :path="ep.path"
+          :description="ep.summary"
+        />
+      </Card>
+      <Card v-else padding="lg">
+        <p class="font-sans text-sm text-zinc-400 text-center py-6">
+          Endpoints ещё не импортированы
+        </p>
+      </Card>
+
+      <div v-if="epPageCount > 1" class="flex items-center justify-between mt-5">
+        <span class="font-sans text-sm text-zinc-400">{{ rangeLabel }}</span>
+        <Pagination v-model:page="epPage" :page-count="epPageCount" />
+      </div>
+
+      <Modal
+        v-if="confirmOff"
+        title="Снять с публикации?"
+        :subtitle="`«${app.name}» перестанет быть доступным в маркетплейсе.`"
+        :width="460"
+        @close="confirmOff = false"
+      >
+        <p class="font-sans text-[0.9375rem] text-zinc-600 leading-normal">
+          Сценарии, использующие его endpoints, приостановятся. Вы сможете снова опубликовать
+          приложение в любой момент — endpoints и настройки сохранятся.
+        </p>
+        <template #footer>
+          <Button variant="ghost" @click="confirmOff = false">Отмена</Button>
+          <Button variant="danger" @click="unpublish">Снять с публикации</Button>
+        </template>
+      </Modal>
+
+      <Modal
+        v-if="confirmDelete"
+        title="Удалить приложение?"
+        :subtitle="`«${app.name}» будет удалено безвозвратно.`"
+        :width="460"
+        @close="confirmDelete = false"
+      >
+        <p class="font-sans text-[0.9375rem] text-zinc-600 leading-normal">
+          Вместе с приложением удалятся все импортированные endpoints. Сценарии, которые их
+          используют, перестанут работать.
+        </p>
+        <template #footer>
+          <Button variant="ghost" @click="confirmDelete = false">Отмена</Button>
+          <Button variant="danger" @click="deleteApp">Удалить</Button>
+        </template>
+      </Modal>
     </template>
 
-    <div v-else class="state-text">Приложение не найдено</div>
+    <div v-else class="font-sans text-sm text-zinc-400 py-16 text-center">
+      Приложение не найдено
+    </div>
   </div>
 </template>
 
@@ -76,14 +121,46 @@
 import type { App } from "@fuse/shared";
 
 const route = useRoute();
+const { $api } = useNuxtApp() as any;
 const appId = route.params.id as string;
 
-const app = ref<App | null>(null);
+const EP_PAGE_SIZE = 8;
+
+const app = ref<(App & { scenarioCount?: number }) | null>(null);
 const loading = ref(true);
+const confirmOff = ref(false);
+const confirmDelete = ref(false);
+const epPage = ref(1);
+
+const endpoints = computed(() => app.value?.endpoints ?? []);
+const epPageCount = computed(() => Math.max(1, Math.ceil(endpoints.value.length / EP_PAGE_SIZE)));
+const epStart = computed(() => (epPage.value - 1) * EP_PAGE_SIZE);
+const pageItems = computed(() =>
+  endpoints.value.slice(epStart.value, epStart.value + EP_PAGE_SIZE),
+);
+
+const rangeLabel = computed(
+  () =>
+    `${epStart.value + 1}–${epStart.value + pageItems.value.length} из ${endpoints.value.length}`,
+);
+
+const metaLine = computed(() => {
+  if (!app.value) return "";
+  const parts = [app.value.host, app.value.apiVersion && `v${app.value.apiVersion}`].filter(Boolean);
+  const synced = app.value.syncedAt ? `синхр. ${formatDate(app.value.syncedAt)}` : null;
+  return [...parts, synced].filter(Boolean).join(" · ");
+});
+
+function formatDate(date: string): string {
+  return new Date(date).toLocaleDateString("ru-RU", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+}
 
 async function fetchApp() {
   loading.value = true;
-  const { $api } = useNuxtApp() as any;
   try {
     const { data } = await $api.GET("/api/apps/{id}", {
       params: { path: { id: appId } },
@@ -96,301 +173,34 @@ async function fetchApp() {
   }
 }
 
-async function togglePublish() {
+async function setPublished(published: boolean) {
   if (!app.value) return;
-  const { $api } = useNuxtApp() as any;
   try {
     await $api.PATCH("/api/apps/{id}/publish", {
       params: { path: { id: appId } },
-      body: { published: !app.value.published },
+      body: { published },
     });
-    app.value.published = !app.value.published;
+    app.value.published = published;
   } catch {
-    // error
+    // keep the previous state on failure
   }
 }
 
+async function unpublish() {
+  confirmOff.value = false;
+  await setPublished(false);
+}
+
 async function deleteApp() {
-  const { $api } = useNuxtApp() as any;
   try {
     await $api.DELETE("/api/apps/{id}", {
       params: { path: { id: appId } },
     });
     await navigateTo("/my/apps");
   } catch {
-    // error
+    confirmDelete.value = false;
   }
-}
-
-function methodClass(method: string): string {
-  const map: Record<string, string> = {
-    GET: "m-get",
-    POST: "m-post",
-    PUT: "m-put",
-    DELETE: "m-delete",
-  };
-  return map[method] ?? "m-get";
-}
-
-function formatDate(date?: string): string {
-  if (!date) return "—";
-  return new Date(date).toLocaleDateString("ru-RU", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }
 
 onMounted(fetchApp);
 </script>
-
-<style scoped>
-.detail-page {
-  max-width: 900px;
-  margin: 0 auto;
-  padding: 32px 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-}
-
-.top-bar {
-  display: flex;
-}
-
-.back-link {
-  font-size: 14px;
-  color: #6366f1;
-  text-decoration: none;
-  font-weight: 500;
-}
-
-.back-link:hover {
-  text-decoration: underline;
-}
-
-.state-text {
-  font-size: 15px;
-  color: #71717a;
-  text-align: center;
-  padding: 64px 0;
-}
-
-.meta-card {
-  background: #fff;
-  border: 1px solid #e4e4e7;
-  border-radius: 12px;
-  padding: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.meta-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-.meta-left {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.app-title {
-  font-size: 22px;
-  font-weight: 800;
-  color: #18181b;
-  margin: 0;
-}
-
-.meta-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.badge {
-  font-size: 12px;
-  font-weight: 600;
-  padding: 3px 10px;
-  border-radius: 100px;
-}
-
-.badge-on {
-  background: #dcfce7;
-  color: #16a34a;
-}
-
-.badge-off {
-  background: #f4f4f5;
-  color: #71717a;
-}
-
-.chip {
-  font-size: 12px;
-  color: #52525b;
-  background: #f4f4f5;
-  padding: 3px 10px;
-  border-radius: 6px;
-}
-
-.meta-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.action-btn {
-  padding: 8px 14px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  border: 1px solid #e4e4e7;
-  transition: background 0.15s;
-  text-decoration: none;
-}
-
-.sync-btn {
-  background: #6366f1;
-  color: #fff;
-  border-color: #6366f1;
-}
-
-.sync-btn:hover {
-  background: #4f46e5;
-}
-
-.toggle-btn {
-  background: #fff;
-  color: #52525b;
-}
-
-.toggle-btn:hover {
-  background: #f4f4f5;
-}
-
-.delete-btn {
-  background: #fff;
-  color: #e11d48;
-  border-color: #fecaca;
-}
-
-.delete-btn:hover {
-  background: #fef2f2;
-}
-
-.app-desc {
-  font-size: 15px;
-  color: #52525b;
-  margin: 0;
-}
-
-.meta-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 16px;
-  padding-top: 16px;
-  border-top: 1px solid #f4f4f5;
-}
-
-.meta-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.meta-label {
-  font-size: 12px;
-  color: #71717a;
-  font-weight: 500;
-}
-
-.meta-value {
-  font-size: 14px;
-  color: #18181b;
-}
-
-.endpoints-card {
-  background: #fff;
-  border: 1px solid #e4e4e7;
-  border-radius: 12px;
-  padding: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.section-title {
-  font-size: 16px;
-  font-weight: 700;
-  color: #18181b;
-  margin: 0;
-}
-
-.endpoint-list {
-  display: flex;
-  flex-direction: column;
-}
-
-.endpoint-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 0;
-  border-bottom: 1px solid #f4f4f5;
-}
-
-.endpoint-row:last-child {
-  border-bottom: none;
-}
-
-.method-badge {
-  font-size: 11px;
-  font-weight: 700;
-  padding: 3px 8px;
-  border-radius: 6px;
-  min-width: 56px;
-  text-align: center;
-}
-
-.m-get {
-  background: #dcfce7;
-  color: #16a34a;
-}
-
-.m-post {
-  background: #fee2e2;
-  color: #e11d48;
-}
-
-.m-put {
-  background: #ffedd5;
-  color: #ea580c;
-}
-
-.m-delete {
-  background: #fee2e2;
-  color: #e11d48;
-}
-
-.endpoint-path {
-  font-size: 14px;
-  font-weight: 600;
-  color: #18181b;
-  font-family: monospace;
-}
-
-.endpoint-summary {
-  font-size: 13px;
-  color: #a1a1aa;
-  margin-left: auto;
-  text-align: right;
-}
-</style>

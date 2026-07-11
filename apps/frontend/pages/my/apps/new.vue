@@ -1,105 +1,114 @@
 <template>
-  <div class="new-app-page">
-    <div class="top-bar">
-      <NuxtLink to="/my/apps" class="back-link">← Все приложения</NuxtLink>
-    </div>
+  <div class="max-w-[720px] mx-auto px-5 lg:px-8 pt-8 pb-20 flex flex-col gap-6">
+    <NuxtLink
+      to="/my/apps"
+      class="font-sans text-sm text-zinc-500 inline-flex items-center gap-1.5 hover:text-zinc-700"
+    >
+      ‹ Приложения
+    </NuxtLink>
 
-    <div v-if="step === 1" class="wizard-card">
-      <h1 class="wizard-title">Новое приложение</h1>
-      <p class="wizard-subtitle">
-        Укажите данные приложения и ссылку на OpenAPI-спецификацию
-      </p>
+    <!-- Step 1 — spec URL -->
+    <Card v-if="step === 1" padding="xl" class="flex flex-col gap-6">
+      <div>
+        <h1 class="font-sans font-extrabold text-[1.875rem] tracking-tight text-zinc-900">
+          Новое приложение
+        </h1>
+        <p class="font-sans text-[0.9375rem] text-zinc-500 mt-1.5">
+          Укажите данные приложения и ссылку на OpenAPI-спецификацию
+        </p>
+      </div>
 
-      <form class="wizard-form" @submit.prevent="importPreview">
-        <label class="form-label">
-          Название
-          <input
-            v-model="form.name"
-            type="text"
-            class="form-input"
-            placeholder="My API"
-            required
-          />
-        </label>
-        <label class="form-label">
-          Описание
-          <textarea
-            v-model="form.description"
-            class="form-input form-textarea"
-            placeholder="Краткое описание API"
-            rows="3"
-          />
-        </label>
-        <label class="form-label">
-          OpenAPI URL
-          <input
-            v-model="form.openapiUrl"
-            type="url"
-            class="form-input"
-            placeholder="https://api.example.com/openapi.json"
-            required
-          />
-        </label>
+      <form class="flex flex-col gap-5" @submit.prevent="importPreview">
+        <Input v-model="form.name" label="Название" placeholder="My API" />
 
-        <div v-if="importError" class="error-box">{{ importError }}</div>
-
-        <div class="form-actions">
-          <button
-            type="submit"
-            class="primary-btn"
-            :disabled="importing"
+        <div class="flex flex-col gap-2">
+          <label
+            for="app-description"
+            class="text-[0.8125rem] font-sans font-semibold text-zinc-900"
           >
+            Описание
+          </label>
+          <textarea
+            id="app-description"
+            v-model="form.description"
+            rows="3"
+            placeholder="Краткое описание API"
+            class="w-full px-3.5 py-3 font-sans text-[0.9375rem] text-zinc-900 bg-white border border-zinc-200 rounded-xl outline-none transition resize-y placeholder:text-zinc-400 focus:border-rose-600 focus:ring-4 focus:ring-rose-600/20"
+          />
+        </div>
+
+        <Input
+          v-model="form.openapiUrl"
+          label="OpenAPI URL"
+          type="url"
+          mono
+          placeholder="https://api.example.com/openapi.json"
+        />
+
+        <p
+          v-if="importError"
+          class="font-sans text-[0.8125rem] text-rose-600 bg-rose-50 border border-rose-200 rounded-xl px-3.5 py-2.5"
+        >
+          {{ importError }}
+        </p>
+
+        <div>
+          <Button variant="primary" type="submit" :disabled="importing">
             {{ importing ? "Импорт…" : "Импортировать" }}
-          </button>
+            <template #right><Icon name="arrow-right" :size="18" /></template>
+          </Button>
         </div>
       </form>
-    </div>
+    </Card>
 
-    <div v-if="step === 2 && preview" class="wizard-card">
-      <h1 class="wizard-title">Предпросмотр спецификации</h1>
-      <p class="result-text">
-        Спецификация разобрана — найдено {{ preview.endpointCount }} endpoints
-      </p>
-
-      <div v-if="preview.host || preview.apiVersion" class="preview-meta">
-        <span v-if="preview.host" class="chip">{{ preview.host }}</span>
-        <span v-if="preview.apiVersion" class="chip">v{{ preview.apiVersion }}</span>
-      </div>
-
-      <div class="endpoint-preview-list">
-        <div
-          v-for="(ep, i) in preview.endpoints"
-          :key="i"
-          class="endpoint-row"
-        >
-          <span :class="['method-badge', methodClass(ep.method)]">
-            {{ ep.method }}
-          </span>
-          <span class="endpoint-path">{{ ep.path }}</span>
-          <span v-if="ep.summary" class="endpoint-summary">{{ ep.summary }}</span>
+    <!-- Step 2 — parsed spec preview -->
+    <template v-else-if="preview">
+      <Card padding="xl" class="flex flex-col gap-5">
+        <div>
+          <h1 class="font-sans font-extrabold text-[1.875rem] tracking-tight text-zinc-900">
+            Предпросмотр спецификации
+          </h1>
+          <p class="font-sans text-[0.9375rem] text-zinc-500 mt-1.5">
+            Спецификация разобрана — найдено {{ preview.endpointCount }} endpoints
+          </p>
         </div>
-      </div>
 
-      <div v-if="createError" class="error-box">{{ createError }}</div>
+        <div v-if="previewMeta" class="font-mono text-[0.8125rem] text-zinc-400">
+          {{ previewMeta }}
+        </div>
 
-      <div class="form-actions">
-        <button class="ghost-btn" :disabled="creating" @click="step = 1">
-          Назад
-        </button>
-        <button
-          class="primary-btn"
-          :disabled="creating"
-          @click="createApp"
+        <Card padding="sm">
+          <EndpointRow
+            v-for="(ep, i) in preview.endpoints"
+            :key="i"
+            :method="ep.method"
+            :path="ep.path"
+            :description="ep.summary"
+          />
+        </Card>
+
+        <p
+          v-if="createError"
+          class="font-sans text-[0.8125rem] text-rose-600 bg-rose-50 border border-rose-200 rounded-xl px-3.5 py-2.5"
         >
-          {{ creating ? "Создание…" : "Создать приложение" }}
-        </button>
-      </div>
-    </div>
+          {{ createError }}
+        </p>
+
+        <div class="flex items-center gap-2.5">
+          <Button variant="primary" :disabled="creating" @click="createApp">
+            {{ creating ? "Создание…" : "Создать приложение" }}
+          </Button>
+          <Button variant="secondary" :disabled="creating" @click="step = 1">Назад</Button>
+        </div>
+      </Card>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import type { ImportPreviewResult } from "@fuse/shared";
+
+const { $api } = useNuxtApp() as any;
 
 const step = ref(1);
 const importing = ref(false);
@@ -114,10 +123,15 @@ const form = reactive({
   openapiUrl: "",
 });
 
+const previewMeta = computed(() => {
+  const p = preview.value;
+  if (!p) return "";
+  return [p.host, p.apiVersion && `v${p.apiVersion}`].filter(Boolean).join(" · ");
+});
+
 async function importPreview() {
   importing.value = true;
   importError.value = "";
-  const { $api } = useNuxtApp() as any;
   try {
     const { data, error } = await $api.POST("/api/apps/import-preview", {
       body: { openapiUrl: form.openapiUrl },
@@ -138,7 +152,6 @@ async function importPreview() {
 async function createApp() {
   creating.value = true;
   createError.value = "";
-  const { $api } = useNuxtApp() as any;
   try {
     const { data, error } = await $api.POST("/api/apps", {
       body: {
@@ -158,232 +171,4 @@ async function createApp() {
     creating.value = false;
   }
 }
-
-function methodClass(method: string): string {
-  const map: Record<string, string> = {
-    GET: "m-get",
-    POST: "m-post",
-    PUT: "m-put",
-    DELETE: "m-delete",
-  };
-  return map[method] ?? "m-get";
-}
 </script>
-
-<style scoped>
-.new-app-page {
-  max-width: 720px;
-  margin: 0 auto;
-  padding: 32px 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-}
-
-.top-bar {
-  display: flex;
-}
-
-.back-link {
-  font-size: 14px;
-  color: #6366f1;
-  text-decoration: none;
-  font-weight: 500;
-}
-
-.back-link:hover {
-  text-decoration: underline;
-}
-
-.wizard-card {
-  background: #fff;
-  border: 1px solid #e4e4e7;
-  border-radius: 12px;
-  padding: 32px;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.wizard-title {
-  font-size: 22px;
-  font-weight: 800;
-  color: #18181b;
-  margin: 0;
-}
-
-.wizard-subtitle {
-  font-size: 15px;
-  color: #71717a;
-  margin: 0;
-}
-
-.wizard-form {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.form-label {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 13px;
-  color: #71717a;
-  font-weight: 500;
-}
-
-.form-input {
-  padding: 10px 12px;
-  border: 1px solid #e4e4e7;
-  border-radius: 8px;
-  font-size: 14px;
-  color: #18181b;
-  background: #fff;
-  outline: none;
-  transition: border-color 0.15s;
-}
-
-.form-input:focus {
-  border-color: #6366f1;
-}
-
-.form-textarea {
-  resize: vertical;
-  font-family: inherit;
-}
-
-.error-box {
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  border-radius: 8px;
-  padding: 10px 14px;
-  font-size: 14px;
-  color: #e11d48;
-}
-
-.form-actions {
-  display: flex;
-  gap: 12px;
-  justify-content: flex-end;
-}
-
-.primary-btn {
-  padding: 10px 20px;
-  border-radius: 8px;
-  border: none;
-  background: #6366f1;
-  color: #fff;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.primary-btn:hover:not(:disabled) {
-  background: #4f46e5;
-}
-
-.primary-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.ghost-btn {
-  padding: 10px 20px;
-  border-radius: 8px;
-  border: 1px solid #e4e4e7;
-  background: #fff;
-  color: #52525b;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.ghost-btn:hover {
-  background: #f4f4f5;
-}
-
-.result-text {
-  font-size: 15px;
-  color: #52525b;
-  margin: 0;
-}
-
-.preview-meta {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.chip {
-  font-size: 12px;
-  color: #52525b;
-  background: #f4f4f5;
-  padding: 3px 10px;
-  border-radius: 6px;
-}
-
-.endpoint-preview-list {
-  display: flex;
-  flex-direction: column;
-  border: 1px solid #f4f4f5;
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.endpoint-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
-  border-bottom: 1px solid #f4f4f5;
-}
-
-.endpoint-row:last-child {
-  border-bottom: none;
-}
-
-.method-badge {
-  font-size: 11px;
-  font-weight: 700;
-  padding: 3px 8px;
-  border-radius: 6px;
-  min-width: 56px;
-  text-align: center;
-}
-
-.m-get {
-  background: #dcfce7;
-  color: #16a34a;
-}
-
-.m-post {
-  background: #fee2e2;
-  color: #e11d48;
-}
-
-.m-put {
-  background: #ffedd5;
-  color: #ea580c;
-}
-
-.m-delete {
-  background: #fee2e2;
-  color: #e11d48;
-}
-
-.endpoint-path {
-  font-size: 14px;
-  font-weight: 600;
-  color: #18181b;
-  font-family: monospace;
-}
-
-.endpoint-summary {
-  font-size: 13px;
-  color: #a1a1aa;
-  margin-left: auto;
-  text-align: right;
-}
-</style>
