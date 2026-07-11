@@ -37,14 +37,19 @@
           :title="s.title"
           :description="s.tagline"
           :meta="`${s.steps?.length ?? 0} шагов · ${s.runCount ?? 0} запусков`"
-          @click="openEditor(s.id)"
+          :to="`/my/scenarios/${s.id}/edit`"
         >
           <template #status>
             <Badge v-if="s.published" tone="success" dot>Опубликован</Badge>
             <Badge v-else tone="neutral">Черновик</Badge>
           </template>
           <template #actions>
-            <Button variant="secondary" size="sm" full-width @click.stop="openPreview(s.id)">
+            <Button
+              variant="secondary"
+              size="sm"
+              full-width
+              @click.stop.prevent="openPreview(s.id)"
+            >
               Превью
             </Button>
           </template>
@@ -114,10 +119,6 @@ const rangeLabel = computed(() => {
 function coverFor(s: Scenario, i: number): { src?: string; variant?: "striped" | "mint" } {
   if (s.coverUrl) return { src: s.coverUrl };
   return { variant: i % 2 === 0 ? "striped" : "mint" };
-}
-
-function openEditor(id: string) {
-  navigateTo(`/my/scenarios/${id}/edit`);
 }
 
 function openPreview(id: string) {

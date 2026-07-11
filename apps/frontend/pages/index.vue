@@ -55,7 +55,7 @@
             :description="card.tagline"
             :provider="providerFor(card)"
             :meta="`${card.runCount} запусков`"
-            @click="openCard(card)"
+            :to="`/cards/${card.id}`"
           />
         </div>
 
@@ -119,10 +119,6 @@ function coverFor(
 
 function providerFor(card: MarketplaceCard) {
   return card.providers?.length ? { name: card.providers[0] } : undefined;
-}
-
-function openCard(card: MarketplaceCard) {
-  navigateTo(`/cards/${card.id}`);
 }
 
 function applyCat(val: string) {
