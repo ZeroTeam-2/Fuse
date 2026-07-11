@@ -63,6 +63,7 @@ services:
     container_name: fuse-frontend
     restart: unless-stopped
     environment:
+      NITRO_PORT: "5173"
       NUXT_PUBLIC_API_BASE_URL: /
       NUXT_SESSION_SECRET: ${NUXT_SESSION_SECRET:?NUXT_SESSION_SECRET is required}
     expose:
