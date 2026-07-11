@@ -66,6 +66,12 @@ export class App {
   @Prop({ required: true })
   openapiUrl: string;
 
+  // Absolute base every endpoint path is resolved against at execution time.
+  // Optional on the schema so pre-existing apps load; the worker rejects a step
+  // whose app has none rather than falling back to a guess.
+  @Prop()
+  baseUrl?: string;
+
   @Prop()
   host?: string;
 

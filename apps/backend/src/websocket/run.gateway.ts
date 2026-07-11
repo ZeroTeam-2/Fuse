@@ -1,4 +1,6 @@
 import { Logger } from "@nestjs/common";
+import { InjectModel } from "@nestjs/mongoose";
+import { Model } from "mongoose";
 import {
   WebSocketGateway,
   WebSocketServer,
@@ -7,6 +9,7 @@ import {
 } from "@nestjs/websockets";
 import type { Server, Socket } from "socket.io";
 import type { ServerWsEvent } from "@fuse/shared";
+import { Run, RunDocument } from "../execution/run.schema";
 
 // origin берём тот же, что и у HTTP-CORS в main.ts. Раньше в проде стоял
 // origin: false, что резало handshake, а в деве "*" несовместим с
@@ -21,17 +24,59 @@ import type { ServerWsEvent } from "@fuse/shared";
 export class RunGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private readonly logger = new Logger(RunGateway.name);
 
+  constructor(
+    @InjectModel(Run.name) private readonly runModel: Model<RunDocument>,
+  ) {}
+
   @WebSocketServer()
   server: Server;
 
-  handleConnection(client: Socket) {
+  async handleConnection(client: Socket): Promise<void> {
     const runId = client.handshake.query.runId as string | undefined;
-    if (runId) {
-      client.join(`run:${runId}`);
-      this.logger.log(`Client connected for run ${runId}`);
-    } else {
+    if (!runId) {
       this.logger.log(`Client connected: ${client.id}`);
+      return;
     }
+
+    client.join(`run:${runId}`);
+    this.logger.log(`Client connected for run ${runId}`);
+
+    // Клиент подключается УЖЕ ПОСЛЕ POST /api/runs, то есть worker мог начать
+    // (а для быстрого или мгновенно падающего запуска — и закончить) исполнение
+    // раньше, чем сокет вошёл в комнату. socket.io пропущенные события не
+    // реплеит, поэтому без снапшота такой клиент навсегда остаётся без
+    // обратной связи. Порядок важен: join → чтение → emit, тогда события,
+    // случившиеся после join, не теряются, а случившиеся до — приедут здесь.
+    await this.sendSnapshot(client, runId);
+  }
+
+  private async sendSnapshot(client: Socket, runId: string): Promise<void> {
+    let run: RunDocument | null;
+    try {
+      run = await this.runModel.findById(runId).exec();
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Failed to load snapshot for run ${runId}: ${reason}`);
+      return;
+    }
+
+    if (!run) {
+      return;
+    }
+
+    const snapshot: ServerWsEvent = {
+      type: "run:status",
+      runId,
+      payload: {
+        status: run.status,
+        currentStep: run.currentStep ?? 0,
+        stepResults: run.stepResults ?? [],
+        error: run.error,
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    client.emit(snapshot.type, snapshot);
   }
 
   handleDisconnect(client: Socket) {

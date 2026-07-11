@@ -3,6 +3,7 @@ import { dereference } from "@readme/openapi-parser";
 import { randomUUID } from "crypto";
 import { EndpointStatus, HttpMethod, ParamLocation } from "@fuse/shared";
 import type { Endpoint, SchemaField } from "@fuse/shared";
+import { deriveBaseUrl } from "./base-url";
 
 interface OpenAPIParameter {
   name: string;
@@ -62,6 +63,7 @@ interface OpenAPIDocument {
 }
 
 export interface ParsedSpec {
+  baseUrl?: string;
   host?: string;
   apiVersion?: string;
   endpoints: Endpoint[];
@@ -72,7 +74,10 @@ const VALID_METHODS = new Set(["get", "post", "put", "delete", "patch"]);
 
 @Injectable()
 export class OpenApiParserService {
-  async parse(rawSpec: Record<string, unknown>): Promise<ParsedSpec> {
+  async parse(
+    rawSpec: Record<string, unknown>,
+    openapiUrl: string,
+  ): Promise<ParsedSpec> {
     let spec: OpenAPIDocument;
     try {
       spec = (await dereference(rawSpec as never)) as OpenAPIDocument;
@@ -80,23 +85,25 @@ export class OpenApiParserService {
       throw new BadRequestException("Failed to parse OpenAPI specification");
     }
 
+    const baseUrl = deriveBaseUrl(spec, openapiUrl);
+
     return {
-      host: this.extractHost(spec),
+      baseUrl,
+      host: this.extractHost(baseUrl),
       apiVersion: spec.info?.version,
       endpoints: this.extractEndpoints(spec),
       specSnapshot: spec,
     };
   }
 
-  private extractHost(spec: OpenAPIDocument): string | undefined {
-    if (spec.servers?.length) {
-      try {
-        return new URL(spec.servers[0].url).host;
-      } catch {
-        return undefined;
-      }
+  // `host` — производное от baseUrl и живёт только для отображения в UI.
+  private extractHost(baseUrl?: string): string | undefined {
+    if (!baseUrl) return undefined;
+    try {
+      return new URL(baseUrl).host;
+    } catch {
+      return undefined;
     }
-    return spec.host;
   }
 
   private extractEndpoints(spec: OpenAPIDocument): Endpoint[] {

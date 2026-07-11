@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
   Logger,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
@@ -54,10 +55,17 @@ export class ExecutionService {
     return run;
   }
 
-  async getRun(runId: string): Promise<RunDocument> {
+  /**
+   * @param userId владелец запуска; чужой `Run` читать нельзя. Эндпоинт стал
+   * опорным для восстановления состояния, так что проверка здесь обязательна.
+   */
+  async getRun(runId: string, userId: string): Promise<RunDocument> {
     const run = await this.runModel.findById(runId).exec();
     if (!run) {
       throw new NotFoundException(`Run #${runId} not found`);
+    }
+    if (run.userId !== userId) {
+      throw new ForbiddenException(`Run #${runId} belongs to another user`);
     }
     return run;
   }

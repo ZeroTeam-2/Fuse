@@ -22,16 +22,39 @@ import type {
 } from "@fuse/shared";
 import { Run, RunDocument } from "./run.schema";
 import { Scenario, ScenarioDocument } from "../scenarios/scenario.schema";
+import { App, AppDocument } from "../apps/app.schema";
+import { SsrfGuard } from "../apps/ssrf-guard";
+import { joinBaseUrl } from "../apps/base-url";
 import { RunGateway } from "../websocket/run.gateway";
 import { resolveMappings } from "./mapping-resolver";
 
 const POLL_TIMEOUT_MS = 5 * 60 * 1000;
 const PAGE_INPUT_TIMEOUT_MS = 30 * 60 * 1000;
 
+const TERMINAL_STATUSES: RunStatus[] = [
+  RunStatus.COMPLETED,
+  RunStatus.FAILED,
+  RunStatus.CANCELLED,
+];
+
+/**
+ * Детерминированный сбой шага (недоступный endpoint, ошибка стороннего API,
+ * приложение без базового URL). Повторная доставка сообщения такой сбой не
+ * лечит — она лишь трижды повторит то же падение, поэтому `executeRun` фиксирует
+ * `failed` и ПОДТВЕРЖДАЕТ сообщение. Всё, что НЕ является StepExecutionError
+ * (например, недоступность MongoDB), пробрасывается наружу — там retry уместен.
+ */
+class StepExecutionError extends Error {}
+
+/** Отмена — не ошибка: статус уже выставлен, шаги просто прекращаем. */
+class RunCancelledError extends Error {}
+
 interface StepContext {
   runId: string;
   stepIndex: number;
   stepResults: RunStepResult[];
+  /** Кэш приложений на время одного запуска: N шагов к одному API — один запрос в БД. */
+  appCache: Map<string, AppDocument>;
 }
 
 @Injectable()
@@ -45,8 +68,10 @@ export class WorkerService
     @InjectModel(Run.name) private readonly runModel: Model<RunDocument>,
     @InjectModel(Scenario.name)
     private readonly scenarioModel: Model<ScenarioDocument>,
+    @InjectModel(App.name) private readonly appModel: Model<AppDocument>,
     private readonly configService: ConfigService,
     private readonly gateway: RunGateway,
+    private readonly ssrfGuard: SsrfGuard,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -114,27 +139,45 @@ export class WorkerService
     this.gateway.publish(runId, event);
   }
 
-  private async pushRunStep(
+  /**
+   * Раскладывает `stepResults` в массив фиксированной длины (по элементу на шаг).
+   * Дальше шаги пишутся АДРЕСНО по индексу, а не через `$push` + позиционный `$`:
+   * повторная доставка сообщения перезаписывает элемент, а не добавляет дубль.
+   */
+  private async initStepResults(
     runId: string,
-    stepResult: RunStepResult,
+    steps: Step[],
+    existing: RunStepResult[],
   ): Promise<void> {
+    if (existing.length === steps.length) {
+      return;
+    }
+
+    const seeded: RunStepResult[] = steps.map((step, i) => {
+      const prior = existing.find((sr) => sr.stepIndex === i);
+      return (
+        prior ?? {
+          stepIndex: i,
+          stepTitle: step.title,
+          status: "pending",
+        }
+      );
+    });
+
     await this.runModel
-      .updateOne(
-        { _id: runId },
-        { $push: { stepResults: stepResult as never } },
-      )
+      .updateOne({ _id: runId }, { $set: { stepResults: seeded as never } })
       .exec();
   }
 
-  private async setRunStep(
+  private async setStepResult(
     runId: string,
     stepIndex: number,
     update: RunStepResult,
   ): Promise<void> {
     await this.runModel
       .updateOne(
-        { _id: runId, "stepResults.stepIndex": stepIndex },
-        { $set: { "stepResults.$": update as never } },
+        { _id: runId },
+        { $set: { [`stepResults.${stepIndex}`]: update as never } },
       )
       .exec();
   }
@@ -146,14 +189,15 @@ export class WorkerService
       return;
     }
 
-    if (run.status === RunStatus.CANCELLED) {
-      this.logger.log(`Run ${runId} is cancelled, skipping`);
+    // Повторная доставка уже завершённого запуска не должна воскрешать его.
+    if (TERMINAL_STATUSES.includes(run.status)) {
+      this.logger.log(
+        `Run ${runId} is already ${run.status}, skipping redelivered message`,
+      );
       return;
     }
 
-    const scenario = await this.scenarioModel
-      .findById(run.scenarioId)
-      .exec();
+    const scenario = await this.scenarioModel.findById(run.scenarioId).exec();
 
     if (!scenario) {
       await this.failRun(runId, "Scenario not found");
@@ -162,12 +206,16 @@ export class WorkerService
 
     const steps = (scenario.steps ?? []) as Step[];
     const startStep = run.currentStep ?? 0;
+    const appCache = new Map<string, AppDocument>();
+
+    await this.initStepResults(
+      runId,
+      steps,
+      run.stepResults as unknown as RunStepResult[],
+    );
 
     await this.runModel
-      .updateOne(
-        { _id: runId },
-        { $set: { status: RunStatus.RUNNING } },
-      )
+      .updateOne({ _id: runId }, { $set: { status: RunStatus.RUNNING } })
       .exec();
 
     for (let i = startStep; i < steps.length; i++) {
@@ -184,14 +232,12 @@ export class WorkerService
 
       const startedAt = new Date().toISOString();
 
-      const stepResult: RunStepResult = {
+      await this.setStepResult(runId, i, {
         stepIndex: i,
         stepTitle: step.title,
         status: "running",
         startedAt,
-      };
-
-      await this.pushRunStep(runId, stepResult);
+      });
 
       await this.publish(runId, {
         type: "step:start",
@@ -209,6 +255,7 @@ export class WorkerService
           runId,
           stepIndex: i,
           stepResults: reloadedRun.stepResults as unknown as RunStepResult[],
+          appCache,
         };
 
         const result = await this.executeStep(step, ctx);
@@ -217,7 +264,7 @@ export class WorkerService
         const durationMs =
           new Date(finishedAt).getTime() - new Date(startedAt).getTime();
 
-        const completedStep: RunStepResult = {
+        await this.setStepResult(runId, i, {
           stepIndex: i,
           stepTitle: step.title,
           status: "completed",
@@ -225,9 +272,7 @@ export class WorkerService
           startedAt,
           finishedAt,
           durationMs,
-        };
-
-        await this.setRunStep(runId, i, completedStep);
+        });
 
         await this.publish(runId, {
           type: "step:done",
@@ -241,10 +286,21 @@ export class WorkerService
           timestamp: new Date().toISOString(),
         });
       } catch (err) {
-        const error = err instanceof Error ? err.message : String(err);
+        if (err instanceof RunCancelledError) {
+          this.logger.log(`Run ${runId} cancelled during step ${i}`);
+          return;
+        }
+
+        // Инфраструктурный сбой (например, MongoDB): не фиксируем `failed`,
+        // отдаём сообщение обратно в очередь — повтор здесь осмыслен.
+        if (!(err instanceof StepExecutionError)) {
+          throw err;
+        }
+
+        const error = err.message;
         const finishedAt = new Date().toISOString();
 
-        await this.setRunStep(runId, i, {
+        await this.setStepResult(runId, i, {
           stepIndex: i,
           stepTitle: step.title,
           status: "failed",
@@ -265,7 +321,8 @@ export class WorkerService
         });
 
         await this.failRun(runId, error);
-        throw err;
+        // Сообщение подтверждается: детерминированный сбой ретраить нечем.
+        return;
       }
     }
 
@@ -281,13 +338,19 @@ export class WorkerService
       .exec();
 
     const finalRun = await this.runModel.findById(runId).exec();
+    const stepResults = (finalRun?.stepResults ??
+      []) as unknown as RunStepResult[];
+    const totalDurationMs = stepResults.reduce(
+      (sum, sr) => sum + (sr.durationMs ?? 0),
+      0,
+    );
 
     await this.publish(runId, {
       type: "run:done",
       runId,
       payload: {
-        totalDurationMs: 0,
-        results: (finalRun?.stepResults ?? []).map((sr) => sr.result),
+        totalDurationMs,
+        results: stepResults.map((sr) => sr.result),
       },
       timestamp: new Date().toISOString(),
     });
@@ -298,7 +361,7 @@ export class WorkerService
       payload: {
         status: RunStatus.COMPLETED,
         currentStep: steps.length,
-        stepResults: finalRun?.stepResults ?? [],
+        stepResults,
       },
       timestamp: new Date().toISOString(),
     });
@@ -313,7 +376,7 @@ export class WorkerService
 
     switch (step.type) {
       case "api":
-        return this.executeApiStep(step, ctx.stepResults);
+        return this.executeApiStep(step, ctx);
 
       case "delay":
         return this.executeDelayStep(step);
@@ -335,12 +398,74 @@ export class WorkerService
     }
   }
 
+  /**
+   * Приложение шага — с кэшем на запуск.
+   */
+  private async loadApp(appId: string, ctx: StepContext): Promise<AppDocument> {
+    const cached = ctx.appCache.get(appId);
+    if (cached) {
+      return cached;
+    }
+
+    const app = await this.appModel.findById(appId).exec();
+    if (!app) {
+      throw new StepExecutionError(
+        `Приложение ${appId} не найдено — шаг ссылается на удалённое приложение`,
+      );
+    }
+
+    ctx.appCache.set(appId, app);
+    return app;
+  }
+
+  /**
+   * Собирает АБСОЛЮТНЫЙ URL вызова: базовый URL приложения + путь эндпоинта.
+   * Раньше в `fetch` уходил относительный путь из OpenAPI ("/collections"), на
+   * котором Node падал с "Failed to parse URL" — именно это и ломало запуски.
+   */
+  private async resolveStepUrl(
+    appId: string,
+    path: string,
+    resolved: Record<string, unknown>,
+    ctx: StepContext,
+  ): Promise<string> {
+    const app = await this.loadApp(appId, ctx);
+
+    if (!app.baseUrl) {
+      throw new StepExecutionError(
+        `У приложения «${app.name}» не задан базовый URL — переимпортируйте спецификацию OpenAPI`,
+      );
+    }
+
+    const withPathParams = this.applyPathParams(path, resolved);
+
+    let url: string;
+    try {
+      url = joinBaseUrl(app.baseUrl, withPathParams);
+    } catch {
+      throw new StepExecutionError(
+        `Некорректный базовый URL приложения «${app.name}»: ${app.baseUrl}`,
+      );
+    }
+
+    url = this.appendQuery(url, resolved);
+
+    try {
+      await this.ssrfGuard.assertSafeUrl(url);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new StepExecutionError(`Адрес ${url} отклонён: ${reason}`);
+    }
+
+    return url;
+  }
+
   private async executeApiStep(
     step: ApiStep,
-    stepResults: RunStepResult[],
+    ctx: StepContext,
   ): Promise<unknown> {
-    const resolved = resolveMappings(step, stepResults);
-    const url = this.buildUrl(step.path, resolved);
+    const resolved = resolveMappings(step, ctx.stepResults);
+    const url = await this.resolveStepUrl(step.appId, step.path, resolved, ctx);
 
     const options: RequestInit = {
       method: step.method,
@@ -356,11 +481,17 @@ export class WorkerService
       }
     }
 
-    const response = await fetch(url, options);
+    let response: Response;
+    try {
+      response = await fetch(url, options);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new StepExecutionError(`Не удалось вызвать ${url}: ${reason}`);
+    }
 
     if (!response.ok) {
       const text = await response.text().catch(() => "");
-      throw new Error(
+      throw new StepExecutionError(
         `API call failed: ${response.status} ${response.statusText}${text ? ` — ${text}` : ""}`,
       );
     }
@@ -372,34 +503,37 @@ export class WorkerService
     return response.text();
   }
 
-  private buildUrl(
+  private applyPathParams(
     path: string,
     resolved: Record<string, unknown>,
   ): string {
-    let url = path;
+    let result = path;
 
     const pathParams = this.toRecord(resolved.path);
     if (pathParams) {
       for (const [key, value] of Object.entries(pathParams)) {
-        url = url.replace(`{${key}}`, String(value));
+        result = result.replace(`{${key}}`, String(value));
       }
     }
 
+    return result;
+  }
+
+  private appendQuery(url: string, resolved: Record<string, unknown>): string {
     const queryParams = this.toRecord(resolved.query);
-    if (queryParams) {
-      const params = new URLSearchParams();
-      for (const [key, value] of Object.entries(queryParams)) {
-        if (value !== undefined && value !== null) {
-          params.append(key, String(value));
-        }
-      }
-      const qs = params.toString();
-      if (qs) {
-        url += `?${qs}`;
+    if (!queryParams) {
+      return url;
+    }
+
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(queryParams)) {
+      if (value !== undefined && value !== null) {
+        params.append(key, String(value));
       }
     }
 
-    return url;
+    const qs = params.toString();
+    return qs ? `${url}?${qs}` : url;
   }
 
   private toStringRecord(
@@ -434,7 +568,12 @@ export class WorkerService
     ctx: StepContext,
   ): Promise<unknown> {
     const resolved = resolveMappings(step, ctx.stepResults);
-    const url = this.buildUrl(step.pollPath, resolved);
+    const url = await this.resolveStepUrl(
+      step.appId,
+      step.pollPath,
+      resolved,
+      ctx,
+    );
     const intervalMs = (step.pollIntervalSec ?? 5) * 1000;
     const progressField = step.progressField;
     const startTime = Date.now();
@@ -444,13 +583,19 @@ export class WorkerService
     while (Date.now() - startTime < POLL_TIMEOUT_MS) {
       const run = await this.runModel.findById(ctx.runId).exec();
       if (!run || run.status === RunStatus.CANCELLED) {
-        throw new Error("Run was cancelled");
+        throw new RunCancelledError("Run was cancelled");
       }
 
-      const response = await fetch(url, { method: step.pollMethod });
+      let response: Response;
+      try {
+        response = await fetch(url, { method: step.pollMethod });
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        throw new StepExecutionError(`Не удалось опросить ${url}: ${reason}`);
+      }
 
       if (!response.ok) {
-        throw new Error(
+        throw new StepExecutionError(
           `Poll failed: ${response.status} ${response.statusText}`,
         );
       }
@@ -506,7 +651,9 @@ export class WorkerService
       .exec();
 
     if (!refScenario) {
-      throw new Error(`Referenced scenario ${step.refScenarioId} not found`);
+      throw new StepExecutionError(
+        `Referenced scenario ${step.refScenarioId} not found`,
+      );
     }
 
     const refSteps = (refScenario.steps ?? []) as Step[];
@@ -518,6 +665,7 @@ export class WorkerService
         runId: ctx.runId,
         stepIndex: i,
         stepResults: nestedResults,
+        appCache: ctx.appCache,
       };
       const result = await this.executeStep(refStep, nestedCtx);
       nestedResults.push({
@@ -535,6 +683,8 @@ export class WorkerService
     return { nestedScenario: step.refScenarioId };
   }
 
+  // Шаг «файл» пока заглушка (загрузка в MinIO — отдельная задача). Когда он
+  // появится, адрес выгрузки берётся тем же `resolveStepUrl(step.appId, step.uploadPath, ...)`.
   private async executeFileStep(
     _step: FileStep,
     _ctx: StepContext,
@@ -575,10 +725,10 @@ export class WorkerService
     while (Date.now() < deadline) {
       const run = await this.runModel.findById(runId).exec();
       if (!run) {
-        throw new Error("Run disappeared while waiting for input");
+        throw new StepExecutionError("Run disappeared while waiting for input");
       }
       if (run.status === RunStatus.CANCELLED) {
-        throw new Error("Run was cancelled while waiting for input");
+        throw new RunCancelledError("Run was cancelled while waiting for input");
       }
       if (run.status === RunStatus.RUNNING && run.pageData) {
         const data = run.pageData as Record<string, unknown>;
@@ -590,15 +740,12 @@ export class WorkerService
       await this.sleep(1000);
     }
 
-    throw new Error("Timed out waiting for page input");
+    throw new StepExecutionError("Timed out waiting for page input");
   }
 
   private async failRun(runId: string, error: string): Promise<void> {
     await this.runModel
-      .updateOne(
-        { _id: runId },
-        { $set: { status: RunStatus.FAILED, error } },
-      )
+      .updateOne({ _id: runId }, { $set: { status: RunStatus.FAILED, error } })
       .exec();
 
     const run = await this.runModel.findById(runId).exec();
@@ -610,6 +757,7 @@ export class WorkerService
         status: RunStatus.FAILED,
         currentStep: run?.currentStep ?? 0,
         stepResults: run?.stepResults ?? [],
+        error,
       },
       timestamp: new Date().toISOString(),
     });

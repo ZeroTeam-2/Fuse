@@ -85,11 +85,18 @@ export class SsrfGuard {
     }
   }
 
-  async fetchSpec(rawUrl: string): Promise<Record<string, unknown>> {
+  /**
+   * Полная проверка адреса перед исходящим запросом: схема, блок-лист хостов и
+   * резолв DNS в публичный IP. Воркер зовёт её перед вызовом стороннего API —
+   * хост приложения проверялся при импорте, но DNS мог измениться с тех пор.
+   */
+  async assertSafeUrl(rawUrl: string): Promise<void> {
     this.validateUrl(rawUrl);
+    await this.assertPublicHostname(new URL(rawUrl).hostname);
+  }
 
-    const parsed = new URL(rawUrl);
-    await this.assertPublicHostname(parsed.hostname);
+  async fetchSpec(rawUrl: string): Promise<Record<string, unknown>> {
+    await this.assertSafeUrl(rawUrl);
 
     const controller = new AbortController();
     const timeout = setTimeout(

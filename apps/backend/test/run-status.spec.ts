@@ -188,10 +188,33 @@ describe("Run status transitions", () => {
     });
   });
 
+  describe("run ownership", () => {
+    it("getRun returns the run to its owner", async () => {
+      setMockValues(
+        { _id: "run-1", userId: "user-1", status: RunStatus.COMPLETED },
+        null,
+      );
+
+      const run = await service.getRun("run-1", "user-1");
+      expect(run.status).toBe(RunStatus.COMPLETED);
+    });
+
+    it("getRun rejects a run belonging to another user", async () => {
+      setMockValues(
+        { _id: "run-1", userId: "user-1", status: RunStatus.COMPLETED },
+        null,
+      );
+
+      await expect(service.getRun("run-1", "user-2")).rejects.toThrow(
+        /another user/,
+      );
+    });
+  });
+
   describe("run not found", () => {
     it("getRun throws when run does not exist", async () => {
       setMockValues(null, null);
-      await expect(service.getRun("nonexistent")).rejects.toThrow();
+      await expect(service.getRun("nonexistent", "user-1")).rejects.toThrow();
     });
 
     it("cancelRun throws when run does not exist", async () => {
