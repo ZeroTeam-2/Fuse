@@ -37,9 +37,13 @@ function mockQuery<T>(value: T) {
 class MockRunModel {
   static _findByIdValue: any = null;
   static _findByIdAndUpdateValue: any = null;
+  static _findValue: any[] = [];
+  static _updateManyResult: any = { acknowledged: true };
 
   static findById = vi.fn(() => mockQuery(MockRunModel._findByIdValue));
   static findByIdAndUpdate = vi.fn(() => mockQuery(MockRunModel._findByIdAndUpdateValue));
+  static find = vi.fn(() => mockQuery(MockRunModel._findValue));
+  static updateMany = vi.fn(() => mockQuery(MockRunModel._updateManyResult));
 
   [k: string]: any;
 
@@ -63,9 +67,16 @@ function setMockValues(findById: any, findByIdAndUpdate: any) {
   MockRunModel.findByIdAndUpdate = vi.fn(() => mockQuery(findByIdAndUpdate));
 }
 
+function setMockActiveRuns(runs: any[]) {
+  MockRunModel._findValue = runs;
+  MockRunModel.find = vi.fn(() => mockQuery(runs));
+  MockRunModel.updateMany = vi.fn(() => mockQuery({ acknowledged: true }));
+}
+
 describe("Run status transitions", () => {
   let service: ExecutionService;
   let mockConfig: Partial<ConfigService>;
+  let mockGateway: { publish: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -79,9 +90,11 @@ describe("Run status transitions", () => {
         return undefined;
       }),
     };
+    mockGateway = { publish: vi.fn() };
     service = new ExecutionService(
       MockRunModel as any,
       mockConfig as ConfigService,
+      mockGateway as any,
     );
   });
 
@@ -208,6 +221,48 @@ describe("Run status transitions", () => {
       await expect(service.getRun("run-1", "user-2")).rejects.toThrow(
         /another user/,
       );
+    });
+  });
+
+  describe("cancelActiveRunsForScenarios (stop already-running scenarios on delete)", () => {
+    it("cancels every non-terminal run for the given scenarios", async () => {
+      const activeRuns = [
+        { _id: "run-1", scenarioId: "scenario-1", status: RunStatus.RUNNING, currentStep: 1, stepResults: [] },
+        { _id: "run-2", scenarioId: "scenario-1", status: RunStatus.WAITING_INPUT, currentStep: 2, stepResults: [] },
+      ];
+      setMockActiveRuns(activeRuns);
+
+      const count = await service.cancelActiveRunsForScenarios(["scenario-1"]);
+
+      expect(count).toBe(2);
+      expect(MockRunModel.updateMany).toHaveBeenCalledWith(
+        { _id: { $in: ["run-1", "run-2"] } },
+        { $set: { status: RunStatus.CANCELLED } },
+      );
+      expect(mockGateway.publish).toHaveBeenCalledTimes(2);
+      expect(mockGateway.publish).toHaveBeenCalledWith(
+        "run-1",
+        expect.objectContaining({
+          type: "run:status",
+          payload: expect.objectContaining({ status: RunStatus.CANCELLED }),
+        }),
+      );
+    });
+
+    it("does nothing when there are no active runs", async () => {
+      setMockActiveRuns([]);
+
+      const count = await service.cancelActiveRunsForScenarios(["scenario-1"]);
+
+      expect(count).toBe(0);
+      expect(MockRunModel.updateMany).not.toHaveBeenCalled();
+      expect(mockGateway.publish).not.toHaveBeenCalled();
+    });
+
+    it("does nothing when no scenario ids are provided", async () => {
+      const count = await service.cancelActiveRunsForScenarios([]);
+      expect(count).toBe(0);
+      expect(MockRunModel.find).not.toHaveBeenCalled();
     });
   });
 
