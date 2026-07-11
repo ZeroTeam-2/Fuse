@@ -39,7 +39,28 @@
           @publish="togglePublish"
           @unpublish="togglePublish"
         />
+        <Button variant="danger" @click="confirmDelete = true">
+          <template #left><Icon name="trash-2" :size="16" /></template>
+          Удалить
+        </Button>
       </div>
+
+      <Modal
+        v-if="confirmDelete"
+        title="Удалить сценарий?"
+        :subtitle="`«${store.scenario.title}» будет удалён безвозвратно.`"
+        :width="460"
+        @close="confirmDelete = false"
+      >
+        <p class="font-sans text-[0.9375rem] text-zinc-600 leading-normal">
+          Вместе со сценарием удалятся все его шаги и публикация в маркетплейсе. Это действие
+          нельзя отменить.
+        </p>
+        <template #footer>
+          <Button variant="ghost" @click="confirmDelete = false">Отмена</Button>
+          <Button variant="danger" @click="deleteScenario">Удалить</Button>
+        </template>
+      </Modal>
 
       <p
         v-if="error"
@@ -82,12 +103,10 @@
           >
             Описание для маркетплейса
           </label>
-          <textarea
+          <RichTextEditor
             id="scenario-description"
             v-model="form.description"
-            rows="8"
             placeholder="Что делает этот сценарий и кому он полезен?"
-            class="w-full px-3.5 py-3 font-sans text-[0.9375rem] text-zinc-900 bg-white border border-zinc-200 rounded-xl outline-none transition resize-y placeholder:text-zinc-400 focus:border-rose-600 focus:ring-4 focus:ring-rose-600/20"
           />
         </div>
 
@@ -211,6 +230,7 @@ const loading = ref(true);
 const savingMeta = ref(false);
 const error = ref("");
 const tab = ref("main");
+const confirmDelete = ref(false);
 
 const form = reactive({ title: "", description: "", category: "", subcategory: "" });
 
@@ -439,6 +459,17 @@ async function togglePublish() {
   }
   error.value = "";
   store.scenario.published = data.published;
+}
+
+async function deleteScenario() {
+  try {
+    await $api.DELETE("/api/scenarios/{id}", {
+      params: { path: { id: scenarioId } },
+    });
+    await navigateTo("/my/scenarios");
+  } catch {
+    confirmDelete.value = false;
+  }
 }
 
 onMounted(async () => {
