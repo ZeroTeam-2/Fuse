@@ -110,6 +110,7 @@ const { $api } = useNuxtApp() as unknown as {
 }
 
 const runtimeConfig = useRuntimeConfig()
+const apiBase = useApiBase()
 const maxSingleMb = computed(
   () => (runtimeConfig.public as { fileSingleUploadMaxMb?: number }).fileSingleUploadMaxMb ?? 10,
 )
@@ -203,7 +204,7 @@ async function uploadSingle(file: File): Promise<void> {
     formData.append('file', file)
 
     const response = await fetch(
-      `${runtimeConfig.public.apiBaseUrl}/api/uploads/single`,
+      `${apiBase}/api/uploads/single`,
       {
         method: 'POST',
         body: formData,
@@ -268,7 +269,7 @@ async function uploadChunked(file: File): Promise<void> {
       const buffer = new Uint8Array(await chunk.arrayBuffer())
 
       const response = await fetch(
-        `${runtimeConfig.public.apiBaseUrl}/api/uploads/chunked/${uploadId}/part/${part}`,
+        `${apiBase}/api/uploads/chunked/${uploadId}/part/${part}`,
         {
           method: 'POST',
           body: buffer,
@@ -287,7 +288,7 @@ async function uploadChunked(file: File): Promise<void> {
     if (isCancelled.value) return
 
     const completeResponse = await fetch(
-      `${runtimeConfig.public.apiBaseUrl}/api/uploads/chunked/${uploadId}/complete`,
+      `${apiBase}/api/uploads/chunked/${uploadId}/complete`,
       {
         method: 'POST',
         credentials: 'include',

@@ -1,9 +1,7 @@
 import type { ServerWsEvent, ClientWsEvent } from "@fuse/shared";
 
 export function useRunSocket(runId: string) {
-  const config = useRuntimeConfig();
-  const baseUrl = config.public.apiBaseUrl || "http://localhost:3001";
-  const wsUrl = baseUrl.replace(/^http/, "ws");
+  const wsUrl = useApiWsBase();
 
   const socket = ref<WebSocket | null>(null);
   const isConnected = ref(false);

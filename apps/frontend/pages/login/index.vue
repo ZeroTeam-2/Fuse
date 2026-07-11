@@ -16,9 +16,7 @@
 </template>
 
 <script setup lang="ts">
-const config = useRuntimeConfig();
-const baseUrl = config.public.apiBaseUrl || "http://localhost:3001";
-const loginUrl = `${baseUrl}/api/auth/login`;
+const loginUrl = `${useApiBase()}/api/auth/login`;
 </script>
 
 <style scoped>
