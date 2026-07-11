@@ -14,8 +14,14 @@ export const envSchema = z.object({
   AWS_SECRET_ACCESS_KEY: z.string().default("test"),
   AWS_ENDPOINT_URL: z.string().default(""),
 
+  // Хост ("localhost") либо полный URL ("https://s3.twcstorage.ru") — схема
+  // задаёт TLS и порт по умолчанию. S3_PORT нужен, только когда порт
+  // нестандартный (локальный minio на 9000); см. parseS3Endpoint.
   S3_URL: z.string().default("localhost"),
-  S3_PORT: z.string().default("9000").transform(Number),
+  S3_PORT: z
+    .string()
+    .optional()
+    .transform((value) => (value ? Number(value) : undefined)),
   S3_ACCESS_KEY: z.string().default("minioadmin"),
   S3_SECRET_KEY: z.string().default("minioadmin"),
   S3_BUCKET: z.string().default("fuse"),
