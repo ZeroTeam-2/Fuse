@@ -39,7 +39,7 @@ export default defineNuxtConfig({
     "@fuse/shared": resolve(sharedSrc, "index.ts"),
   },
 
-  modules: ["@nuxtjs/tailwindcss", "@pinia/nuxt"],
+  modules: ["@nuxtjs/tailwindcss", "@pinia/nuxt", "nuxt-tiptap-editor"],
 
   components: [
     // Design-system primitives registered without a path prefix so their names
