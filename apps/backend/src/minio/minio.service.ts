@@ -2,6 +2,31 @@ import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Client } from "minio";
 
+/**
+ * minio ждёт в endPoint голый хост ("localhost", "s3.twcstorage.ru") и падает
+ * с InvalidEndpointError, если передать URL со схемой. Внешние S3 при этом
+ * удобнее задавать именно URL-ом, поэтому разбираем обе формы: схема задаёт
+ * useSSL и порт по умолчанию (443/80), явный S3_PORT его переопределяет.
+ */
+export function parseS3Endpoint(
+  s3Url: string,
+  s3Port?: number,
+): { endPoint: string; port: number; useSSL: boolean } {
+  const hasScheme = /^https?:\/\//i.test(s3Url);
+  if (!hasScheme) {
+    return { endPoint: s3Url, port: s3Port ?? 9000, useSSL: false };
+  }
+
+  const url = new URL(s3Url);
+  const useSSL = url.protocol === "https:";
+  const portFromUrl = url.port ? Number(url.port) : undefined;
+  return {
+    endPoint: url.hostname,
+    port: portFromUrl ?? s3Port ?? (useSSL ? 443 : 80),
+    useSSL,
+  };
+}
+
 @Injectable()
 export class MinioService implements OnModuleInit {
   private readonly logger = new Logger(MinioService.name);
@@ -13,10 +38,15 @@ export class MinioService implements OnModuleInit {
   async onModuleInit() {
     this.bucket = this.configService.get<string>("S3_BUCKET") ?? "fuse";
 
+    const { endPoint, port, useSSL } = parseS3Endpoint(
+      this.configService.get<string>("S3_URL") ?? "localhost",
+      this.configService.get<number>("S3_PORT"),
+    );
+
     this.client = new Client({
-      endPoint: this.configService.get<string>("S3_URL") ?? "localhost",
-      port: this.configService.get<number>("S3_PORT") ?? 9000,
-      useSSL: false,
+      endPoint,
+      port,
+      useSSL,
       accessKey: this.configService.get<string>("S3_ACCESS_KEY") ?? "minioadmin",
       secretKey: this.configService.get<string>("S3_SECRET_KEY") ?? "minioadmin",
     });
