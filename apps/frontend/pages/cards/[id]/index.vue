@@ -3,12 +3,13 @@
     <div v-if="loading" class="font-sans text-sm text-zinc-400 py-16 text-center">Загрузка…</div>
 
     <template v-else-if="card">
-      <NuxtLink
-        to="/"
+      <a
+        href="/"
         class="font-sans text-sm text-zinc-500 inline-flex items-center gap-1.5 mb-6 hover:text-zinc-700"
+        @click.prevent="goBack"
       >
-        ‹ Маркетплейс
-      </NuxtLink>
+        ‹ {{ backLabel }}
+      </a>
 
       <div class="pl-1">
         <div class="font-sans text-[0.8125rem] text-zinc-400 mb-2">{{ card.runCount }} запусков</div>
@@ -174,6 +175,32 @@ const allEndpoints = computed(() =>
   ),
 );
 
+const router = useRouter();
+
+// Куда реально ведёт "назад" по истории браузера — подписи как в навигации проекта.
+const BACK_LABELS: { test: RegExp; label: string }[] = [
+  { test: /^\/$/, label: "Маркетплейс" },
+  { test: /^\/my\/scenarios(\/[^/]+\/edit)?\/?$/, label: "Мои сценарии" },
+  { test: /^\/my\/apps(\/[^/]+)?\/?$/, label: "Мои API" },
+  { test: /^\/profile\/?$/, label: "Профиль" },
+];
+
+function resolveBackLabel(path?: string | null): string {
+  if (!path) return "Маркетплейс";
+  const clean = path.split("?")[0].split("#")[0];
+  return BACK_LABELS.find((r) => r.test.test(clean))?.label ?? "Маркетплейс";
+}
+
+const backLabel = ref("Маркетплейс");
+
+function goBack() {
+  if (typeof window !== "undefined" && window.history.state?.back) {
+    router.back();
+  } else {
+    navigateTo("/");
+  }
+}
+
 async function fetchCard() {
   loading.value = true;
   try {
@@ -186,5 +213,8 @@ async function fetchCard() {
   }
 }
 
-onMounted(fetchCard);
+onMounted(() => {
+  fetchCard();
+  backLabel.value = resolveBackLabel(window.history.state?.back);
+});
 </script>
