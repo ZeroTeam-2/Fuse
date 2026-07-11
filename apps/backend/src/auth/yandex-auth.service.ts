@@ -2,7 +2,8 @@ import { Injectable, Logger, UnauthorizedException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { JwtService } from "@nestjs/jwt";
 import { UsersService } from "../users/users.service";
-import type { JwtPayload } from "./auth.types";
+import type { UserDocument } from "../users/user.schema";
+import type { JwtPayload, TokenPair } from "./auth.types";
 
 interface YandexTokenResponse {
   access_token: string;
@@ -43,7 +44,7 @@ export class YandexAuthService {
     return `${YANDEX_AUTHORIZE_URL}?${params.toString()}`;
   }
 
-  async handleCallback(code: string): Promise<{ accessToken: string; refreshToken: string }> {
+  async handleCallback(code: string): Promise<TokenPair> {
     const clientId = this.configService.get<string>("YANDEX_CLIENT_ID");
     const clientSecret = this.configService.get<string>("YANDEX_CLIENT_SECRET");
     const redirectUri = this.configService.get<string>("YANDEX_REDIRECT_URI");
@@ -115,6 +116,32 @@ export class YandexAuthService {
       });
     }
 
+    return this.issueTokens(user);
+  }
+
+  /**
+   * Проверяет refresh-токен и выпускает новую пару access/refresh (ротация),
+   * чтобы пользователь не разлогинивался при истечении access-токена (15 минут).
+   */
+  async refreshTokens(refreshToken: string): Promise<TokenPair> {
+    let payload: JwtPayload;
+    try {
+      payload = await this.jwtService.verifyAsync<JwtPayload>(refreshToken, {
+        secret: this.configService.get<string>("JWT_SECRET") ?? "fallback",
+      });
+    } catch {
+      throw new UnauthorizedException("Invalid or expired refresh token");
+    }
+
+    const user = await this.usersService.findById(payload.userId).catch(() => null);
+    if (!user) {
+      throw new UnauthorizedException("User not found");
+    }
+
+    return this.issueTokens(user);
+  }
+
+  private async issueTokens(user: UserDocument): Promise<TokenPair> {
     const payload: JwtPayload = {
       userId: user._id.toString(),
       email: user.email,
@@ -125,6 +152,20 @@ export class YandexAuthService {
       expiresIn: (this.configService.get<string>("JWT_REFRESH_EXPIRES") ?? "7d") as never,
     });
 
-    return { accessToken, refreshToken };
+    return {
+      accessToken,
+      refreshToken,
+      accessTokenMaxAge: this.getRemainingMs(accessToken),
+      refreshTokenMaxAge: this.getRemainingMs(refreshToken),
+    };
+  }
+
+  /** Считает cookie maxAge из claim `exp` токена, чтобы cookie не жила дольше JWT. */
+  private getRemainingMs(token: string): number {
+    const decoded = this.jwtService.decode<{ exp?: number }>(token);
+    if (!decoded?.exp) {
+      return 0;
+    }
+    return Math.max(decoded.exp * 1000 - Date.now(), 0);
   }
 }
