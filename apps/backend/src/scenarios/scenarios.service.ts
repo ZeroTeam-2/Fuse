@@ -128,7 +128,11 @@ export class ScenariosService {
         (s) => (s as { broken?: boolean }).broken === true,
       );
       (updateQuery.$set as Record<string, unknown>).blocked = stillBroken;
-      if (!stillBroken) {
+      if (stillBroken) {
+        // Заблокированный сценарий автоматически снимается с публикации —
+        // он не должен оставаться видимым в маркетплейсе со сломанным шагом.
+        (updateQuery.$set as Record<string, unknown>).published = false;
+      } else {
         updateQuery.$unset = { blockedReason: "" };
       }
     }
