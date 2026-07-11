@@ -1,64 +1,81 @@
-import type { ServerWsEvent, ClientWsEvent } from "@fuse/shared";
+import { io, type Socket } from "socket.io-client";
+import type { ServerWsEvent } from "@fuse/shared";
+
+/**
+ * Бэкенд поднимает socket.io-gateway с namespace "runs" (см. run.gateway.ts) и
+ * шлёт каждое событие под именем event.type, а телом — сам ServerWsEvent.
+ * Подписываемся ровно на эти имена.
+ */
+const SERVER_EVENTS = [
+  "step:start",
+  "step:done",
+  "page:required",
+  "run:done",
+  "run:error",
+  "progress",
+  "run:status",
+] as const satisfies readonly ServerWsEvent["type"][];
 
 export function useRunSocket(runId: string) {
-  const wsUrl = useApiWsBase();
+  const apiBase = useApiBase();
 
-  const socket = ref<WebSocket | null>(null);
+  const socket = shallowRef<Socket | null>(null);
   const isConnected = ref(false);
   const events = ref<ServerWsEvent[]>([]);
 
   function connect() {
-    const ws = new WebSocket(`${wsUrl}/runs?runId=${runId}`);
-    socket.value = ws;
+    // apiBase пуст в проде (фронт и бэк за одним caddy) — тогда "/runs"
+    // socket.io понимает как namespace на текущем origin. В дев-режиме base
+    // абсолютный ("http://localhost:3001"), namespace дописывается к нему.
+    const client = io(`${apiBase}/runs`, {
+      query: { runId },
+      withCredentials: true,
+      transports: ["websocket", "polling"],
+    });
+    socket.value = client;
 
-    ws.onopen = () => {
+    client.on("connect", () => {
       isConnected.value = true;
-    };
+    });
 
-    ws.onclose = () => {
+    client.on("disconnect", () => {
       isConnected.value = false;
-    };
+    });
 
-    ws.onerror = () => {
+    client.on("connect_error", () => {
       isConnected.value = false;
-    };
+    });
 
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data) as ServerWsEvent;
-        events.value.push(data);
-      } catch {
-        // ignore malformed messages
-      }
-    };
-  }
-
-  function send(event: ClientWsEvent) {
-    if (socket.value?.readyState === WebSocket.OPEN) {
-      socket.value.send(JSON.stringify(event));
+    for (const type of SERVER_EVENTS) {
+      client.on(type, (event: ServerWsEvent) => {
+        events.value.push(event);
+      });
     }
   }
 
-  function submitPage(stepIndex: number, data: Record<string, unknown>) {
-    send({
-      type: "page:submit",
-      runId,
-      payload: { stepIndex, data },
-      timestamp: new Date().toISOString(),
+  /**
+   * Команды в сторону сервера идут по HTTP, а не в сокет: gateway не объявляет
+   * ни одного @SubscribeMessage, зато у ExecutionController есть готовые
+   * эндпоинты с авторизацией и валидацией.
+   */
+  async function submitPage(stepIndex: number, data: Record<string, unknown>) {
+    await fetch(`${apiBase}/api/runs/${runId}/page-submit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ stepIndex, data }),
     });
   }
 
-  function cancelRun() {
-    send({
-      type: "run:cancel",
-      runId,
-      payload: null,
-      timestamp: new Date().toISOString(),
+  async function cancelRun() {
+    await fetch(`${apiBase}/api/runs/${runId}/cancel`, {
+      method: "POST",
+      credentials: "include",
     });
   }
 
   function disconnect() {
-    socket.value?.close();
+    socket.value?.disconnect();
     socket.value = null;
     isConnected.value = false;
   }
@@ -68,7 +85,6 @@ export function useRunSocket(runId: string) {
     events,
     connect,
     disconnect,
-    send,
     submitPage,
     cancelRun,
   };

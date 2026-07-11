@@ -8,9 +8,15 @@ import {
 import type { Server, Socket } from "socket.io";
 import type { ServerWsEvent } from "@fuse/shared";
 
+// origin берём тот же, что и у HTTP-CORS в main.ts. Раньше в проде стоял
+// origin: false, что резало handshake, а в деве "*" несовместим с
+// credentials: браузер отвергает wildcard, когда клиент шлёт куки.
 @WebSocketGateway({
   namespace: "runs",
-  cors: { origin: process.env.NODE_ENV === "production" ? false : "*" },
+  cors: {
+    origin: process.env.APP_URL ?? "http://localhost:5173",
+    credentials: true,
+  },
 })
 export class RunGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private readonly logger = new Logger(RunGateway.name);
