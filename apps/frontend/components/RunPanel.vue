@@ -136,8 +136,34 @@
         <p v-if="totalDurationMs > 0" class="font-sans text-sm text-zinc-500 -mt-2">
           Общее время: {{ totalDurationMs }} мс
         </p>
-        <Card v-if="resultItems.length" padding="lg">
-          <KeyValueGrid :items="resultItems" :columns="1" />
+
+        <!-- Данные результата: коллекция -->
+        <template v-if="resultView?.kind === 'list'">
+          <p class="font-sans text-sm font-semibold text-zinc-900">
+            Получено записей: {{ resultView.count }}
+          </p>
+          <Card v-for="(row, i) in resultView.items" :key="i" padding="lg">
+            <KeyValueGrid :items="row" :columns="1" />
+          </Card>
+          <p v-if="hiddenResultCount" class="font-sans text-sm text-zinc-500 -mt-2">
+            …и ещё {{ hiddenResultCount }} — полный ответ ниже
+          </p>
+        </template>
+
+        <!-- Данные результата: объект -->
+        <Card v-else-if="resultView?.kind === 'object'" padding="lg">
+          <KeyValueGrid :items="resultView.items" :columns="1" />
+        </Card>
+
+        <!-- Данные результата: скаляр -->
+        <Card v-else-if="resultView?.kind === 'scalar'" padding="lg">
+          <p class="font-sans text-[0.9375rem] text-zinc-900">{{ resultView.value }}</p>
+        </Card>
+
+        <CodeBlock v-if="lastResult != null" :code="lastResult" label="Полный ответ" />
+
+        <Card v-if="stepTimings.length" padding="lg">
+          <KeyValueGrid :items="stepTimings" :columns="1" />
         </Card>
         <div class="flex items-center gap-[18px]">
           <Button variant="dark" @click="reset">Запустить снова</Button>
@@ -188,7 +214,13 @@
 <script setup lang="ts">
 // RunPanel — the scenario execution flow (WS-driven), reused by the scenario
 // view "Запуск" tab and the standalone /cards/[id]/run route.
-import type { Step, StepPage, ServerWsEvent, RunStatus } from "@fuse/shared";
+import type {
+  Step,
+  StepPage,
+  ServerWsEvent,
+  RunStatusPayload,
+  RunStepResult,
+} from "@fuse/shared";
 
 const props = defineProps<{ scenarioId: string }>();
 const emit = defineEmits<{
@@ -197,6 +229,8 @@ const emit = defineEmits<{
 }>();
 
 const { $api } = useNuxtApp() as any;
+const route = useRoute();
+const router = useRouter();
 
 interface StepProgress {
   index: number;
@@ -255,11 +289,66 @@ const runSteps = computed(() =>
   })),
 );
 
-const resultItems = computed(() =>
-  stepProgress.value.map((s) => ({
-    label: s.title,
-    value: s.durationMs != null ? `${s.durationMs} мс` : "—",
-  })),
+// Полезная нагрузка последнего успешного шага — то, ради чего пользователь и
+// запускал сценарий. Раньше здесь показывались только тайминги, поэтому даже
+// успешный запуск выглядел как «на выходе ничего нет».
+const lastResult = computed<unknown>(() => {
+  for (let i = stepProgress.value.length - 1; i >= 0; i--) {
+    const step = stepProgress.value[i];
+    if (step.status === "completed" && step.result != null) return step.result;
+  }
+  return undefined;
+});
+
+function toItems(value: Record<string, unknown>) {
+  return Object.entries(value).map(([key, v]) => ({
+    label: key,
+    value:
+      v == null
+        ? "—"
+        : typeof v === "object"
+          ? JSON.stringify(v)
+          : String(v),
+  }));
+}
+
+type ResultView =
+  | { kind: "list"; count: number; items: ReturnType<typeof toItems>[] }
+  | { kind: "object"; items: ReturnType<typeof toItems> }
+  | { kind: "scalar"; value: string }
+  | null;
+
+const PREVIEW_LIMIT = 5;
+
+const resultView = computed<ResultView>(() => {
+  const raw = lastResult.value;
+  if (raw == null) return null;
+
+  if (Array.isArray(raw)) {
+    const rows = raw
+      .slice(0, PREVIEW_LIMIT)
+      .filter((row): row is Record<string, unknown> => typeof row === "object" && row !== null)
+      .map(toItems);
+    return { kind: "list", count: raw.length, items: rows };
+  }
+
+  if (typeof raw === "object") {
+    return { kind: "object", items: toItems(raw as Record<string, unknown>) };
+  }
+
+  return { kind: "scalar", value: String(raw) };
+});
+
+const hiddenResultCount = computed(() =>
+  resultView.value?.kind === "list"
+    ? Math.max(0, resultView.value.count - PREVIEW_LIMIT)
+    : 0,
+);
+
+const stepTimings = computed(() =>
+  stepProgress.value
+    .filter((s) => s.durationMs != null)
+    .map((s) => ({ label: s.title, value: `${s.durationMs} мс` })),
 );
 
 watch(
@@ -317,13 +406,34 @@ async function startRun() {
     phase.value = "running";
     processedCount = 0;
 
-    socketApi.value = useRunSocket(runId.value);
-    socketApi.value.connect();
+    // runId уезжает в URL: без этого перезагрузка страницы теряла запуск
+    // насовсем (сокет не к чему было подключать, и снапшот восстановить
+    // состояние не мог — пользователь видел пустой экран запуска).
+    attachToRun(runId.value);
+    router.replace({ query: { ...route.query, run: runId.value } });
   } catch {
     starting.value = false;
     phase.value = "error";
     errorMessage.value = "Не удалось создать запуск";
   }
+}
+
+function attachToRun(id: string) {
+  runId.value = id;
+  processedCount = 0;
+  socketApi.value = useRunSocket(id);
+  socketApi.value.connect();
+}
+
+/**
+ * Восстановление после перезагрузки: подключаемся к запуску из URL, а текущее
+ * состояние приезжает снапшотом `run:status` сразу при подключении к комнате.
+ */
+function resumeFromUrl() {
+  const id = route.query.run;
+  if (typeof id !== "string" || !id) return;
+  phase.value = "running";
+  attachToRun(id);
 }
 
 function handleWsEvent(event: ServerWsEvent) {
@@ -374,20 +484,95 @@ function handleWsEvent(event: ServerWsEvent) {
       currentPage.value = null;
       break;
     }
+    // Снапшот состояния: сервер шлёт его сразу при подключении к комнате, потому
+    // что worker мог начать (и даже закончить) запуск до того, как сокет успел
+    // подписаться. Без этого пропущенные события терялись навсегда.
     case "run:status": {
-      const payload = event.payload as { status: RunStatus };
-      if (payload.status === "completed") {
-        phase.value = "done";
-      } else if (payload.status === "failed") {
-        phase.value = "error";
-      } else if (payload.status === "cancelled") {
-        phase.value = "cancelled";
-      } else if (payload.status === "running" && phase.value === "waiting") {
-        phase.value = "running";
-      }
+      applySnapshot(event.payload);
       break;
     }
   }
+}
+
+// Шаг никогда не «откатывается»: снапшот может прийти после инкрементальных
+// событий, и тогда он не должен затирать более свежий статус.
+const STATUS_RANK: Record<StepProgress["status"], number> = {
+  pending: 0,
+  running: 1,
+  completed: 2,
+  failed: 2,
+};
+
+function applySnapshot(payload: RunStatusPayload) {
+  for (const sr of (payload.stepResults ?? []) as RunStepResult[]) {
+    const existing = stepProgress.value.find((s) => s.index === sr.stepIndex);
+    if (!existing) {
+      stepProgress.value.push({
+        index: sr.stepIndex,
+        title: sr.stepTitle,
+        status: sr.status,
+        durationMs: sr.durationMs,
+        result: sr.result,
+      });
+      continue;
+    }
+    if (STATUS_RANK[sr.status] >= STATUS_RANK[existing.status]) {
+      existing.status = sr.status;
+      existing.durationMs = sr.durationMs ?? existing.durationMs;
+      existing.result = sr.result ?? existing.result;
+    }
+  }
+  stepProgress.value.sort((a, b) => a.index - b.index);
+
+  switch (payload.status) {
+    case "completed":
+      phase.value = "done";
+      currentPage.value = null;
+      if (!totalDurationMs.value) {
+        totalDurationMs.value = stepProgress.value.reduce(
+          (sum, s) => sum + (s.durationMs ?? 0),
+          0,
+        );
+      }
+      break;
+    case "failed":
+      // Запуск мог упасть ещё до подключения сокета — тогда run:error клиент
+      // не увидел, и текст ошибки приезжает только здесь.
+      errorMessage.value =
+        payload.error ||
+        stepProgress.value.find((s) => s.status === "failed")?.title ||
+        "Выполнение завершилось ошибкой";
+      phase.value = "error";
+      currentPage.value = null;
+      break;
+    case "cancelled":
+      phase.value = "cancelled";
+      currentPage.value = null;
+      break;
+    case "waiting_input":
+      // Определение страницы в снапшот не входит — берём его из сценария,
+      // который уже загружен на клиенте.
+      restoreWaitingPage(payload.currentStep);
+      break;
+    case "pending":
+    case "running":
+      if (phase.value !== "waiting") phase.value = "running";
+      break;
+  }
+}
+
+function restoreWaitingPage(stepIndex: number) {
+  const step = scenario.value?.steps?.[stepIndex];
+  if (!step?.page) return;
+  currentPage.value = {
+    stepIndex,
+    stepTitle: step.title,
+    page: step.page,
+  };
+  formData.value = {};
+  selectedFile.value = null;
+  fileError.value = "";
+  phase.value = "waiting";
 }
 
 function submitFields() {
@@ -465,6 +650,8 @@ function reset() {
   socketApi.value?.disconnect();
   socketApi.value = null;
   processedCount = 0;
+  const { run: _dropped, ...rest } = route.query;
+  router.replace({ query: rest });
   phase.value = "idle";
   stepProgress.value = [];
   currentPage.value = null;
@@ -482,7 +669,10 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
 }
 
-onMounted(fetchScenario);
+onMounted(async () => {
+  await fetchScenario();
+  resumeFromUrl();
+});
 
 onUnmounted(() => {
   socketApi.value?.disconnect();

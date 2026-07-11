@@ -76,13 +76,14 @@ export class AppsService {
 
   async create(ownerId: string, dto: CreateAppDto): Promise<AppDocument> {
     const rawSpec = await this.ssrfGuard.fetchSpec(dto.openapiUrl);
-    const parsed = await this.openapiParser.parse(rawSpec);
+    const parsed = await this.openapiParser.parse(rawSpec, dto.openapiUrl);
 
     return new this.appModel({
       ownerId,
       name: dto.name,
       description: dto.description,
       openapiUrl: dto.openapiUrl,
+      baseUrl: parsed.baseUrl,
       host: parsed.host,
       apiVersion: parsed.apiVersion,
       specSnapshot: parsed.specSnapshot,
@@ -94,9 +95,10 @@ export class AppsService {
 
   async importPreview(dto: ImportPreviewDto): Promise<ImportPreviewResult> {
     const rawSpec = await this.ssrfGuard.fetchSpec(dto.openapiUrl);
-    const parsed = await this.openapiParser.parse(rawSpec);
+    const parsed = await this.openapiParser.parse(rawSpec, dto.openapiUrl);
 
     return {
+      baseUrl: parsed.baseUrl,
       host: parsed.host,
       apiVersion: parsed.apiVersion,
       endpointCount: parsed.endpoints.length,
@@ -108,7 +110,7 @@ export class AppsService {
     const app = await this.findById(id);
 
     const rawSpec = await this.ssrfGuard.fetchSpec(app.openapiUrl);
-    const parsed = await this.openapiParser.parse(rawSpec);
+    const parsed = await this.openapiParser.parse(rawSpec, app.openapiUrl);
 
     const oldKeys = new Set(app.endpoints.map(endpointKey));
     const newKeys = new Set(parsed.endpoints.map(endpointKey));
@@ -135,7 +137,7 @@ export class AppsService {
     const app = await this.findById(id);
 
     const rawSpec = await this.ssrfGuard.fetchSpec(app.openapiUrl);
-    const parsed = await this.openapiParser.parse(rawSpec);
+    const parsed = await this.openapiParser.parse(rawSpec, app.openapiUrl);
 
     const oldEndpoints = new Map<string, Endpoint>();
     for (const ep of app.endpoints) {
@@ -165,6 +167,7 @@ export class AppsService {
         {
           $set: {
             endpoints: merged,
+            baseUrl: parsed.baseUrl,
             host: parsed.host,
             apiVersion: parsed.apiVersion,
             specSnapshot: parsed.specSnapshot,

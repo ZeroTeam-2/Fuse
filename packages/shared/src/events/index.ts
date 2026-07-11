@@ -44,6 +44,17 @@ export interface ProgressPayload {
   message?: string;
 }
 
+/**
+ * Снапшот состояния запуска. Отправляется при подключении клиента к комнате
+ * (в том числе если запуск уже завершился до подключения) и при смене статуса.
+ */
+export interface RunStatusPayload {
+  status: RunStatus;
+  currentStep: number;
+  stepResults: unknown[];
+  error?: string;
+}
+
 export type ServerWsEvent =
   | WsEvent<"step:start", StepStartPayload>
   | WsEvent<"step:done", StepDonePayload>
@@ -51,7 +62,7 @@ export type ServerWsEvent =
   | WsEvent<"run:done", RunDonePayload>
   | WsEvent<"run:error", RunErrorPayload>
   | WsEvent<"progress", ProgressPayload>
-  | WsEvent<"run:status", { status: RunStatus; currentStep: number; stepResults: unknown[] }>;
+  | WsEvent<"run:status", RunStatusPayload>;
 
 export type ClientWsEvent =
   | WsEvent<"page:submit", { stepIndex: number; data: Record<string, unknown> }>

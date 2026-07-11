@@ -30,8 +30,8 @@ export class ExecutionController {
 
   @Get(":id")
   @ApiOperation({ summary: "Get run status and results" })
-  findById(@Param("id") id: string) {
-    return this.executionService.getRun(id);
+  findById(@Req() req: AuthenticatedRequest, @Param("id") id: string) {
+    return this.executionService.getRun(id, req.user.userId);
   }
 
   @Post(":id/cancel")

@@ -75,6 +75,8 @@ export interface App {
   name: string;
   description?: string;
   openapiUrl: string;
+  /** Absolute origin (+ base path) every endpoint path is resolved against. */
+  baseUrl?: string;
   host?: string;
   apiVersion?: string;
   specSnapshot?: unknown;
@@ -97,6 +99,7 @@ export interface ImportPreviewDto {
 }
 
 export interface ImportPreviewResult {
+  baseUrl?: string;
   host?: string;
   apiVersion?: string;
   endpointCount: number;
