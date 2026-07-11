@@ -1,0 +1,13 @@
+/* ============================================================
+   FUSE · RADIUS TOKENS
+   Soft, generous rounding. Cards ~16px, controls ~10-12px.
+   ============================================================ */
+:root {
+  --radius-xs: 6px;    /* method chips, small tags */
+  --radius-sm: 8px;    /* nav pills, segmented control items */
+  --radius-md: 10px;   /* inputs, small buttons */
+  --radius-lg: 12px;   /* buttons, provider squares */
+  --radius-xl: 16px;   /* cards */
+  --radius-2xl: 20px;  /* large panels / modals */
+  --radius-pill: 999px;/* status pills, avatars, capsule tags */
+}
