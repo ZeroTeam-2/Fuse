@@ -4,6 +4,7 @@ import { Scenario, ScenarioSchema } from "./scenario.schema";
 import { ScenariosController } from "./scenarios.controller";
 import { ScenariosService } from "./scenarios.service";
 import { AppsModule } from "../apps/apps.module";
+import { ExecutionModule } from "../execution/execution.module";
 
 @Module({
   imports: [
@@ -11,6 +12,7 @@ import { AppsModule } from "../apps/apps.module";
       { name: Scenario.name, schema: ScenarioSchema },
     ]),
     AppsModule,
+    ExecutionModule,
   ],
   controllers: [ScenariosController],
   providers: [ScenariosService],
