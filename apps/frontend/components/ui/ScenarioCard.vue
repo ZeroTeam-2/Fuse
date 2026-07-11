@@ -17,6 +17,9 @@ const props = defineProps<{
   provider?: { name: string };
   meta?: string;
   interactive?: boolean;
+  /** Делает карточку настоящей ссылкой (<NuxtLink>) — надёжнее, чем ловить click
+   * через JS: работает Ctrl/Cmd+клик, средняя кнопка, «открыть в новой вкладке». */
+  to?: string;
 }>();
 
 const emit = defineEmits<{ click: [] }>();
@@ -40,13 +43,16 @@ const v = computed(() => VARIANTS[props.cover?.variant ?? "striped"]);
 const coverIcon = computed(() => props.cover?.icon || v.value.icon);
 
 const inst = getCurrentInstance();
-const isInteractive = computed(() => props.interactive || !!inst?.vnode.props?.onClick);
+const isInteractive = computed(
+  () => props.interactive || !!props.to || !!inst?.vnode.props?.onClick,
+);
 </script>
 
 <template>
   <Card
     :interactive="isInteractive"
     padding="none"
+    :to="to"
     class="overflow-hidden flex flex-col"
     @click="emit('click')"
   >
