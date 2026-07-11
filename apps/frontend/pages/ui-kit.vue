@@ -304,8 +304,13 @@
 </template>
 
 <script setup lang="ts">
-// Dev-only sandbox for design-system primitives. Remove/gate before release.
 import { ref } from "vue";
+
+// Стенд примитивов дизайн-системы. В проде import.meta.dev сворачивается в false,
+// условие — в безусловный throw: страница отдаёт честный 404, а не прячется по URL.
+if (!import.meta.dev) {
+  throw createError({ statusCode: 404, statusMessage: "Not Found", fatal: true });
+}
 
 // forms
 const name = ref("");
