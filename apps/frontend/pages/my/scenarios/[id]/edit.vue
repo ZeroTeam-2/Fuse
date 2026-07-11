@@ -39,7 +39,28 @@
           @publish="togglePublish"
           @unpublish="togglePublish"
         />
+        <Button variant="danger" @click="confirmDelete = true">
+          <template #left><Icon name="trash-2" :size="16" /></template>
+          Удалить
+        </Button>
       </div>
+
+      <Modal
+        v-if="confirmDelete"
+        title="Удалить сценарий?"
+        :subtitle="`«${store.scenario.title}» будет удалён безвозвратно.`"
+        :width="460"
+        @close="confirmDelete = false"
+      >
+        <p class="font-sans text-[0.9375rem] text-zinc-600 leading-normal">
+          Вместе со сценарием удалятся все его шаги и публикация в маркетплейсе. Это действие
+          нельзя отменить.
+        </p>
+        <template #footer>
+          <Button variant="ghost" @click="confirmDelete = false">Отмена</Button>
+          <Button variant="danger" @click="deleteScenario">Удалить</Button>
+        </template>
+      </Modal>
 
       <p
         v-if="error"
@@ -211,6 +232,7 @@ const loading = ref(true);
 const savingMeta = ref(false);
 const error = ref("");
 const tab = ref("main");
+const confirmDelete = ref(false);
 
 const form = reactive({ title: "", description: "", category: "", subcategory: "" });
 
@@ -412,6 +434,17 @@ async function togglePublish() {
   }
   error.value = "";
   store.scenario.published = data.published;
+}
+
+async function deleteScenario() {
+  try {
+    await $api.DELETE("/api/scenarios/{id}", {
+      params: { path: { id: scenarioId } },
+    });
+    await navigateTo("/my/scenarios");
+  } catch {
+    confirmDelete.value = false;
+  }
 }
 
 onMounted(async () => {
