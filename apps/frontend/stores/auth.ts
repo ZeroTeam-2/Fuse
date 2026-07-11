@@ -29,5 +29,10 @@ export const useAuthStore = defineStore("auth", {
     clearUser() {
       this.user = null;
     },
+
+    async logout() {
+      await fetch(`${useApiBase()}/api/auth/logout`, { credentials: "include" });
+      this.clearUser();
+    },
   },
 });

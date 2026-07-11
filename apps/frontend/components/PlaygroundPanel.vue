@@ -233,7 +233,8 @@ const doneSummary = computed(() => {
 async function fetchScenario() {
   loading.value = true;
   try {
-    const { data } = await $api.GET(`/api/scenarios/${props.scenarioId}`, {});
+    // Карточка маркетплейса публична — playground виден и гостю, до входа.
+    const { data } = await $api.GET(`/api/marketplace/${props.scenarioId}`, {});
     if (data) {
       scenario.value = {
         title: data.title,
@@ -250,6 +251,11 @@ async function fetchScenario() {
 }
 
 async function runAll() {
+  // Запуск создаёт run под пользователем — гостя сначала просим войти.
+  if (!useAuthStore().isAuthenticated) {
+    useLoginModal().openLogin("Войдите, чтобы запустить сценарий.");
+    return;
+  }
   running.value = true;
   phase.value = "running";
   resetStepData();

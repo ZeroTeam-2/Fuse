@@ -294,9 +294,8 @@ async function removeAvatar() {
 }
 
 async function logout() {
-  await fetch(`${useApiBase()}/api/auth/logout`, { credentials: "include" });
-  authStore.clearUser();
-  await navigateTo("/login");
+  await authStore.logout();
+  await navigateTo("/");
 }
 
 watch(user, syncForm, { immediate: true });
