@@ -57,6 +57,8 @@ export interface SchemaField {
   loc?: ParamLocation;
   ex?: unknown;
   required?: boolean;
+  /** Fields of one element, when `type` is `array`. One level deep, like the rest of the parser. */
+  items?: SchemaField[];
 }
 
 export interface Endpoint {
@@ -65,8 +67,18 @@ export interface Endpoint {
   path: string;
   summary?: string;
   inputs: SchemaField[];
+  /** Fields of the response — of *one element* when `outputIsArray` is set. */
   outputs: SchemaField[];
+  /** The endpoint answers with a collection, so `outputs` describe its element. */
+  outputIsArray?: boolean;
   status: EndpointStatus;
+}
+
+/** Input/output schema of a single step, as served to the scenario builder. */
+export interface StepSchema {
+  inputs: SchemaField[];
+  outputs: SchemaField[];
+  outputIsArray?: boolean;
 }
 
 export interface App {
@@ -143,12 +155,38 @@ export type StepPage =
 
 export type MappingValue = "user" | "const" | string;
 
+export type FilterOperator = "eq" | "ne" | "gt" | "lt" | "gte" | "lte" | "contains";
+
+/** The right-hand side of a filter condition — same three sources as a mapping. */
+export interface StepFilterValue {
+  mode: "user" | "const" | "ref";
+  /** mode=const; supports `{{s0:key}}` templates, like `Step.consts`. */
+  const?: string;
+  /** mode=ref; `s{idx}:{outKey}`. */
+  ref?: string;
+}
+
+/**
+ * Narrows an array output of a source step down to one element, so a mapping
+ * like `s0:id` has a single element to read `id` from.
+ */
+export interface StepFilter {
+  /** Empty/absent: the step result itself is the array. Otherwise: key of the array field in it. */
+  arrayPath?: string;
+  /** Field of the element to compare. */
+  field: string;
+  op: FilterOperator;
+  value: StepFilterValue;
+}
+
 export interface BaseStep {
   id: string;
   title: string;
   type: StepType;
   mappings?: Record<string, MappingValue>;
   consts?: Record<string, string>;
+  /** Keyed by input field key, like `mappings`. Only meaningful for `s{idx}:{key}` mappings. */
+  filters?: Record<string, StepFilter>;
   page?: StepPage;
 }
 
@@ -234,6 +272,8 @@ export interface RunStepResult {
   stepTitle: string;
   status: "pending" | "running" | "completed" | "failed";
   result?: unknown;
+  /** Non-fatal notes from input resolution (ambiguous array filter, stale `arrayPath`). */
+  warnings?: string[];
   error?: string;
   startedAt?: string;
   finishedAt?: string;

@@ -184,7 +184,7 @@
 
 <script setup lang="ts">
 import { CATEGORIES } from "@fuse/shared";
-import type { SchemaField, Step, StepPage, StepType } from "@fuse/shared";
+import type { Step, StepFilter, StepPage, StepSchema, StepType } from "@fuse/shared";
 
 const { $api } = useNuxtApp() as any;
 const route = useRoute();
@@ -215,7 +215,7 @@ const tab = ref("main");
 const form = reactive({ title: "", description: "", category: "", subcategory: "" });
 
 const appNames = ref<Record<string, string>>({});
-const schemas = ref<{ inputs: SchemaField[]; outputs: SchemaField[] }[]>([]);
+const schemas = ref<StepSchema[]>([]);
 
 const pickedType = ref<{ key: StepType; title: string } | null>(null);
 const configIndex = ref<number | null>(null);
@@ -262,10 +262,35 @@ function pathOf(step: Step) {
   return "";
 }
 
+const OPERATOR_LABELS: Record<string, string> = {
+  eq: "=",
+  ne: "≠",
+  gt: ">",
+  lt: "<",
+  gte: "≥",
+  lte: "≤",
+  contains: "содержит",
+};
+
+/** «где inn = 7707083893» — чтобы отбор элемента был виден, не открывая шаг. */
+function filterSummary(filter?: StepFilter): string {
+  if (!filter) return "";
+
+  const value =
+    filter.value.mode === "const"
+      ? filter.value.const
+      : filter.value.mode === "ref"
+        ? (filter.value.ref ?? "").replace(/^s(\d+):/, (_m, i) => `шаг ${Number(i) + 1} · `)
+        : "ввод пользователя";
+
+  return `, где ${filter.field} ${OPERATOR_LABELS[filter.op] ?? filter.op} ${value}`;
+}
+
 function stepParams(i: number) {
   const step = steps.value[i];
   const mappings = step.mappings ?? {};
   const consts = step.consts ?? {};
+  const filters = step.filters ?? {};
   return (schemas.value[i]?.inputs ?? []).map((f) => {
     const source = mappings[f.key];
     const ref = typeof source === "string" ? source.match(/^s(\d+):(.+)$/) : null;
@@ -273,7 +298,7 @@ function stepParams(i: number) {
       kind: (f.loc ?? "body").toUpperCase(),
       name: f.key,
       source: ref
-        ? `Шаг ${Number(ref[1]) + 1} · ${ref[2]}`
+        ? `Шаг ${Number(ref[1]) + 1} · ${ref[2]}${filterSummary(filters[f.key])}`
         : source === "const"
           ? `Константа: ${consts[f.key] || "—"}`
           : "Ввод пользователя",
@@ -309,7 +334,9 @@ async function loadSchemas() {
       $api.GET(`/api/scenarios/${scenarioId}/step-schema/${i}`, {}),
     ),
   );
-  schemas.value = results.map((r: any) => r.data ?? { inputs: [], outputs: [] });
+  schemas.value = results.map(
+    (r: any) => (r.data as StepSchema) ?? { inputs: [], outputs: [], outputIsArray: false },
+  );
 }
 
 // Steps are persisted on every change, then schemas are re-resolved because the

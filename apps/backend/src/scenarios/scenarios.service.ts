@@ -11,6 +11,7 @@ import type {
   SchemaField,
   ScenarioStepRef,
   Step,
+  StepSchema,
 } from "@fuse/shared";
 import { Scenario, ScenarioDocument } from "./scenario.schema";
 import { detectCycle } from "./cycle-guard";
@@ -18,7 +19,11 @@ import { AppsService } from "../apps/apps.service";
 import type { CreateScenarioDto } from "./dto/create-scenario.dto";
 import type { UpdateScenarioDto } from "./dto/update-scenario.dto";
 
-const EMPTY_SCHEMA = { inputs: [] as SchemaField[], outputs: [] as SchemaField[] };
+const EMPTY_SCHEMA: StepSchema = {
+  inputs: [] as SchemaField[],
+  outputs: [] as SchemaField[],
+  outputIsArray: false,
+};
 
 @Injectable()
 export class ScenariosService {
@@ -158,10 +163,7 @@ export class ScenariosService {
       .exec();
   }
 
-  async getStepSchema(
-    scenarioId: string,
-    stepIndex: number,
-  ): Promise<{ inputs: SchemaField[]; outputs: SchemaField[] }> {
+  async getStepSchema(scenarioId: string, stepIndex: number): Promise<StepSchema> {
     const scenario = await this.findById(scenarioId);
 
     const steps = (scenario.steps ?? []) as Step[];
@@ -203,9 +205,7 @@ export class ScenariosService {
     return outputs;
   }
 
-  private async getApiStepSchema(
-    step: ApiStep,
-  ): Promise<{ inputs: SchemaField[]; outputs: SchemaField[] }> {
+  private async getApiStepSchema(step: ApiStep): Promise<StepSchema> {
     const app = await this.appsService.findById(step.appId);
     const endpoint = app.endpoints.find((ep) => ep.id === step.endpointId);
 
@@ -218,12 +218,11 @@ export class ScenariosService {
     return {
       inputs: endpoint.inputs as unknown as SchemaField[],
       outputs: endpoint.outputs as unknown as SchemaField[],
+      outputIsArray: endpoint.outputIsArray ?? false,
     };
   }
 
-  private async getScenarioRefStepSchema(
-    step: ScenarioStepRef,
-  ): Promise<{ inputs: SchemaField[]; outputs: SchemaField[] }> {
+  private async getScenarioRefStepSchema(step: ScenarioStepRef): Promise<StepSchema> {
     const refScenario = await this.findById(step.refScenarioId);
     const steps = (refScenario.steps ?? []) as Step[];
 
@@ -231,18 +230,18 @@ export class ScenariosService {
       return EMPTY_SCHEMA;
     }
 
+    // A nested scenario hands on its last step's result — collection flag included.
     const lastStep = steps[steps.length - 1];
     const lastSchema = await this.getStepSchemaForStep(lastStep);
 
     return {
       inputs: [],
       outputs: lastSchema.outputs,
+      outputIsArray: lastSchema.outputIsArray ?? false,
     };
   }
 
-  private async getStepSchemaForStep(
-    step: Step,
-  ): Promise<{ inputs: SchemaField[]; outputs: SchemaField[] }> {
+  private async getStepSchemaForStep(step: Step): Promise<StepSchema> {
     switch (step.type) {
       case "api":
         return this.getApiStepSchema(step);

@@ -22,6 +22,11 @@ export class SchemaFieldDoc {
 
   @Prop({ default: false })
   required?: boolean;
+
+  // Element fields of an `array`. Mixed rather than a self-referencing subschema:
+  // one level deep is all the parser produces.
+  @Prop({ type: MongooseSchema.Types.Mixed })
+  items?: SchemaField[];
 }
 
 const SchemaFieldDocSchema = SchemaFactory.createForClass(SchemaFieldDoc);
@@ -45,6 +50,10 @@ export class EndpointDoc {
 
   @Prop({ type: [SchemaFieldDocSchema], default: [] })
   outputs: SchemaFieldDoc[];
+
+  // The endpoint answers with a collection, so `outputs` describe one element.
+  @Prop({ default: false })
+  outputIsArray?: boolean;
 
   @Prop({ default: EndpointStatus.ACTIVE })
   status: EndpointStatus;
