@@ -1,252 +1,292 @@
-<template>
-  <div class="picker-overlay" @click.self="$emit('close')">
-    <div class="picker-modal">
-      <div class="picker-header">
-        <h2 class="picker-title">Добавить шаг</h2>
-        <button class="close-btn" @click="$emit('close')">✕</button>
-      </div>
-
-      <div class="type-tabs">
-        <button
-          v-for="t in types"
-          :key="t.value"
-          :class="['type-tab', { active: selectedType === t.value }]"
-          @click="selectType(t.value)"
-        >
-          {{ t.label }}
-        </button>
-      </div>
-
-      <div class="picker-body">
-        <div class="step-title-field">
-          <label class="field-label">Название шага</label>
-          <input v-model="stepTitle" type="text" class="text-input" placeholder="Название шага" />
-        </div>
-
-        <template v-if="selectedType === 'api'">
-          <div class="field-group">
-            <label class="field-label">Приложение</label>
-            <select v-model="selectedAppId" class="text-input" @change="loadEndpoints">
-              <option value="">Выберите приложение</option>
-              <option v-for="a in apps" :key="a.id" :value="a.id">{{ a.name }}</option>
-            </select>
-          </div>
-          <div v-if="endpoints.length" class="field-group">
-            <label class="field-label">Endpoint</label>
-            <div class="endpoint-list">
-              <button
-                v-for="ep in endpoints"
-                :key="ep.id"
-                :class="['endpoint-item', { selected: selectedEndpoint?.id === ep.id }]"
-                @click="selectEndpoint(ep)"
-              >
-                <span class="ep-method" :style="methodStyle(ep.method)">{{ ep.method }}</span>
-                <span class="ep-path">{{ ep.path }}</span>
-                <span v-if="ep.summary" class="ep-summary">{{ ep.summary }}</span>
-              </button>
-            </div>
-          </div>
-        </template>
-
-        <template v-if="selectedType === 'delay'">
-          <div class="field-group">
-            <label class="field-label">Задержка (сек)</label>
-            <div class="preset-row">
-              <button v-for="s in [1, 3, 5, 10]" :key="s" :class="['preset-btn', { active: delaySec === s }]" @click="delaySec = s">{{ s }}с</button>
-            </div>
-            <input v-model.number="delaySec" type="number" min="1" max="600" class="text-input" />
-          </div>
-        </template>
-
-        <template v-if="selectedType === 'scenario'">
-          <div class="field-group">
-            <label class="field-label">Сценарий</label>
-            <select v-model="selectedScenarioId" class="text-input">
-              <option value="">Выберите сценарий</option>
-              <option v-for="s in availableScenarios" :key="s.id" :value="s.id">{{ s.title }}</option>
-            </select>
-          </div>
-        </template>
-
-        <template v-if="selectedType === 'file'">
-          <div class="field-group">
-            <label class="field-label">Режим: авто (single ≤ 10МБ, chunked > 10МБ)</label>
-            <p class="hint">Режим определяется автоматически по размеру файла</p>
-          </div>
-        </template>
-
-        <template v-if="selectedType === 'periodic'">
-          <div class="field-group">
-            <label class="field-label">Приложение</label>
-            <select v-model="selectedAppId" class="text-input" @change="loadEndpoints">
-              <option value="">Выберите приложение</option>
-              <option v-for="a in apps" :key="a.id" :value="a.id">{{ a.name }}</option>
-            </select>
-          </div>
-          <div v-if="endpoints.length" class="field-group">
-            <label class="field-label">Endpoint для опроса</label>
-            <div class="endpoint-list">
-              <button
-                v-for="ep in endpoints"
-                :key="ep.id"
-                :class="['endpoint-item', { selected: selectedEndpoint?.id === ep.id }]"
-                @click="selectEndpoint(ep)"
-              >
-                <span class="ep-method" :style="methodStyle(ep.method)">{{ ep.method }}</span>
-                <span class="ep-path">{{ ep.path }}</span>
-              </button>
-            </div>
-          </div>
-          <div v-if="selectedEndpoint" class="field-group">
-            <label class="field-label">Интервал опроса (сек, 1-600)</label>
-            <input v-model.number="pollIntervalSec" type="number" min="1" max="600" class="text-input" />
-          </div>
-        </template>
-      </div>
-
-      <div class="picker-footer">
-        <button class="cancel-btn" @click="$emit('close')">Отмена</button>
-        <button class="confirm-btn" :disabled="!canConfirm" @click="confirm">Добавить шаг</button>
-      </div>
-    </div>
-  </div>
-</template>
-
 <script setup lang="ts">
-import type { Step, StepType } from "@fuse/shared";
+// Add-step dialog: pick the source (app + endpoint, scenario, delay…) and name
+// the step. The step type is chosen upstream in AddStepMenu.
+import type { App, Endpoint, Scenario, Step, StepType } from "@fuse/shared";
 
-const props = defineProps<{ scenarioId: string }>();
-const emit = defineEmits<{
-  add: [step: Step];
-  close: [];
+const props = defineProps<{
+  scenarioId: string;
+  stepType: StepType;
+  typeTitle: string;
 }>();
+
+const emit = defineEmits<{ add: [step: Step]; close: [] }>();
 
 const { $api } = useNuxtApp() as any;
 
-const types = [
-  { value: "api" as StepType, label: "Endpoint API" },
-  { value: "scenario" as StepType, label: "Другой сценарий" },
-  { value: "delay" as StepType, label: "Задержка" },
-  { value: "file" as StepType, label: "Файл" },
-  { value: "periodic" as StepType, label: "Периодический запрос" },
-];
+const eyebrow =
+  "font-sans text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-zinc-400 mb-2.5";
 
-const selectedType = ref<StepType>("api");
-const stepTitle = ref("");
-const apps = ref<any[]>([]);
-const endpoints = ref<any[]>([]);
-const selectedAppId = ref("");
-const selectedEndpoint = ref<any | null>(null);
+const apps = ref<App[]>([]);
+const scenarios = ref<Scenario[]>([]);
+const endpoints = ref<Endpoint[]>([]);
+
+const appId = ref("");
+const selectedEndpoint = ref<Endpoint | null>(null);
+const query = ref("");
+const title = ref("");
+const refScenarioId = ref("");
 const delaySec = ref(3);
-const selectedScenarioId = ref("");
-const availableScenarios = ref<any[]>([]);
 const pollIntervalSec = ref(5);
 
-const canConfirm = computed(() => {
-  if (!stepTitle.value) return false;
-  if (selectedType.value === "api" && !selectedEndpoint.value) return false;
-  if (selectedType.value === "scenario" && !selectedScenarioId.value) return false;
-  if (selectedType.value === "periodic" && !selectedEndpoint.value) return false;
+const needsEndpoint = computed(
+  () => props.stepType === "api" || props.stepType === "periodic",
+);
+
+const appOptions = computed(() =>
+  apps.value.map((a) => ({
+    value: a.id,
+    label: a.name,
+    description: `${a.endpoints?.length ?? 0} endpoints`,
+    avatar: a.name.charAt(0),
+    color: "#6366f1",
+  })),
+);
+
+const scenarioOptions = computed(() =>
+  scenarios.value.map((s) => ({ value: s.id, label: s.title, description: s.category })),
+);
+
+const appName = computed(() => apps.value.find((a) => a.id === appId.value)?.name ?? "");
+
+const filteredEndpoints = computed(() => {
+  const q = query.value.trim().toLowerCase();
+  if (!q) return endpoints.value;
+  return endpoints.value.filter((e) =>
+    [e.path, e.summary, e.method].some((t) => String(t ?? "").toLowerCase().includes(q)),
+  );
+});
+
+const canAdd = computed(() => {
+  if (!title.value.trim()) return false;
+  if (needsEndpoint.value) return !!selectedEndpoint.value;
+  if (props.stepType === "scenario") return !!refScenarioId.value;
+  if (props.stepType === "delay") return delaySec.value > 0;
   return true;
 });
 
-function selectType(t: StepType) {
-  selectedType.value = t;
-  selectedEndpoint.value = null;
-}
-
 async function loadApps() {
   const { data } = await $api.GET("/api/apps", { params: { query: { limit: 100 } } });
-  if (data.value) apps.value = data.value.data ?? [];
-}
-
-async function loadEndpoints() {
-  if (!selectedAppId.value) return;
-  const { data } = await $api.GET(`/api/apps/${selectedAppId.value}`, {});
-  if (data.value) endpoints.value = data.value.endpoints ?? [];
-  selectedEndpoint.value = null;
+  if (data) apps.value = data.data ?? [];
 }
 
 async function loadScenarios() {
   const { data } = await $api.GET("/api/scenarios", { params: { query: { limit: 100 } } });
-  if (data.value) {
-    availableScenarios.value = (data.value.data ?? []).filter((s: any) => s.id !== props.scenarioId);
-  }
+  if (data) scenarios.value = (data.data ?? []).filter((s: Scenario) => s.id !== props.scenarioId);
 }
 
-function selectEndpoint(ep: any) {
+async function loadEndpoints() {
+  selectedEndpoint.value = null;
+  query.value = "";
+  endpoints.value = [];
+  if (!appId.value) return;
+  const { data } = await $api.GET(`/api/apps/${appId.value}`, {});
+  if (data) endpoints.value = data.endpoints ?? [];
+}
+
+function pickEndpoint(ep: Endpoint) {
   selectedEndpoint.value = ep;
-  if (!stepTitle.value) stepTitle.value = ep.summary || ep.path;
+  if (!title.value.trim()) title.value = ep.summary || ep.path;
 }
 
-function methodStyle(m: string) {
-  const colors: Record<string, string> = { GET: "#0e9f6e", POST: "#e11d48", PUT: "#d97706", DELETE: "#dc2626", PATCH: "#6366f1" };
-  const bg: Record<string, string> = { GET: "#e7f8f1", POST: "#fdeaef", PUT: "#fef3e2", DELETE: "#fdecec", PATCH: "#eef2ff" };
-  return { color: colors[m] || "#6366f1", background: bg[m] || "#eef2ff" };
-}
-
-function confirm() {
+function add() {
+  if (!canAdd.value) return;
   const id = crypto.randomUUID();
+  const name = title.value.trim();
+  const ep = selectedEndpoint.value;
   let step: Step;
 
-  if (selectedType.value === "api" && selectedEndpoint.value) {
+  if (props.stepType === "api" && ep) {
     step = {
-      id, type: "api", title: stepTitle.value,
-      appId: selectedAppId.value, endpointId: selectedEndpoint.value.id,
-      method: selectedEndpoint.value.method, path: selectedEndpoint.value.path,
-      mappings: {}, consts: {},
+      id,
+      type: "api",
+      title: name,
+      appId: appId.value,
+      endpointId: ep.id,
+      method: ep.method,
+      path: ep.path,
+      mappings: {},
+      consts: {},
     };
-  } else if (selectedType.value === "delay") {
-    step = { id, type: "delay", title: stepTitle.value, seconds: delaySec.value };
-  } else if (selectedType.value === "scenario") {
-    step = { id, type: "scenario", title: stepTitle.value, refScenarioId: selectedScenarioId.value, mappings: {} };
-  } else if (selectedType.value === "file") {
-    step = { id, type: "file", title: stepTitle.value, mappings: {} };
-  } else if (selectedType.value === "periodic" && selectedEndpoint.value) {
+  } else if (props.stepType === "periodic" && ep) {
     step = {
-      id, type: "periodic", title: stepTitle.value,
-      appId: selectedAppId.value, pollMethod: selectedEndpoint.value.method,
-      pollPath: selectedEndpoint.value.path, pollIntervalSec: pollIntervalSec.value,
+      id,
+      type: "periodic",
+      title: name,
+      appId: appId.value,
+      pollMethod: ep.method,
+      pollPath: ep.path,
+      pollIntervalSec: pollIntervalSec.value,
       mappings: {},
     };
+  } else if (props.stepType === "scenario") {
+    step = { id, type: "scenario", title: name, refScenarioId: refScenarioId.value, mappings: {} };
+  } else if (props.stepType === "delay") {
+    step = { id, type: "delay", title: name, seconds: delaySec.value };
   } else {
-    return;
+    step = { id, type: "file", title: name, mappings: {} };
   }
 
   emit("add", step);
 }
 
 onMounted(() => {
-  loadApps();
-  loadScenarios();
+  if (needsEndpoint.value) loadApps();
+  if (props.stepType === "scenario") loadScenarios();
 });
 </script>
 
-<style scoped>
-.picker-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 200; }
-.picker-modal { background: #fff; border-radius: 14px; width: 640px; max-width: 90vw; max-height: 85vh; display: flex; flex-direction: column; }
-.picker-header { display: flex; justify-content: space-between; align-items: center; padding: 20px 24px; border-bottom: 1px solid #f4f4f5; }
-.picker-title { font-size: 18px; font-weight: 700; color: #18181b; margin: 0; }
-.close-btn { width: 28px; height: 28px; border: none; background: #f4f4f5; border-radius: 8px; cursor: pointer; font-size: 14px; color: #52525b; }
-.type-tabs { display: flex; gap: 4px; padding: 12px 24px; border-bottom: 1px solid #f4f4f5; flex-wrap: wrap; }
-.type-tab { padding: 6px 12px; border-radius: 8px; border: 1px solid #e4e4e7; background: #fff; font-size: 13px; font-weight: 500; color: #52525b; cursor: pointer; }
-.type-tab.active { background: #6366f1; color: #fff; border-color: #6366f1; }
-.picker-body { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; }
-.step-title-field, .field-group { display: flex; flex-direction: column; gap: 6px; }
-.field-label { font-size: 13px; font-weight: 500; color: #52525b; }
-.text-input { padding: 10px 12px; border: 1px solid #e4e4e7; border-radius: 8px; font-size: 14px; color: #18181b; }
-.endpoint-list { display: flex; flex-direction: column; gap: 6px; max-height: 200px; overflow-y: auto; }
-.endpoint-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid #e4e4e7; border-radius: 8px; background: #fff; cursor: pointer; text-align: left; }
-.endpoint-item.selected { border-color: #6366f1; background: #f5f3ff; }
-.ep-method { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; font-family: monospace; }
-.ep-path { font-size: 13px; color: #18181b; font-family: monospace; }
-.ep-summary { font-size: 12px; color: #a1a1aa; margin-left: auto; }
-.preset-row { display: flex; gap: 8px; margin-bottom: 8px; }
-.preset-btn { padding: 6px 16px; border-radius: 8px; border: 1px solid #e4e4e7; background: #fff; cursor: pointer; font-size: 13px; color: #52525b; }
-.preset-btn.active { background: #eef2ff; border-color: #6366f1; color: #6366f1; }
-.hint { font-size: 13px; color: #a1a1aa; margin: 0; }
-.picker-footer { display: flex; justify-content: flex-end; gap: 12px; padding: 16px 24px; border-top: 1px solid #f4f4f5; }
-.cancel-btn { padding: 8px 16px; border-radius: 8px; border: 1px solid #e4e4e7; background: #fff; font-size: 14px; color: #52525b; cursor: pointer; }
-.confirm-btn { padding: 8px 16px; border-radius: 8px; border: none; background: #6366f1; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; }
-.confirm-btn:disabled { opacity: 0.4; }
-</style>
+<template>
+  <Modal
+    title="Добавить шаг"
+    :subtitle="typeTitle"
+    :width="720"
+    @close="emit('close')"
+  >
+    <div class="flex flex-col gap-[22px] pb-2">
+      <template v-if="needsEndpoint">
+        <div>
+          <div :class="eyebrow">1 · Выберите приложение</div>
+          <Select
+            v-model="appId"
+            searchable
+            search-placeholder="Найти приложение по названию…"
+            placeholder="Выберите приложение"
+            :options="appOptions"
+            @update:model-value="loadEndpoints"
+          />
+          <p v-if="!apps.length" class="font-sans text-[0.8125rem] text-zinc-400 mt-2.5">
+            Нет доступных приложений — импортируйте API в разделе «Мои API».
+          </p>
+        </div>
+
+        <div>
+          <div :class="eyebrow">2 · Endpoint{{ appName ? ` из ${appName}` : "" }}</div>
+          <div class="border border-zinc-200 rounded-xl overflow-hidden">
+            <template v-if="appId">
+              <div
+                class="flex items-center gap-2.5 px-3.5 py-2.5 border-b border-zinc-200 bg-zinc-50"
+              >
+                <span class="inline-flex text-zinc-400 shrink-0"><Icon name="search" :size="16" /></span>
+                <input
+                  v-model="query"
+                  type="text"
+                  placeholder="Найти endpoint по пути или описанию…"
+                  class="flex-1 min-w-0 border-0 outline-none bg-transparent font-sans text-[0.9375rem] text-zinc-900 placeholder:text-zinc-400"
+                />
+              </div>
+              <div class="min-h-[240px] max-h-[240px] overflow-y-auto p-1.5">
+                <div
+                  v-if="!filteredEndpoints.length"
+                  class="px-3 py-8 text-center font-sans text-[0.875rem] text-zinc-400"
+                >
+                  Ничего не найдено
+                </div>
+                <div
+                  v-for="ep in filteredEndpoints"
+                  :key="ep.id"
+                  :class="[
+                    'rounded-lg border-[1.5px] cursor-pointer',
+                    selectedEndpoint?.id === ep.id
+                      ? 'border-rose-600 bg-rose-50'
+                      : 'border-transparent',
+                  ]"
+                  @click="pickEndpoint(ep)"
+                >
+                  <EndpointRow
+                    :method="ep.method"
+                    :path="ep.path"
+                    :description="ep.summary"
+                    :interactive="selectedEndpoint?.id !== ep.id"
+                  />
+                </div>
+              </div>
+            </template>
+
+            <!-- Same height as the endpoint list so the dialog does not jump. -->
+            <div
+              v-else
+              class="min-h-[289px] flex flex-col items-center justify-center gap-3 px-6 text-center bg-zinc-50/60"
+            >
+              <span
+                class="w-11 h-11 rounded-2xl bg-white border border-zinc-200 inline-flex items-center justify-center text-zinc-400"
+              >
+                <Icon name="package-search" :size="20" />
+              </span>
+              <div class="font-sans text-[0.875rem] font-semibold text-zinc-600">
+                Сначала выберите приложение
+              </div>
+              <div class="font-sans text-[0.8125rem] text-zinc-400 max-w-[280px]">
+                Список endpoint’ов появится здесь.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="stepType === 'periodic' && selectedEndpoint">
+          <div :class="eyebrow">Интервал опроса</div>
+          <Input v-model.number="pollIntervalSec" type="number" hint="От 1 до 600 секунд" />
+        </div>
+      </template>
+
+      <template v-else-if="stepType === 'scenario'">
+        <div>
+          <div :class="eyebrow">1 · Выберите сценарий</div>
+          <Select
+            v-model="refScenarioId"
+            searchable
+            search-placeholder="Найти сценарий…"
+            placeholder="Выберите сценарий"
+            :options="scenarioOptions"
+          />
+        </div>
+      </template>
+
+      <template v-else-if="stepType === 'delay'">
+        <div>
+          <div :class="eyebrow">1 · Длительность паузы</div>
+          <div class="flex gap-2 mb-3">
+            <button
+              v-for="s in [1, 3, 5, 10]"
+              :key="s"
+              type="button"
+              :class="[
+                'px-4 py-1.5 rounded-lg border font-sans text-[0.8125rem] font-semibold cursor-pointer transition-colors',
+                delaySec === s
+                  ? 'border-rose-600 bg-rose-50 text-rose-600'
+                  : 'border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-100',
+              ]"
+              @click="delaySec = s"
+            >
+              {{ s }}с
+            </button>
+          </div>
+          <Input v-model.number="delaySec" type="number" hint="От 1 до 600 секунд" />
+        </div>
+      </template>
+
+      <template v-else>
+        <div>
+          <div :class="eyebrow">1 · Загрузка файла</div>
+          <p
+            class="font-sans text-[0.8125rem] text-zinc-500 border border-dashed border-zinc-200 rounded-xl px-4 py-5 text-center"
+          >
+            Режим определяется автоматически по размеру: до 10 МБ — одним запросом, больше —
+            по частям.
+          </p>
+        </div>
+      </template>
+
+      <div>
+        <div :class="eyebrow">{{ needsEndpoint ? 3 : 2 }} · Название шага</div>
+        <Input v-model="title" placeholder="Например: Поиск компании" />
+      </div>
+    </div>
+
+    <template #footer>
+      <Button variant="ghost" @click="emit('close')">Отмена</Button>
+      <Button :variant="canAdd ? 'dark' : 'primary'" :disabled="!canAdd" @click="add">
+        Добавить шаг
+      </Button>
+    </template>
+  </Modal>
+</template>

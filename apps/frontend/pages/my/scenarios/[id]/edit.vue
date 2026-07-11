@@ -1,227 +1,425 @@
 <template>
-  <div class="editor-page">
-    <div class="editor-header">
-      <div class="header-left">
-        <NuxtLink to="/my/scenarios" class="back-btn">← Сценарии</NuxtLink>
-        <h1 class="scenario-title">{{ store.scenario?.title || "Сценарий" }}</h1>
-        <span v-if="store.distinctAppCount > 1" class="multi-badge">
-          {{ store.distinctAppCount }} API
-        </span>
-      </div>
-      <div class="header-right">
-        <button class="publish-btn" :class="{ published: store.scenario?.published }" @click="togglePublish">
-          {{ store.scenario?.published ? "Снять с публикации" : "Опубликовать" }}
-        </button>
-      </div>
+  <div class="max-w-[1180px] xl:max-w-[1320px] mx-auto px-5 lg:px-8 pt-8 pb-20">
+    <NuxtLink
+      to="/my/scenarios"
+      class="font-sans text-sm text-zinc-500 inline-flex items-center gap-1.5 mb-6 hover:text-zinc-700"
+    >
+      ‹ Мои сценарии
+    </NuxtLink>
+
+    <div v-if="loading" class="font-sans text-[0.9375rem] text-zinc-400 py-20 text-center">
+      Загрузка сценария…
     </div>
 
-    <div v-if="loading" class="loading">Загрузка сценария...</div>
-
-    <div v-else class="editor-body">
-      <div class="step-list-panel">
-        <div class="panel-header">
-          <h2 class="panel-title">Шаги ({{ store.stepCount }})</h2>
-          <button class="add-btn" @click="showPicker = true">+ Добавить шаг</button>
-        </div>
-
-        <div v-if="store.stepCount === 0" class="empty-steps">
-          Нет шагов. Добавьте первый шаг, чтобы продолжить.
-        </div>
-
-        <div v-else class="steps">
-          <div
-            v-for="(step, idx) in store.scenario?.steps"
-            :key="idx"
-            :class="['step-item', { selected: store.selectedStepIndex === idx }]"
-            @click="store.selectStep(idx)"
+    <template v-else-if="store.scenario">
+      <div class="flex items-center gap-4 mb-7 flex-wrap">
+        <span
+          class="w-[52px] h-[52px] rounded-xl bg-violet-100 text-violet-600 inline-flex items-center justify-center shrink-0"
+        >
+          <Icon name="share-2" :size="22" />
+        </span>
+        <div class="flex-1 min-w-[180px]">
+          <h1
+            class="font-sans font-extrabold text-[1.625rem] md:text-[2.125rem] tracking-tight text-zinc-900"
           >
-            <span class="step-index">{{ idx + 1 }}</span>
-            <div class="step-info">
-              <span class="step-title">{{ step.title }}</span>
-              <span v-if="step.type === 'api'" class="step-method" :style="methodStyle(step.method)">{{ step.method }}</span>
-              <span v-if="step.type === 'delay'" class="step-type-label">⏱ {{ step.seconds }}с</span>
-              <span v-if="step.type === 'scenario'" class="step-type-label">↳ Сценарий</span>
-              <span v-if="step.type === 'file'" class="step-type-label">📎 Файл</span>
-              <span v-if="step.type === 'periodic'" class="step-type-label">🔄 Опрос</span>
-              <span v-if="step.page" class="page-badge">{{ pageTypeLabel(step.page.type) }}</span>
-            </div>
-            <div class="step-actions">
-              <button class="page-btn" :class="{ active: !!step.page }" @click.stop="openPageEditor(idx)">Страница</button>
-              <button v-if="idx > 0" class="move-btn" @click.stop="store.moveStep(idx, idx - 1)">↑</button>
-              <button v-if="idx < store.stepCount - 1" class="move-btn" @click.stop="store.moveStep(idx, idx + 1)">↓</button>
-              <button class="delete-btn" @click.stop="removeStep(idx)">✕</button>
-            </div>
+            {{ store.scenario.title }}
+          </h1>
+          <div class="font-sans text-sm text-zinc-500">
+            Шагов: {{ store.stepCount }}
+            <template v-if="store.distinctAppCount > 1">
+              · API: {{ store.distinctAppCount }}
+            </template>
           </div>
         </div>
+        <NuxtLink :to="`/cards/${scenarioId}`">
+          <Button variant="secondary">Превью</Button>
+        </NuxtLink>
+        <PublishButton
+          :published="store.scenario.published"
+          @publish="togglePublish"
+          @unpublish="togglePublish"
+        />
       </div>
 
-      <div class="config-panel">
-        <StepConfig
-          v-if="store.selectedStepIndex !== null && selectedStep"
-          :step="selectedStep"
-          :step-index="store.selectedStepIndex"
-          :scenario-id="route.params.id as string"
-          @update="onStepUpdate"
+      <p
+        v-if="error"
+        class="font-sans text-[0.8125rem] text-rose-600 bg-rose-50 border border-rose-200 rounded-xl px-3.5 py-2.5 mb-6"
+      >
+        {{ error }}
+      </p>
+
+      <div class="mb-8">
+        <Tabs v-model="tab" :items="TABS" />
+      </div>
+
+      <!-- Основная -->
+      <Card v-if="tab === 'main'" padding="xl" class="flex flex-col gap-6">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <Input v-model="form.title" label="Название сценария" placeholder="Название сценария" />
+          <Select
+            v-model="form.category"
+            label="Категория"
+            placeholder="Без категории"
+            searchable
+            search-placeholder="Найти категорию…"
+            :options="categoryOptions"
+            @update:model-value="form.subcategory = ''"
+          />
+        </div>
+
+        <Select
+          v-if="subcategoryOptions.length"
+          v-model="form.subcategory"
+          label="Подкатегория"
+          placeholder="Все"
+          :options="subcategoryOptions"
         />
-        <div v-else class="config-empty">
-          Выберите шаг для настройки
+
+        <div class="flex flex-col gap-2">
+          <label
+            for="scenario-description"
+            class="text-[0.8125rem] font-sans font-semibold text-zinc-900"
+          >
+            Описание для маркетплейса
+          </label>
+          <textarea
+            id="scenario-description"
+            v-model="form.description"
+            rows="8"
+            placeholder="Что делает этот сценарий и кому он полезен?"
+            class="w-full px-3.5 py-3 font-sans text-[0.9375rem] text-zinc-900 bg-white border border-zinc-200 rounded-xl outline-none transition resize-y placeholder:text-zinc-400 focus:border-rose-600 focus:ring-4 focus:ring-rose-600/20"
+          />
+        </div>
+
+        <div class="flex justify-end">
+          <Button variant="dark" :disabled="!form.title.trim() || savingMeta" @click="saveMeta">
+            {{ savingMeta ? "Сохранение…" : "Сохранить" }}
+          </Button>
+        </div>
+      </Card>
+
+      <!-- Настройка шагов -->
+      <div v-else>
+        <div
+          v-if="!store.stepCount"
+          class="border border-dashed border-zinc-300 rounded-2xl px-6 py-14 flex flex-col items-center text-center"
+        >
+          <span
+            class="w-12 h-12 rounded-2xl bg-violet-50 text-violet-600 inline-flex items-center justify-center mb-4"
+          >
+            <Icon name="workflow" :size="22" />
+          </span>
+          <div class="font-sans text-[0.9375rem] text-zinc-600 max-w-[380px]">
+            Пока ни одного шага. Добавьте первый — сценарий соберётся из вызовов ваших API.
+          </div>
+        </div>
+
+        <div v-else class="flex flex-col gap-3.5">
+          <div
+            v-for="(step, i) in steps"
+            :key="step.id"
+            draggable="true"
+            :class="[
+              'rounded-2xl transition-all cursor-pointer',
+              dragIndex === i ? 'opacity-40' : '',
+              overIndex === i && dragIndex !== null && dragIndex !== i
+                ? 'ring-2 ring-rose-400 ring-offset-2'
+                : '',
+            ]"
+            @dragstart="dragIndex = i"
+            @dragend="resetDrag"
+            @dragover.prevent="overIndex = i"
+            @drop="drop(i)"
+            @click="openStep(i)"
+          >
+            <ScenarioStep
+              :index="i + 1"
+              :type-label="TYPE_LABELS[step.type]"
+              :provider="providerOf(step)"
+              :provider-dot="providerDot(step)"
+              :method="methodOf(step)"
+              :path="pathOf(step)"
+              :title="step.title"
+              :params="stepParams(i)"
+              @edit="openStep(i)"
+              @remove="removeStep(i)"
+            />
+          </div>
+        </div>
+
+        <div class="flex justify-center pt-6">
+          <ScenarioAddStepMenu size="lg" :icon-size="20" @pick="pickType" />
         </div>
       </div>
-    </div>
+    </template>
 
-    <StepPicker
-      v-if="showPicker"
-      :scenario-id="route.params.id as string"
-      @add="onStepAdd"
-      @close="showPicker = false"
+    <ScenarioStepPicker
+      v-if="pickedType"
+      :scenario-id="scenarioId"
+      :step-type="pickedType.key"
+      :type-title="pickedType.title"
+      @add="addStep"
+      @close="pickedType = null"
     />
 
-    <PageEditor
-      v-if="showPageEditor && pageEditorStep !== null"
-      :step="pageEditorStep"
-      :scenario-id="route.params.id as string"
-      @save="onPageSave"
-      @close="showPageEditor = false"
+    <ScenarioStepConfig
+      v-if="configIndex !== null && steps[configIndex]"
+      :step="steps[configIndex]"
+      :step-index="configIndex"
+      :steps="steps"
+      :schemas="schemas"
+      @update="updateStep(configIndex, $event)"
+      @edit-page="pageIndex = configIndex"
+      @close="configIndex = null"
+    />
+
+    <ScenarioPageEditor
+      v-if="pageIndex !== null && steps[pageIndex]"
+      :step="steps[pageIndex]"
+      @save="savePage"
+      @close="pageIndex = null"
     />
   </div>
 </template>
 
 <script setup lang="ts">
-import type { Step, StepPage } from "@fuse/shared";
+import { CATEGORIES } from "@fuse/shared";
+import type { SchemaField, Step, StepPage, StepType } from "@fuse/shared";
 
+const { $api } = useNuxtApp() as any;
 const route = useRoute();
 const store = useScenarioEditorStore();
+
+const scenarioId = route.params.id as string;
+
+const TABS = [
+  { value: "main", label: "Основная" },
+  { value: "steps", label: "Настройка шагов" },
+];
+
+const TYPE_LABELS: Record<string, string> = {
+  api: "Endpoint API",
+  scenario: "Другой сценарий",
+  delay: "Задержка",
+  file: "Файл",
+  periodic: "Периодический запрос",
+};
+
+const DOT_COLORS = ["#8b5cf6", "#6366f1", "#10b981", "#f59e0b", "#0ea5e9", "#ec4899"];
+
 const loading = ref(true);
-const showPicker = ref(false);
-const showPageEditor = ref(false);
-const pageEditorStepIndex = ref<number | null>(null);
+const savingMeta = ref(false);
+const error = ref("");
+const tab = ref("main");
 
-const pageEditorStep = computed(() => {
-  if (pageEditorStepIndex.value === null || !store.scenario) return null;
-  return store.scenario.steps[pageEditorStepIndex.value] ?? null;
-});
+const form = reactive({ title: "", description: "", category: "", subcategory: "" });
 
-const selectedStep = computed(() => {
-  if (store.selectedStepIndex === null || !store.scenario) return null;
-  return store.scenario.steps[store.selectedStepIndex] ?? null;
-});
+const appNames = ref<Record<string, string>>({});
+const schemas = ref<{ inputs: SchemaField[]; outputs: SchemaField[] }[]>([]);
 
-async function loadScenario() {
-  loading.value = true;
-  const { $api } = useNuxtApp() as any;
-  try {
-    const { data } = await $api.GET(`/api/scenarios/${route.params.id}`, {});
-    if (data.value) {
-      store.setScenario(data.value);
-    }
-  } finally {
-    loading.value = false;
-  }
+const pickedType = ref<{ key: StepType; title: string } | null>(null);
+const configIndex = ref<number | null>(null);
+const pageIndex = ref<number | null>(null);
+const dragIndex = ref<number | null>(null);
+const overIndex = ref<number | null>(null);
+
+const steps = computed<Step[]>(() => store.scenario?.steps ?? []);
+
+const categoryOptions = computed(() => CATEGORIES.map((c) => c.name));
+const subcategoryOptions = computed(
+  () => CATEGORIES.find((c) => c.name === form.category)?.subcategories ?? [],
+);
+
+function appIdOf(step: Step) {
+  return step.type === "api" || step.type === "periodic" || step.type === "file"
+    ? step.appId
+    : undefined;
 }
 
-async function saveSteps() {
-  if (!store.scenario) return;
-  const { $api } = useNuxtApp() as any;
-  await $api.PATCH(`/api/scenarios/${route.params.id}`, {
-    body: { steps: store.scenario.steps },
+function providerOf(step: Step) {
+  const id = appIdOf(step);
+  if (id) return appNames.value[id] ?? "API";
+  return TYPE_LABELS[step.type] ?? "Шаг";
+}
+
+function providerDot(step: Step) {
+  const id = appIdOf(step) ?? step.type;
+  let hash = 0;
+  for (const ch of id) hash = (hash + ch.charCodeAt(0)) % DOT_COLORS.length;
+  return DOT_COLORS[hash];
+}
+
+function methodOf(step: Step) {
+  if (step.type === "api") return step.method;
+  if (step.type === "periodic") return step.pollMethod;
+  return "";
+}
+
+function pathOf(step: Step) {
+  if (step.type === "api") return step.path;
+  if (step.type === "periodic") return step.pollPath;
+  if (step.type === "delay") return `${step.seconds} с`;
+  return "";
+}
+
+function stepParams(i: number) {
+  const step = steps.value[i];
+  const mappings = step.mappings ?? {};
+  const consts = step.consts ?? {};
+  return (schemas.value[i]?.inputs ?? []).map((f) => {
+    const source = mappings[f.key];
+    const ref = typeof source === "string" ? source.match(/^s(\d+):(.+)$/) : null;
+    return {
+      kind: (f.loc ?? "body").toUpperCase(),
+      name: f.key,
+      source: ref
+        ? `Шаг ${Number(ref[1]) + 1} · ${ref[2]}`
+        : source === "const"
+          ? `Константа: ${consts[f.key] || "—"}`
+          : "Ввод пользователя",
+    };
   });
 }
 
-function onStepAdd(step: Step) {
+async function loadScenario() {
+  const { data } = await $api.GET(`/api/scenarios/${scenarioId}`, {});
+  if (!data) {
+    error.value = "Не удалось загрузить сценарий";
+    return;
+  }
+  store.setScenario(data);
+  form.title = data.title ?? "";
+  form.description = data.description ?? "";
+  form.category = data.category ?? "";
+  form.subcategory = data.subcategory ?? "";
+}
+
+async function loadApps() {
+  const { data } = await $api.GET("/api/apps", { params: { query: { limit: 100 } } });
+  if (data) {
+    appNames.value = Object.fromEntries(
+      (data.data ?? []).map((a: { id: string; name: string }) => [a.id, a.name]),
+    );
+  }
+}
+
+async function loadSchemas() {
+  const results = await Promise.all(
+    steps.value.map((_, i) =>
+      $api.GET(`/api/scenarios/${scenarioId}/step-schema/${i}`, {}),
+    ),
+  );
+  schemas.value = results.map((r: any) => r.data ?? { inputs: [], outputs: [] });
+}
+
+// Steps are persisted on every change, then schemas are re-resolved because the
+// backend derives them from the saved order.
+async function persistSteps() {
+  if (!store.scenario) return;
+  const { error: apiError } = await $api.PATCH(`/api/scenarios/${scenarioId}`, {
+    body: { steps: store.scenario.steps },
+  });
+  if (apiError) {
+    error.value = "Не удалось сохранить шаги";
+    return;
+  }
+  error.value = "";
+  await loadSchemas();
+}
+
+function pickType(t: { key: StepType; title: string }) {
+  pickedType.value = t;
+}
+
+async function addStep(step: Step) {
   store.addStep(step);
-  showPicker.value = false;
-  saveSteps();
+  pickedType.value = null;
+  await persistSteps();
 }
 
-function onStepUpdate(step: Step) {
-  if (store.selectedStepIndex !== null) {
-    store.updateStep(store.selectedStepIndex, step);
-    saveSteps();
-  }
+async function updateStep(index: number, step: Step) {
+  store.updateStep(index, step);
+  await persistSteps();
 }
 
-function removeStep(idx: number) {
-  store.removeStep(idx);
-  saveSteps();
+async function removeStep(index: number) {
+  store.removeStep(index);
+  if (configIndex.value === index) configIndex.value = null;
+  await persistSteps();
 }
 
-function openPageEditor(idx: number) {
-  pageEditorStepIndex.value = idx;
-  showPageEditor.value = true;
+function openStep(index: number) {
+  configIndex.value = index;
 }
 
-function onPageSave(page: StepPage) {
-  if (pageEditorStepIndex.value !== null) {
-    const step = store.scenario?.steps[pageEditorStepIndex.value];
-    if (step) {
-      store.updateStep(pageEditorStepIndex.value, { ...step, page });
-      saveSteps();
+async function savePage(page: StepPage) {
+  if (pageIndex.value === null) return;
+  const step = steps.value[pageIndex.value];
+  if (step) await updateStep(pageIndex.value, { ...step, page } as Step);
+  pageIndex.value = null;
+}
+
+function resetDrag() {
+  dragIndex.value = null;
+  overIndex.value = null;
+}
+
+async function drop(index: number) {
+  const from = dragIndex.value;
+  resetDrag();
+  if (from === null || from === index) return;
+  store.moveStep(from, index);
+  configIndex.value = null;
+  await persistSteps();
+}
+
+async function saveMeta() {
+  if (!form.title.trim()) return;
+  savingMeta.value = true;
+  error.value = "";
+  try {
+    const { data, error: apiError } = await $api.PATCH(`/api/scenarios/${scenarioId}`, {
+      body: {
+        title: form.title.trim(),
+        description: form.description,
+        category: form.category,
+        subcategory: form.subcategory,
+      },
+    });
+    if (apiError || !data) {
+      error.value = "Не удалось сохранить изменения";
+      return;
     }
+    if (store.scenario) store.scenario.title = form.title.trim();
+  } finally {
+    savingMeta.value = false;
   }
-  showPageEditor.value = false;
-  pageEditorStepIndex.value = null;
 }
 
 async function togglePublish() {
   if (!store.scenario) return;
-  if (!store.scenario.published && store.stepCount === 0) {
-    alert("Добавьте хотя бы один шаг перед публикацией");
+  if (!store.scenario.published && !store.stepCount) {
+    error.value = "Добавьте хотя бы один шаг перед публикацией";
     return;
   }
-  const { $api } = useNuxtApp() as any;
-  const { data } = await $api.PATCH(`/api/scenarios/${route.params.id}/publish`, {});
-  if (data.value) {
-    store.scenario.published = data.value.published;
+  const { data, error: apiError } = await $api.PATCH(
+    `/api/scenarios/${scenarioId}/publish`,
+    {},
+  );
+  if (apiError || !data) {
+    error.value = "Не удалось изменить статус публикации";
+    return;
   }
+  error.value = "";
+  store.scenario.published = data.published;
 }
 
-function methodStyle(m: string) {
-  const colors: Record<string, string> = {
-    GET: "#0e9f6e", POST: "#e11d48", PUT: "#d97706", DELETE: "#dc2626", PATCH: "#6366f1",
-  };
-  const bg: Record<string, string> = {
-    GET: "#e7f8f1", POST: "#fdeaef", PUT: "#fef3e2", DELETE: "#fdecec", PATCH: "#eef2ff",
-  };
-  return { color: colors[m] || "#6366f1", background: bg[m] || "#eef2ff" };
-}
-
-function pageTypeLabel(t: string) {
-  return t === "fields" ? "📄" : t === "file" ? "📎" : "📝";
-}
-
-onMounted(loadScenario);
+onMounted(async () => {
+  try {
+    await Promise.all([loadScenario(), loadApps()]);
+    await loadSchemas();
+  } finally {
+    loading.value = false;
+  }
+});
 </script>
-
-<style scoped>
-.editor-page { max-width: 1280px; margin: 0 auto; padding: 16px 24px 48px; }
-.editor-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-.header-left { display: flex; align-items: center; gap: 12px; }
-.back-btn { font-size: 14px; color: #6366f1; text-decoration: none; }
-.scenario-title { font-size: 20px; font-weight: 700; color: #18181b; margin: 0; }
-.multi-badge { font-size: 12px; font-weight: 600; padding: 3px 8px; border-radius: 100px; background: #eef2ff; color: #6366f1; }
-.publish-btn { padding: 8px 16px; border-radius: 8px; border: none; background: #16a34a; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; }
-.publish-btn.published { background: #f4f4f5; color: #52525b; }
-.loading { text-align: center; padding: 48px; color: #71717a; }
-.editor-body { display: grid; grid-template-columns: 1fr 400px; gap: 20px; }
-.step-list-panel { background: #fff; border: 1px solid #e4e4e7; border-radius: 12px; padding: 20px; }
-.panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
-.panel-title { font-size: 15px; font-weight: 700; color: #18181b; margin: 0; }
-.add-btn { font-size: 13px; font-weight: 600; color: #6366f1; background: #eef2ff; border: none; padding: 6px 12px; border-radius: 8px; cursor: pointer; }
-.empty-steps { text-align: center; padding: 32px; color: #a1a1aa; font-size: 14px; border: 2px dashed #e4e4e7; border-radius: 10px; }
-.steps { display: flex; flex-direction: column; gap: 8px; }
-.step-item { display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px solid #e4e4e7; border-radius: 8px; cursor: pointer; transition: border-color 0.15s; }
-.step-item.selected { border-color: #6366f1; background: #f5f3ff; }
-.step-index { width: 24px; height: 24px; border-radius: 50%; background: #f4f4f5; color: #52525b; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.step-info { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; }
-.step-title { font-size: 14px; font-weight: 500; color: #18181b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.step-method { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; font-family: monospace; }
-.step-type-label { font-size: 12px; color: #71717a; }
-.page-badge { font-size: 11px; }
-.step-actions { display: flex; gap: 4px; }
-.page-btn { height: 24px; padding: 0 8px; border: 1px solid #e4e4e7; border-radius: 6px; background: #fff; cursor: pointer; font-size: 11px; color: #71717a; white-space: nowrap; }
-.page-btn.active { background: #eef2ff; border-color: #c7d2fe; color: #6366f1; }
-.move-btn { width: 24px; height: 24px; border: 1px solid #e4e4e7; border-radius: 6px; background: #fff; cursor: pointer; font-size: 12px; color: #71717a; display: flex; align-items: center; justify-content: center; }
-.delete-btn { width: 24px; height: 24px; border: 1px solid #fecaca; border-radius: 6px; background: #fff; cursor: pointer; font-size: 12px; color: #e11d48; display: flex; align-items: center; justify-content: center; }
-.config-panel { background: #fff; border: 1px solid #e4e4e7; border-radius: 12px; padding: 20px; }
-.config-empty { text-align: center; padding: 32px; color: #a1a1aa; font-size: 14px; }
-</style>
