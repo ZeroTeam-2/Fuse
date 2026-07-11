@@ -66,10 +66,10 @@
 - [x] 7.7 Редактор сценария (`pages/my/scenarios/[id]/edit.vue`) — ScenarioStep, Modal (add-step / new-page), StepConfig/StepPicker/PageEditor
 - [x] 7.8 Профиль (`pages/profile/index.vue`) — Avatar, KeyValueGrid, Tabs
 - [x] 7.9 Логин (`pages/login/index.vue`) — Input, Button, BrandMark
-- [ ] 7.10 Убрать устаревшие индиго scoped-стили и самописный `avatar-placeholder`/`logo` из layout и страниц
+- [x] 7.10 Убрать устаревшие индиго scoped-стили и самописный `avatar-placeholder`/`logo` из layout и страниц
 
 ## 8. Финал
 
-- [ ] 8.1 `pnpm --filter @fuse/frontend typecheck`
-- [ ] 8.2 Визуальный прогон всех экранов против `ui_kits/fuse-app`
-- [ ] 8.3 Удалить/загейтить dev-песочницу `pages/ui-kit.vue`
+- [x] 8.1 `pnpm --filter @fuse/frontend typecheck` (+ `oxlint` и прод-сборка `nuxt build` — чисто)
+- [x] 8.2 Визуальный прогон всех экранов против `ui_kits/fuse-app` — принято владельцем по ходу задач 7.1–7.10
+- [x] 8.3 Удалить/загейтить dev-песочницу `pages/ui-kit.vue` — dev-only через `import.meta.dev`, в проде 404 (проверено на сборке)
