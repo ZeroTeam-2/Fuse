@@ -197,9 +197,7 @@ async function removeAvatar() {
 }
 
 async function logout() {
-  const config = useRuntimeConfig();
-  const baseUrl = config.public.apiBaseUrl || "http://localhost:3001";
-  await fetch(`${baseUrl}/api/auth/logout`, { credentials: "include" });
+  await fetch(`${useApiBase()}/api/auth/logout`, { credentials: "include" });
   authStore.clearUser();
   await navigateTo("/login");
 }
