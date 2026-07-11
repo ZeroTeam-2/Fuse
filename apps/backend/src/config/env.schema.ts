@@ -27,7 +27,7 @@ export const envSchema = z.object({
   YANDEX_CLIENT_ID: z.string().default(""),
   YANDEX_CLIENT_SECRET: z.string().default(""),
   YANDEX_REDIRECT_URI: z.string().default("http://localhost:3001/api/auth/callback"),
-  APP_URL: z.string().default("http://localhost:5173"),
+  APP_URL: z.string().default("http://localhost:3000"),
 
   FILE_SINGLE_UPLOAD_MAX_MB: z.string().default("10").transform(Number),
 
