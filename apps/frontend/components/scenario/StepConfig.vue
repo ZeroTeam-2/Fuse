@@ -176,7 +176,16 @@ function removePage() {
   emit("update", next as Step);
 }
 
-watch([() => props.stepIndex, inputs], hydrate, { immediate: true });
+// Schemas are re-fetched after every save, so `inputs` is a fresh array even when
+// nothing changed. Re-hydrating on that would wipe a half-made choice: "Из шага"
+// writes no mapping until both the step and the field are picked, so hydrate would
+// read no source and snap the field back to "Ручной ввод". Watch what actually
+// changed instead of the array identity.
+const hydrateKey = computed(
+  () => `${props.stepIndex}|${inputs.value.map((f) => f.key).join(",")}`,
+);
+
+watch(hydrateKey, hydrate, { immediate: true });
 </script>
 
 <template>
