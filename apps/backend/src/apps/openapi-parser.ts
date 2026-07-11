@@ -122,13 +122,16 @@ export class OpenApiParserService {
 
         const allParameters = [...pathParameters, ...(operation.parameters ?? [])];
 
+        const { fields: outputs, isArray } = this.extractOutputs(operation);
+
         endpoints.push({
           id: randomUUID(),
           method: method.toUpperCase() as HttpMethod,
           path,
           summary: operation.summary,
           inputs: this.extractInputs(operation, allParameters),
-          outputs: this.extractOutputs(operation),
+          outputs,
+          outputIsArray: isArray,
           status: operation.deprecated
             ? EndpointStatus.DEPRECATED
             : EndpointStatus.ACTIVE,
@@ -171,18 +174,29 @@ export class OpenApiParserService {
     return fields;
   }
 
-  private extractOutputs(operation: OpenAPIOperation): SchemaField[] {
+  /**
+   * A collection response is still described by its element's fields, but the
+   * fact that it *is* a collection travels alongside them — scenario steps need
+   * it to know a filter is required to pick one element.
+   */
+  private extractOutputs(operation: OpenAPIOperation): {
+    fields: SchemaField[];
+    isArray: boolean;
+  } {
     const responses = operation.responses ?? {};
     const successCode = Object.keys(responses).find(
       (code) => code.startsWith("2") || code === "default",
     );
-    if (!successCode) return [];
+    if (!successCode) return { fields: [], isArray: false };
 
     const response = responses[successCode];
     const schema = this.getFirstContentSchema(response?.content);
-    if (!schema) return [];
+    if (!schema) return { fields: [], isArray: false };
 
-    return this.extractSchemaFields(schema);
+    return {
+      fields: this.extractSchemaFields(schema),
+      isArray: schema.type === "array",
+    };
   }
 
   private extractSchemaFields(
@@ -192,14 +206,24 @@ export class OpenApiParserService {
     const target = schema.type === "array" ? schema.items : schema;
     if (!target?.properties) return [];
 
-    return Object.entries(target.properties).map(([key, prop]) => ({
-      key,
-      label: key,
-      type: this.mapSchemaType(prop.type),
-      loc,
-      ex: prop.example,
-      required: target.required?.includes(key) ?? false,
-    }));
+    return Object.entries(target.properties).map(([key, prop]) => {
+      const field: SchemaField = {
+        key,
+        label: key,
+        type: this.mapSchemaType(prop.type),
+        loc,
+        ex: prop.example,
+        required: target.required?.includes(key) ?? false,
+      };
+
+      // One level deep, like everything else here: an array of objects gets its
+      // element's fields, so a filter can be built on them.
+      if (prop.type === "array" && prop.items?.properties) {
+        field.items = this.extractSchemaFields(prop.items, loc);
+      }
+
+      return field;
+    });
   }
 
   private getFirstContentSchema(

@@ -225,11 +225,31 @@ async function checkUpdates() {
 
 async function saveUpdate() {
   saving.value = true;
+  reimportError.value = "";
   try {
-    await $api.PATCH("/api/apps/{id}", {
+    // Спека перечитывается по сохранённому URL, поэтому сначала фиксируем новый,
+    // если пользователь его отредактировал.
+    if (openapiUrl.value !== app.value?.openapiUrl) {
+      const { error } = await $api.PATCH("/api/apps/{id}", {
+        params: { path: { id: appId } },
+        body: { openapiUrl: openapiUrl.value },
+      });
+      if (error) {
+        reimportError.value = error?.message ?? "Не удалось сохранить ссылку на спецификацию";
+        return;
+      }
+    }
+
+    // Раньше здесь был только PATCH метаданных — endpoints и снапшот спеки в БД
+    // не обновлялись НИКОГДА, а UI всё равно рапортовал об успехе.
+    const { error } = await $api.POST("/api/apps/{id}/reimport/apply", {
       params: { path: { id: appId } },
-      body: { openapiUrl: openapiUrl.value },
     });
+    if (error) {
+      reimportError.value = error?.message ?? "Не удалось сохранить обновление";
+      return;
+    }
+
     successMessage.value = "Обновление успешно сохранено";
     diff.value = null;
     await fetchApp();

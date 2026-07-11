@@ -20,6 +20,10 @@ export class RunStepResultDoc {
   @Prop({ type: MongooseSchema.Types.Mixed })
   result?: unknown;
 
+  // Некритичные замечания резолвера входов (неоднозначный фильтр массива).
+  @Prop({ type: [String] })
+  warnings?: string[];
+
   @Prop()
   error?: string;
 

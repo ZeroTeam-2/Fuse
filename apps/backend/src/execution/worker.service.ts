@@ -27,6 +27,7 @@ import { SsrfGuard } from "../apps/ssrf-guard";
 import { joinBaseUrl } from "../apps/base-url";
 import { RunGateway } from "../websocket/run.gateway";
 import { resolveMappings } from "./mapping-resolver";
+import { StepExecutionError, RunCancelledError } from "./execution-errors";
 
 const POLL_TIMEOUT_MS = 5 * 60 * 1000;
 const PAGE_INPUT_TIMEOUT_MS = 30 * 60 * 1000;
@@ -37,24 +38,16 @@ const TERMINAL_STATUSES: RunStatus[] = [
   RunStatus.CANCELLED,
 ];
 
-/**
- * Детерминированный сбой шага (недоступный endpoint, ошибка стороннего API,
- * приложение без базового URL). Повторная доставка сообщения такой сбой не
- * лечит — она лишь трижды повторит то же падение, поэтому `executeRun` фиксирует
- * `failed` и ПОДТВЕРЖДАЕТ сообщение. Всё, что НЕ является StepExecutionError
- * (например, недоступность MongoDB), пробрасывается наружу — там retry уместен.
- */
-class StepExecutionError extends Error {}
-
-/** Отмена — не ошибка: статус уже выставлен, шаги просто прекращаем. */
-class RunCancelledError extends Error {}
-
 interface StepContext {
   runId: string;
   stepIndex: number;
   stepResults: RunStepResult[];
   /** Кэш приложений на время одного запуска: N шагов к одному API — один запрос в БД. */
   appCache: Map<string, AppDocument>;
+  /** Данные пользователя: входы запуска + то, что он ввёл на странице шага. */
+  userInput?: Record<string, unknown>;
+  /** Некритичные замечания резолвера (неоднозначный фильтр) — уходят в результат шага. */
+  warnings: string[];
 }
 
 @Injectable()
@@ -256,6 +249,7 @@ export class WorkerService
           stepIndex: i,
           stepResults: reloadedRun.stepResults as unknown as RunStepResult[],
           appCache,
+          warnings: [],
         };
 
         const result = await this.executeStep(step, ctx);
@@ -269,6 +263,7 @@ export class WorkerService
           stepTitle: step.title,
           status: "completed",
           result,
+          ...(ctx.warnings.length ? { warnings: ctx.warnings } : {}),
           startedAt,
           finishedAt,
           durationMs,
@@ -371,7 +366,13 @@ export class WorkerService
 
   private async executeStep(step: Step, ctx: StepContext): Promise<unknown> {
     if (step.page) {
-      await this.waitForPageInput(ctx.runId, step, ctx.stepIndex);
+      // То, что пользователь ввёл на странице, — это и есть входные данные шага:
+      // раньше результат ожидания отбрасывался, и ветка «Ручной ввод» в маппингах
+      // (а с ней и ручное значение условия фильтра) была мертва.
+      const pageData = await this.waitForPageInput(ctx.runId, step, ctx.stepIndex);
+      if (pageData && typeof pageData === "object") {
+        ctx.userInput = { ...ctx.userInput, ...(pageData as Record<string, unknown>) };
+      }
     }
 
     switch (step.type) {
@@ -464,7 +465,7 @@ export class WorkerService
     step: ApiStep,
     ctx: StepContext,
   ): Promise<unknown> {
-    const resolved = resolveMappings(step, ctx.stepResults);
+    const resolved = resolveMappings(step, ctx.stepResults, ctx.userInput, ctx.warnings);
     const url = await this.resolveStepUrl(step.appId, step.path, resolved, ctx);
 
     const options: RequestInit = {
@@ -567,7 +568,7 @@ export class WorkerService
     step: PeriodicStep,
     ctx: StepContext,
   ): Promise<unknown> {
-    const resolved = resolveMappings(step, ctx.stepResults);
+    const resolved = resolveMappings(step, ctx.stepResults, ctx.userInput, ctx.warnings);
     const url = await this.resolveStepUrl(
       step.appId,
       step.pollPath,
@@ -666,6 +667,9 @@ export class WorkerService
         stepIndex: i,
         stepResults: nestedResults,
         appCache: ctx.appCache,
+        userInput: ctx.userInput,
+        // Замечания вложенных шагов всплывают в результат объемлющего шага.
+        warnings: ctx.warnings,
       };
       const result = await this.executeStep(refStep, nestedCtx);
       nestedResults.push({

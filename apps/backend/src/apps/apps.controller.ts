@@ -70,6 +70,12 @@ export class AppsController {
     return this.appsService.reimport(id);
   }
 
+  @Post(":id/reimport/apply")
+  @ApiOperation({ summary: "Apply a reimport: re-parse the spec and merge endpoints" })
+  applyReimport(@Param("id") id: string) {
+    return this.appsService.applyReimport(id);
+  }
+
   @Patch(":id")
   @ApiOperation({ summary: "Update app metadata" })
   update(

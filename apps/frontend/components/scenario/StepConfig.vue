@@ -1,14 +1,14 @@
 <script setup lang="ts">
 // Right-side drawer: configure where each input of a step comes from, review the
 // outputs it hands to later steps, and attach an input page.
-import type { SchemaField, Step } from "@fuse/shared";
+import type { FilterOperator, SchemaField, Step, StepFilter, StepSchema } from "@fuse/shared";
 
 const props = defineProps<{
   step: Step;
   stepIndex: number;
   steps: Step[];
   // Input/output schema per step index, resolved by the page.
-  schemas: { inputs: SchemaField[]; outputs: SchemaField[] }[];
+  schemas: StepSchema[];
 }>();
 
 const emit = defineEmits<{
@@ -38,11 +38,38 @@ const PAGE_LABELS: Record<string, string> = {
   text: "Отображение текста",
 };
 
-interface FieldState {
+const OPERATORS: { value: FilterOperator; label: string }[] = [
+  { value: "eq", label: "=" },
+  { value: "ne", label: "≠" },
+  { value: "gt", label: ">" },
+  { value: "lt", label: "<" },
+  { value: "gte", label: "≥" },
+  { value: "lte", label: "≤" },
+  { value: "contains", label: "содержит" },
+];
+
+interface FilterState {
+  field: string;
+  op: FilterOperator | "";
   mode: "user" | "const" | "ref";
   constValue: string;
   refStep: string;
   refField: string;
+}
+
+interface FieldState {
+  mode: "user" | "const" | "ref";
+  constValue: string;
+  refStep: string;
+  /** Ключ поля результата — поля ЭЛЕМЕНТА, когда источник отдаёт массив. */
+  refField: string;
+  /** Пусто — массив это сам результат шага; иначе ключ поля-списка в нём. */
+  refArrayPath: string;
+  filter: FilterState;
+}
+
+function emptyFilter(): FilterState {
+  return { field: "", op: "", mode: "const", constValue: "", refStep: "", refField: "" };
 }
 
 const state = reactive<Record<string, FieldState>>({});
@@ -94,6 +121,7 @@ const modeOptions = computed(() => {
   return base;
 });
 
+/** Плоские выходы шага — операнд условия должен быть скаляром, элемент списка тут не нужен. */
 function fieldsForStep(refStep: string) {
   const idx = Number(refStep);
   if (!refStep || Number.isNaN(idx)) return [];
@@ -104,28 +132,174 @@ function fieldsForStep(refStep: string) {
   }));
 }
 
+/**
+ * «Поле результата» всегда называет поле, которое реально подставится в параметр.
+ * Когда шаг-источник отдаёт коллекцию, его выходы — это уже поля элемента; когда
+ * список лежит полем внутри объекта, разворачиваем его элемент здесь же, а не
+ * предлагаем выбрать сам список (из массива нечего подставить в параметр).
+ * Значение опции кодирует и список, и поле: `{arrayPath}::{key}`.
+ */
+function resultFieldOptions(refStep: string) {
+  const idx = Number(refStep);
+  if (!refStep || Number.isNaN(idx)) return [];
+
+  const source = props.schemas[idx];
+  if (!source) return [];
+
+  if (source.outputIsArray) {
+    return (source.outputs ?? []).map((o) => ({
+      value: `::${o.key}`,
+      label: o.label || o.key,
+      description: `${o.type} · элемент коллекции`,
+    }));
+  }
+
+  const options: { value: string; label: string; description: string }[] = [];
+  for (const o of source.outputs ?? []) {
+    if (o.type === "array" && o.items?.length) {
+      for (const item of o.items) {
+        options.push({
+          value: `${o.key}::${item.key}`,
+          label: item.label || item.key,
+          description: `${item.type} · элемент списка ${o.key}`,
+        });
+      }
+      continue;
+    }
+    options.push({ value: `::${o.key}`, label: o.label || o.key, description: o.type });
+  }
+  return options;
+}
+
+function resultFieldValue(s: FieldState) {
+  return s.refField ? `${s.refArrayPath}::${s.refField}` : "";
+}
+
+/** Массив есть — значит без условия непонятно, какой из элементов подставлять. */
+function needsFilter(s?: FieldState) {
+  if (!s || s.mode !== "ref" || !s.refStep || !s.refField) return false;
+  if (s.refArrayPath) return true;
+  return props.schemas[Number(s.refStep)]?.outputIsArray === true;
+}
+
+/** Поля элемента отобранного массива — по ним строится условие. */
+function itemFieldsFor(s: FieldState): SchemaField[] {
+  const source = props.schemas[Number(s.refStep)];
+  if (!source) return [];
+  if (s.refArrayPath) {
+    return source.outputs.find((o) => o.key === s.refArrayPath)?.items ?? [];
+  }
+  return source.outputs ?? [];
+}
+
+function itemFieldOptions(key: string) {
+  return itemFieldsFor(state[key]).map((f) => ({
+    value: f.key,
+    label: f.label || f.key,
+    description: f.type,
+  }));
+}
+
+/** Спека: для boolean осмысленны только `=`/`≠`, «содержит» — только для строк. */
+function operatorOptions(key: string) {
+  const s = state[key];
+  const type = itemFieldsFor(s).find((f) => f.key === s.filter.field)?.type;
+
+  if (type === "boolean") return OPERATORS.filter((o) => o.value === "eq" || o.value === "ne");
+  if (type && type !== "string") return OPERATORS.filter((o) => o.value !== "contains");
+  return OPERATORS;
+}
+
 function groupFields(loc: string) {
   return inputs.value.filter((f) => (f.loc ?? "body") === loc);
+}
+
+/**
+ * Где лежит массив, известно из схемы, но `arrayPath` пишется в фильтр только
+ * вместе с готовым условием — поэтому при загрузке восстанавливаем его из схемы:
+ * ключ поля результата, которого нет среди выходов, приехал из какого-то списка.
+ */
+function arrayPathFor(refStep: string, refField: string, filter?: StepFilter): string {
+  if (filter?.arrayPath) return filter.arrayPath;
+
+  const source = props.schemas[Number(refStep)];
+  if (!source || source.outputIsArray) return "";
+  if (source.outputs.some((o) => o.key === refField)) return "";
+
+  const owner = source.outputs.find(
+    (o) => o.type === "array" && o.items?.some((i) => i.key === refField),
+  );
+  return owner?.key ?? "";
+}
+
+function hydrateFilter(filter?: StepFilter): FilterState {
+  if (!filter) return emptyFilter();
+
+  const ref = filter.value.mode === "ref" ? (filter.value.ref ?? "").match(/^s(\d+):(.+)$/) : null;
+
+  return {
+    field: filter.field,
+    op: filter.op,
+    mode: filter.value.mode,
+    constValue: filter.value.const ?? "",
+    refStep: ref ? ref[1] : "",
+    refField: ref ? ref[2] : "",
+  };
 }
 
 function hydrate() {
   const mappings = props.step.mappings ?? {};
   const consts = props.step.consts ?? {};
+  const filters = props.step.filters ?? {};
+
   for (const field of inputs.value) {
     const source = mappings[field.key];
     const ref = typeof source === "string" ? source.match(/^s(\d+):(.+)$/) : null;
+    const filter = filters[field.key];
+
     state[field.key] = {
       mode: ref ? "ref" : source === "const" ? "const" : "user",
       constValue: consts[field.key] ?? "",
       refStep: ref ? ref[1] : "",
       refField: ref ? ref[2] : "",
+      refArrayPath: ref ? arrayPathFor(ref[1], ref[2], filter) : "",
+      filter: hydrateFilter(filter),
     };
   }
+}
+
+/** Наполовину заданное условие не сохраняем — как и наполовину заданный маппинг. */
+function completeFilter(s: FieldState): StepFilter | null {
+  const f = s.filter;
+  if (!f.field || !f.op) return null;
+
+  if (f.mode === "const") {
+    if (!f.constValue) return null;
+    return filterOf(s, { mode: "const", const: f.constValue });
+  }
+
+  if (f.mode === "ref") {
+    if (!f.refStep || !f.refField) return null;
+    return filterOf(s, { mode: "ref", ref: `s${f.refStep}:${f.refField}` });
+  }
+
+  return filterOf(s, { mode: "user" });
+}
+
+function filterOf(s: FieldState, value: StepFilter["value"]): StepFilter {
+  return {
+    ...(s.refArrayPath ? { arrayPath: s.refArrayPath } : {}),
+    field: s.filter.field,
+    op: s.filter.op as FilterOperator,
+    value,
+  };
 }
 
 function emitUpdate() {
   const mappings: Record<string, string> = {};
   const consts: Record<string, string> = {};
+  const filters: Record<string, StepFilter> = {};
+
   for (const field of inputs.value) {
     const s = state[field.key];
     if (!s) continue;
@@ -135,11 +309,17 @@ function emitUpdate() {
     } else if (s.mode === "ref") {
       if (!s.refStep || !s.refField) continue;
       mappings[field.key] = `s${s.refStep}:${s.refField}`;
+
+      if (needsFilter(s)) {
+        const filter = completeFilter(s);
+        if (filter) filters[field.key] = filter;
+      }
     } else {
       mappings[field.key] = "user";
     }
   }
-  emit("update", { ...props.step, mappings, consts } as Step);
+
+  emit("update", { ...props.step, mappings, consts, filters } as Step);
 }
 
 function setMode(key: string, mode: string) {
@@ -147,6 +327,8 @@ function setMode(key: string, mode: string) {
   if (mode !== "ref") {
     state[key].refStep = "";
     state[key].refField = "";
+    state[key].refArrayPath = "";
+    state[key].filter = emptyFilter();
   }
   emitUpdate();
 }
@@ -154,11 +336,51 @@ function setMode(key: string, mode: string) {
 function setRefStep(key: string, value: string) {
   state[key].refStep = value;
   state[key].refField = "";
+  state[key].refArrayPath = "";
+  state[key].filter = emptyFilter();
   emitUpdate();
 }
 
 function setRefField(key: string, value: string) {
-  state[key].refField = value;
+  const [arrayPath, field] = value.split("::");
+  state[key].refArrayPath = arrayPath ?? "";
+  state[key].refField = field ?? "";
+  // Условие строится на полях элемента — при смене списка оно перестаёт быть валидным.
+  state[key].filter = emptyFilter();
+  emitUpdate();
+}
+
+function setFilterField(key: string, value: string) {
+  state[key].filter.field = value;
+  // Оператор мог быть недоступен для нового типа поля (например, «содержит» у числа).
+  if (!operatorOptions(key).some((o) => o.value === state[key].filter.op)) {
+    state[key].filter.op = "";
+  }
+  emitUpdate();
+}
+
+function setFilterOp(key: string, value: string) {
+  state[key].filter.op = value as FilterOperator;
+  emitUpdate();
+}
+
+function setFilterMode(key: string, value: string) {
+  state[key].filter.mode = value as FilterState["mode"];
+  if (value !== "ref") {
+    state[key].filter.refStep = "";
+    state[key].filter.refField = "";
+  }
+  emitUpdate();
+}
+
+function setFilterRefStep(key: string, value: string) {
+  state[key].filter.refStep = value;
+  state[key].filter.refField = "";
+  emitUpdate();
+}
+
+function setFilterRefField(key: string, value: string) {
+  state[key].filter.refField = value;
   emitUpdate();
 }
 
@@ -292,10 +514,86 @@ watch(hydrateKey, hydrate, { immediate: true });
                       <Select
                         label="Поле результата"
                         placeholder="Выберите поле"
-                        :model-value="state[f.key].refField"
-                        :options="fieldsForStep(state[f.key].refStep)"
+                        :model-value="resultFieldValue(state[f.key])"
+                        :options="resultFieldOptions(state[f.key].refStep)"
                         @update:model-value="setRefField(f.key, $event as string)"
                       />
+
+                      <!-- Шаг-источник отдаёт коллекцию: без условия непонятно, какой элемент брать. -->
+                      <div
+                        v-if="needsFilter(state[f.key])"
+                        class="border border-zinc-200 rounded-xl p-3.5 flex flex-col gap-2.5 bg-zinc-50/60"
+                      >
+                        <div class="flex items-center gap-2">
+                          <Icon name="filter" :size="14" class="text-zinc-400" />
+                          <div
+                            class="font-sans text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-zinc-500"
+                          >
+                            Условие отбора
+                          </div>
+                        </div>
+                        <div class="font-sans text-[0.8125rem] text-zinc-500">
+                          Шаг возвращает несколько записей — укажите, какую из них брать.
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-2.5">
+                          <Select
+                            label="Поле элемента"
+                            placeholder="Выберите поле"
+                            :model-value="state[f.key].filter.field"
+                            :options="itemFieldOptions(f.key)"
+                            @update:model-value="setFilterField(f.key, $event as string)"
+                          />
+                          <Select
+                            label="Оператор"
+                            placeholder="Оператор"
+                            :disabled="!state[f.key].filter.field"
+                            :model-value="state[f.key].filter.op"
+                            :options="operatorOptions(f.key)"
+                            @update:model-value="setFilterOp(f.key, $event as string)"
+                          />
+                        </div>
+
+                        <SegmentedControl
+                          size="sm"
+                          :model-value="state[f.key].filter.mode"
+                          :options="modeOptions"
+                          @update:model-value="setFilterMode(f.key, $event as string)"
+                        />
+
+                        <Input
+                          v-if="state[f.key].filter.mode === 'const'"
+                          v-model="state[f.key].filter.constValue"
+                          mono
+                          placeholder="Значение для сравнения"
+                          :hint="CONST_HINT"
+                          @update:model-value="emitUpdate"
+                        />
+
+                        <div
+                          v-else-if="state[f.key].filter.mode === 'ref'"
+                          class="flex flex-col gap-2.5"
+                        >
+                          <Select
+                            label="Шаг-источник значения"
+                            placeholder="Выберите шаг"
+                            :model-value="state[f.key].filter.refStep"
+                            :options="prevStepOptions"
+                            @update:model-value="setFilterRefStep(f.key, $event as string)"
+                          />
+                          <Select
+                            label="Поле значения"
+                            placeholder="Выберите поле"
+                            :model-value="state[f.key].filter.refField"
+                            :options="fieldsForStep(state[f.key].filter.refStep)"
+                            @update:model-value="setFilterRefField(f.key, $event as string)"
+                          />
+                        </div>
+
+                        <div v-else class="font-sans text-[0.8125rem] text-zinc-400">
+                          Пользователь введёт значение для сравнения при запуске сценария.
+                        </div>
+                      </div>
                     </div>
 
                     <div v-else class="font-sans text-[0.8125rem] text-zinc-400">
