@@ -12,6 +12,7 @@ const props = withDefaults(
     publishLabel?: string;
     publishedLabel?: string;
     size?: "sm" | "md" | "lg";
+    disabled?: boolean;
   }>(),
   {
     published: undefined,
@@ -19,6 +20,7 @@ const props = withDefaults(
     publishLabel: "Опубликовать",
     publishedLabel: "Опубликован",
     size: "md",
+    disabled: false,
   },
 );
 
@@ -95,6 +97,7 @@ function fireConfetti() {
 }
 
 function handleClick() {
+  if (props.disabled) return;
   if (published.value) {
     if (!isControlled.value) internal.value = false;
     emit("update:published", false);
@@ -114,10 +117,12 @@ function handleClick() {
     ref="btnRef"
     type="button"
     :aria-pressed="published"
+    :disabled="disabled"
     :class="[
       'relative inline-flex items-center justify-center font-sans font-bold tracking-tight leading-none whitespace-nowrap',
       'transition-colors duration-300 select-none',
       SIZES[size],
+      disabled ? 'opacity-50 cursor-not-allowed grayscale-[.4]' : '',
       skin,
     ]"
     @click="handleClick"

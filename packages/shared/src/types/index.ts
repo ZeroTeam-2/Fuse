@@ -188,6 +188,12 @@ export interface BaseStep {
   /** Keyed by input field key, like `mappings`. Only meaningful for `s{idx}:{key}` mappings. */
   filters?: Record<string, StepFilter>;
   page?: StepPage;
+  /**
+   * Шаг ссылался на приложение/API, которое было удалено. Проставляется
+   * сервером (`AppsService.delete`) и снимается сам, когда шаг удаляют или
+   * пересобирают — руками это поле не редактируют.
+   */
+  broken?: boolean;
 }
 
 export interface ApiStep extends BaseStep {
@@ -246,6 +252,14 @@ export interface Scenario {
   steps: Step[];
   published: boolean;
   runCount: number;
+  /**
+   * Выставляется автоматически, когда удаляют приложение, на которое
+   * ссылается один из шагов. Пока флаг не снят (шаг с `broken: true`
+   * не убран или не пересобран), запуск сценария (`POST /api/runs`)
+   * отклоняется.
+   */
+  blocked?: boolean;
+  blockedReason?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -314,6 +328,8 @@ export interface MarketplaceCard {
   providers: string[];
   endpointCount: number;
   stepCount: number;
+  blocked?: boolean;
+  blockedReason?: string;
 }
 
 export interface CategoryCount {

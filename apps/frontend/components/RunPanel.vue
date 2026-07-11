@@ -18,9 +18,18 @@
             без ручной сборки.
           </p>
         </div>
+        <div
+          v-if="scenario.blocked"
+          class="flex items-start gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3.5"
+        >
+          <Icon name="alert-triangle" :size="18" class="text-rose-600 shrink-0 mt-0.5" />
+          <p class="font-sans text-[0.875rem] text-rose-700 leading-normal">
+            {{ scenario.blockedReason ?? "Сценарий временно заблокирован автором." }}
+          </p>
+        </div>
         <StepProgress :steps="previewSteps" />
         <div>
-          <Button variant="primary" :disabled="starting" @click="startRun">
+          <Button variant="primary" :disabled="starting || scenario.blocked" @click="startRun">
             {{ starting ? "Запуск…" : "Получить результат" }}
             <template #right><Icon name="arrow-right" :size="18" /></template>
           </Button>
@@ -249,7 +258,13 @@ interface PageState {
 type Phase = "idle" | "starting" | "running" | "waiting" | "done" | "error" | "cancelled";
 
 const loading = ref(true);
-const scenario = ref<{ title: string; tagline?: string; steps: Step[] } | null>(null);
+const scenario = ref<{
+  title: string;
+  tagline?: string;
+  steps: Step[];
+  blocked?: boolean;
+  blockedReason?: string;
+} | null>(null);
 const starting = ref(false);
 const phase = ref<Phase>("idle");
 const stepProgress = ref<StepProgress[]>([]);
@@ -374,6 +389,8 @@ async function fetchScenario() {
         title: s.title,
         tagline: s.tagline,
         steps: (s.steps ?? []) as Step[],
+        blocked: s.blocked,
+        blockedReason: s.blockedReason,
       };
       emit("loaded", { title: s.title, tagline: s.tagline });
     }
@@ -393,10 +410,19 @@ async function startRun() {
   starting.value = true;
   phase.value = "starting";
   try {
-    const { data } = await $api.POST("/api/runs", {
+    const { data, error: apiError } = await $api.POST("/api/runs", {
       body: { scenarioId: props.scenarioId },
     });
-    if (!data) return;
+    if (apiError || !data) {
+      starting.value = false;
+      phase.value = "error";
+      // Сценарий может быть заблокирован (шаг ссылается на удалённый API) —
+      // сервер возвращает 400 с понятным текстом, показываем его как есть.
+      errorMessage.value =
+        (apiError as { message?: string } | undefined)?.message ??
+        "Не удалось создать запуск";
+      return;
+    }
     runId.value = (data as { id?: string; _id?: string }).id
       ?? (data as { _id?: string })._id
       ?? "";

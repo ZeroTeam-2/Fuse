@@ -176,6 +176,8 @@ export class MarketplaceService {
       description: scenario.description,
       providersDetail,
       steps,
+      blocked: scenario.blocked,
+      blockedReason: scenario.blockedReason,
     };
   }
 

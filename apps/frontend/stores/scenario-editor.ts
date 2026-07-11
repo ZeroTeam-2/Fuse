@@ -11,6 +11,8 @@ export const useScenarioEditorStore = defineStore("scenarioEditor", {
       subcategory?: string;
       published: boolean;
       steps: Step[];
+      blocked?: boolean;
+      blockedReason?: string;
     },
     selectedStepIndex: null as number | null,
     saving: false,
