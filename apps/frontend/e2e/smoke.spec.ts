@@ -6,9 +6,10 @@ test.describe('Smoke tests', () => {
     await expect(page).toHaveTitle(/.+/)
   })
 
-  test('login page loads', async ({ page }) => {
+  test('/login redirects to the marketplace and opens the login modal', async ({ page }) => {
     await page.goto('/login')
-    await expect(page.locator('body')).toBeVisible()
+    await expect(page).toHaveURL(/\/$/)
+    await expect(page.getByRole('dialog')).toContainText('Войти с Яндекс ID')
   })
 
   test('no console errors on homepage', async ({ page }) => {

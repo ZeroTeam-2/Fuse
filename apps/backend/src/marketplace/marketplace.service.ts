@@ -26,6 +26,9 @@ export interface ProviderDetail {
 export interface MarketplaceCardDetail extends MarketplaceCard {
   description?: string;
   providersDetail: ProviderDetail[];
+  // Шаги опубликованного сценария — публичные: по ним рисуется превью запуска
+  // и playground, которые гость видит до входа.
+  steps: Step[];
 }
 
 function extractAppIds(steps: Step[]): Set<string> {
@@ -172,6 +175,7 @@ export class MarketplaceService {
       stepCount: steps.length,
       description: scenario.description,
       providersDetail,
+      steps,
     };
   }
 
