@@ -9,7 +9,11 @@
     <Card v-else padding="none">
       <div class="flex items-center justify-between gap-3 px-6 py-5 border-b border-zinc-200">
         <div class="flex items-center gap-2.5">
-          <Button variant="primary" :disabled="running || phase === 'done'" @click="runAll">
+          <Button
+            variant="primary"
+            :disabled="running || phase === 'done' || scenario.blocked"
+            @click="runAll"
+          >
             {{ running ? "Выполнение…" : "Выполнить все" }}
             <template #right><Icon name="play" :size="18" /></template>
           </Button>
@@ -18,6 +22,16 @@
           </Button>
         </div>
         <Button variant="secondary" size="sm" @click="reset">Сбросить</Button>
+      </div>
+
+      <div
+        v-if="scenario.blocked"
+        class="flex items-start gap-3 border-b border-rose-200 bg-rose-50 px-6 py-3.5"
+      >
+        <Icon name="alert-triangle" :size="18" class="text-rose-600 shrink-0 mt-0.5" />
+        <p class="font-sans text-[0.875rem] text-rose-700 leading-normal">
+          {{ scenario.blockedReason ?? "Сценарий временно заблокирован автором." }}
+        </p>
       </div>
 
       <div class="p-6 flex flex-col gap-[22px]">
@@ -170,7 +184,13 @@ const emit = defineEmits<{ loaded: [{ title: string; tagline?: string }] }>();
 const { $api } = useNuxtApp() as any;
 
 const loading = ref(true);
-const scenario = ref<{ title: string; tagline?: string; steps: Step[] } | null>(null);
+const scenario = ref<{
+  title: string;
+  tagline?: string;
+  steps: Step[];
+  blocked?: boolean;
+  blockedReason?: string;
+} | null>(null);
 const running = ref(false);
 const phase = ref<"idle" | "running" | "waiting" | "done" | "error">("idle");
 const stepStatuses = ref<Record<number, "pending" | "running" | "completed" | "failed">>({});
@@ -240,6 +260,8 @@ async function fetchScenario() {
         title: data.title,
         tagline: data.tagline,
         steps: (data.steps ?? []) as Step[],
+        blocked: data.blocked,
+        blockedReason: data.blockedReason,
       };
       emit("loaded", { title: data.title, tagline: data.tagline });
     }
@@ -261,10 +283,10 @@ async function runAll() {
   resetStepData();
 
   try {
-    const { data } = await $api.POST("/api/runs", {
+    const { data, error: apiError } = await $api.POST("/api/runs", {
       body: { scenarioId: props.scenarioId },
     });
-    if (!data) {
+    if (apiError || !data) {
       running.value = false;
       phase.value = "error";
       return;

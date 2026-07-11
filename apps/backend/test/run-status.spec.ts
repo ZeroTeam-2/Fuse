@@ -73,6 +73,16 @@ function setMockActiveRuns(runs: any[]) {
   MockRunModel.updateMany = vi.fn(() => mockQuery({ acknowledged: true }));
 }
 
+class MockScenarioModel {
+  static _findByIdValue: any = { _id: "scenario-1", blocked: false };
+  static findById = vi.fn(() => mockQuery(MockScenarioModel._findByIdValue));
+}
+
+function setMockScenario(scenario: any) {
+  MockScenarioModel._findByIdValue = scenario;
+  MockScenarioModel.findById = vi.fn(() => mockQuery(scenario));
+}
+
 describe("Run status transitions", () => {
   let service: ExecutionService;
   let mockConfig: Partial<ConfigService>;
@@ -81,6 +91,7 @@ describe("Run status transitions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setMockValues(null, null);
+    setMockScenario({ _id: "scenario-1", blocked: false });
     mockConfig = {
       get: vi.fn((key: string) => {
         if (key === "AWS_SQS_QUEUE_URL") return "http://localhost:4566/000000000000/scenario-execution";
@@ -93,6 +104,7 @@ describe("Run status transitions", () => {
     mockGateway = { publish: vi.fn() };
     service = new ExecutionService(
       MockRunModel as any,
+      MockScenarioModel as any,
       mockConfig as ConfigService,
       mockGateway as any,
     );
@@ -102,6 +114,26 @@ describe("Run status transitions", () => {
     it("createRun sets initial status to PENDING", async () => {
       const run = await service.createRun("user-1", "scenario-1");
       expect(run.status).toBe(RunStatus.PENDING);
+    });
+
+    it("createRun rejects when the scenario is blocked", async () => {
+      setMockScenario({
+        _id: "scenario-1",
+        blocked: true,
+        blockedReason: "Приложение «X» удалено",
+      });
+
+      await expect(
+        service.createRun("user-1", "scenario-1"),
+      ).rejects.toThrow(/удалено/);
+    });
+
+    it("createRun rejects when the scenario does not exist", async () => {
+      setMockScenario(null);
+
+      await expect(
+        service.createRun("user-1", "scenario-missing"),
+      ).rejects.toThrow();
     });
 
     it("RunStatus enum defines the full lifecycle", () => {

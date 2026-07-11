@@ -32,6 +32,17 @@ export class Scenario {
 
   @Prop({ default: 0 })
   runCount: number;
+
+  /**
+   * Выставляется, когда удаляют приложение, на которое ссылается один из
+   * шагов (см. `AppsService.delete`) — пока флаг не снят, `ExecutionService`
+   * отказывает в создании нового `Run` для этого сценария.
+   */
+  @Prop({ default: false })
+  blocked: boolean;
+
+  @Prop()
+  blockedReason?: string;
 }
 
 export type ScenarioDocument = HydratedDocument<Scenario>;

@@ -36,6 +36,7 @@
         </NuxtLink>
         <PublishButton
           :published="store.scenario.published"
+          :disabled="store.scenario.blocked"
           @publish="togglePublish"
           @unpublish="togglePublish"
         />
@@ -43,6 +44,21 @@
           <template #left><Icon name="trash-2" :size="16" /></template>
           Удалить
         </Button>
+      </div>
+
+      <div
+        v-if="store.scenario.blocked"
+        class="flex items-start gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3.5 mb-7"
+      >
+        <Icon name="alert-triangle" :size="18" class="text-rose-600 shrink-0 mt-0.5" />
+        <div class="font-sans text-[0.875rem] text-rose-700 leading-normal">
+          <span class="font-bold">Сценарий заблокирован.</span>
+          {{
+            store.scenario.blockedReason ??
+            "Один из шагов ссылается на удалённый API."
+          }}
+          Запуск недоступен, пока вы не удалите или не пересоберёте отмеченный шаг ниже.
+        </div>
       </div>
 
       <Modal
@@ -160,6 +176,7 @@
               :path="pathOf(step)"
               :title="step.title"
               :params="stepParams(i)"
+              :broken="!!step.broken"
               @edit="openStep(i)"
               @remove="removeStep(i)"
             />
@@ -258,6 +275,7 @@ function appIdOf(step: Step) {
 
 function providerOf(step: Step) {
   const id = appIdOf(step);
+  if (step.broken) return "Удалённое приложение";
   if (id) return appNames.value[id] ?? "API";
   return TYPE_LABELS[step.type] ?? "Шаг";
 }

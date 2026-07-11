@@ -118,8 +118,23 @@ export class ScenariosService {
       }
     }
 
+    const updateQuery: Record<string, unknown> = { $set: { ...dto } };
+
+    // Разблокировка сценария живёт здесь же: как только пользователь убирает
+    // (или пересобирает) шаг с `broken: true`, следующее сохранение шагов
+    // само снимает блокировку — отдельная ручка "разблокировать" не нужна.
+    if (dto.steps) {
+      const stillBroken = (dto.steps as Step[]).some(
+        (s) => (s as { broken?: boolean }).broken === true,
+      );
+      (updateQuery.$set as Record<string, unknown>).blocked = stillBroken;
+      if (!stillBroken) {
+        updateQuery.$unset = { blockedReason: "" };
+      }
+    }
+
     const updated = await this.scenarioModel
-      .findByIdAndUpdate(id, { $set: dto }, { new: true })
+      .findByIdAndUpdate(id, updateQuery, { new: true })
       .exec();
 
     if (!updated) {
@@ -134,6 +149,13 @@ export class ScenariosService {
     if (!scenario.published && scenario.steps.length === 0) {
       throw new BadRequestException(
         "Cannot publish a scenario with no steps",
+      );
+    }
+
+    if (!scenario.published && scenario.blocked) {
+      throw new BadRequestException(
+        scenario.blockedReason ??
+          "Cannot publish a blocked scenario — fix the broken step first",
       );
     }
 

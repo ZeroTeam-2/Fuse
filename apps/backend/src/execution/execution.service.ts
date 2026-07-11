@@ -11,6 +11,7 @@ import { Model } from "mongoose";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { RunStatus } from "@fuse/shared";
 import { Run, RunDocument } from "./run.schema";
+import { Scenario, ScenarioDocument } from "../scenarios/scenario.schema";
 import { RunGateway } from "../websocket/run.gateway";
 
 const TERMINAL_RUN_STATUSES: RunStatus[] = [
@@ -27,6 +28,8 @@ export class ExecutionService {
 
   constructor(
     @InjectModel(Run.name) private readonly runModel: Model<RunDocument>,
+    @InjectModel(Scenario.name)
+    private readonly scenarioModel: Model<ScenarioDocument>,
     private readonly configService: ConfigService,
     private readonly gateway: RunGateway,
   ) {
@@ -44,6 +47,21 @@ export class ExecutionService {
   }
 
   async createRun(userId: string, scenarioId: string): Promise<RunDocument> {
+    const scenario = await this.scenarioModel.findById(scenarioId).exec();
+    if (!scenario) {
+      throw new NotFoundException(`Scenario #${scenarioId} not found`);
+    }
+
+    // Сценарий заблокирован, потому что один из шагов ссылается на удалённое
+    // приложение (см. `AppsService.delete`) — запускать его нет смысла, шаг
+    // всё равно упадёт на отсутствующем appId.
+    if (scenario.blocked) {
+      throw new BadRequestException(
+        scenario.blockedReason ??
+          "Сценарий заблокирован: один из шагов ссылается на удалённый API. Исправьте или удалите этот шаг, чтобы запустить сценарий снова.",
+      );
+    }
+
     const run = await new this.runModel({
       scenarioId,
       userId,

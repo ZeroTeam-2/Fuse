@@ -20,6 +20,8 @@ withDefaults(
     path?: string;
     title?: string;
     params?: StepParam[];
+    /** Шаг ссылается на удалённое приложение/API — сценарий из-за него заблокирован. */
+    broken?: boolean;
   }>(),
   {
     index: 1,
@@ -29,6 +31,7 @@ withDefaults(
     providerDot: "#8b5cf6",
     method: "POST",
     params: () => [],
+    broken: false,
   },
 );
 
@@ -36,7 +39,12 @@ const emit = defineEmits<{ edit: []; remove: [] }>();
 </script>
 
 <template>
-  <div class="bg-white border border-zinc-200 rounded-2xl shadow-sm overflow-hidden">
+  <div
+    :class="[
+      'bg-white rounded-2xl shadow-sm overflow-hidden',
+      broken ? 'border-2 border-rose-300' : 'border border-zinc-200',
+    ]"
+  >
     <div class="flex items-center gap-3 px-4 py-3.5">
       <span class="inline-flex text-zinc-400 cursor-grab">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -54,7 +62,14 @@ const emit = defineEmits<{ edit: []; remove: [] }>();
         >{{ index }}</span
       >
       <span
-        v-if="typeLabel"
+        v-if="broken"
+        class="shrink-0 inline-flex items-center font-sans font-semibold leading-none rounded-full whitespace-nowrap text-[0.6875rem] gap-1.5 px-2 py-1 bg-rose-100 text-rose-600"
+      >
+        <Icon name="alert-triangle" :size="12" />
+        API удалён
+      </span>
+      <span
+        v-else-if="typeLabel"
         class="shrink-0 inline-flex items-center font-sans font-semibold leading-none rounded-full whitespace-nowrap text-[0.6875rem] gap-1.5 px-2 py-1 bg-violet-100 text-violet-600"
         >{{ typeLabel }}</span
       >

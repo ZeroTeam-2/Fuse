@@ -10,6 +10,7 @@ import type {
   ImportPreviewResult,
   PaginatedResponse,
   ReimportDiff,
+  Step,
 } from "@fuse/shared";
 import { App, AppDocument } from "./app.schema";
 import { Scenario, ScenarioDocument } from "../scenarios/scenario.schema";
@@ -217,11 +218,15 @@ export class AppsService {
   }
 
   async delete(id: string): Promise<AppDocument> {
-    // Сценарии, чьи шаги используют это приложение, всё равно перестанут
-    // работать (шаг ссылается на удалённый appId) — но уже запущенные их
-    // `Run`ы должны быть остановлены явно, а не продолжать висеть в воркере.
-    const affectedScenarioIds = await this.findScenarioIdsUsingApp(id);
-    await this.executionService.cancelActiveRunsForScenarios(affectedScenarioIds);
+    const app = await this.findById(id);
+
+    // Сценарии, чьи шаги используют это приложение, теперь не просто
+    // "перестанут работать" молча — шаг помечается `broken`, а сам сценарий
+    // блокируется от запуска, пока пользователь не удалит/пересоберёт шаг.
+    // Уже запущенные `Run`ы этих сценариев отменяются явно, иначе воркер
+    // продолжил бы их выполнять в фоне после удаления приложения.
+    const blockedScenarioIds = await this.blockScenariosUsingApp(id, app.name);
+    await this.executionService.cancelActiveRunsForScenarios(blockedScenarioIds);
 
     const deleted = await this.appModel.findByIdAndDelete(id).exec();
     if (!deleted) {
@@ -230,13 +235,37 @@ export class AppsService {
     return deleted;
   }
 
-  private async findScenarioIdsUsingApp(appId: string): Promise<string[]> {
+  private async blockScenariosUsingApp(
+    appId: string,
+    appName: string,
+  ): Promise<string[]> {
     const scenarios = await this.scenarioModel
       .find({ "steps.appId": appId })
-      .select("_id")
-      .lean()
       .exec();
 
-    return scenarios.map((s) => s._id.toString());
+    const blockedIds: string[] = [];
+
+    for (const scenario of scenarios) {
+      const steps = (scenario.steps ?? []) as Step[];
+      let changed = false;
+
+      const markedSteps = steps.map((step) => {
+        if ("appId" in step && step.appId === appId && !step.broken) {
+          changed = true;
+          return { ...step, broken: true };
+        }
+        return step;
+      });
+
+      if (!changed) continue;
+
+      scenario.steps = markedSteps as never;
+      scenario.blocked = true;
+      scenario.blockedReason = `Приложение «${appName}» удалено — обновите или удалите отмеченный шаг, чтобы разблокировать сценарий`;
+      await scenario.save();
+      blockedIds.push(scenario._id.toString());
+    }
+
+    return blockedIds;
   }
 }
