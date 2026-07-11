@@ -64,7 +64,7 @@
 - [x] 7.5 Мои API (`pages/my/apps/index.vue`, `[id]/index.vue`, `new.vue`, `[id]/update.vue`) — AppRow, ProviderIcon, EndpointRow
 - [x] 7.6 Мои сценарии (`pages/my/scenarios/index.vue`, `new.vue`) — ScenarioCard, PublishButton
 - [x] 7.7 Редактор сценария (`pages/my/scenarios/[id]/edit.vue`) — ScenarioStep, Modal (add-step / new-page), StepConfig/StepPicker/PageEditor
-- [ ] 7.8 Профиль (`pages/profile/index.vue`) — Avatar, KeyValueGrid, Tabs
+- [x] 7.8 Профиль (`pages/profile/index.vue`) — Avatar, KeyValueGrid, Tabs
 - [ ] 7.9 Логин (`pages/login/index.vue`) — Input, Button, BrandMark
 - [ ] 7.10 Убрать устаревшие индиго scoped-стили и самописный `avatar-placeholder`/`logo` из layout и страниц
 
