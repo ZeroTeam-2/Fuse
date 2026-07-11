@@ -18,6 +18,7 @@ import type {
   ScenarioStepRef,
   FileStep,
   RunStepResult,
+  SchemaField,
   ServerWsEvent,
 } from "@fuse/shared";
 import { Run, RunDocument } from "./run.schema";
@@ -26,7 +27,8 @@ import { App, AppDocument } from "../apps/app.schema";
 import { SsrfGuard } from "../apps/ssrf-guard";
 import { joinBaseUrl } from "../apps/base-url";
 import { RunGateway } from "../websocket/run.gateway";
-import { resolveMappings } from "./mapping-resolver";
+import { resolveMappings, groupInputsByLocation } from "./mapping-resolver";
+import type { LocatedInputs } from "./mapping-resolver";
 import { StepExecutionError, RunCancelledError } from "./execution-errors";
 
 const POLL_TIMEOUT_MS = 5 * 60 * 1000;
@@ -427,7 +429,7 @@ export class WorkerService
   private async resolveStepUrl(
     appId: string,
     path: string,
-    resolved: Record<string, unknown>,
+    located: LocatedInputs,
     ctx: StepContext,
   ): Promise<string> {
     const app = await this.loadApp(appId, ctx);
@@ -438,7 +440,7 @@ export class WorkerService
       );
     }
 
-    const withPathParams = this.applyPathParams(path, resolved);
+    const withPathParams = this.applyPathParams(path, located.path);
 
     let url: string;
     try {
@@ -449,7 +451,7 @@ export class WorkerService
       );
     }
 
-    url = this.appendQuery(url, resolved);
+    url = this.appendQuery(url, located.query);
 
     try {
       await this.ssrfGuard.assertSafeUrl(url);
@@ -466,19 +468,25 @@ export class WorkerService
     ctx: StepContext,
   ): Promise<unknown> {
     const resolved = resolveMappings(step, ctx.stepResults, ctx.userInput, ctx.warnings);
-    const url = await this.resolveStepUrl(step.appId, step.path, resolved, ctx);
+
+    const app = await this.loadApp(step.appId, ctx);
+    const endpoint = (app.endpoints ?? []).find((ep) => ep.id === step.endpointId);
+    const inputs = (endpoint?.inputs ?? []) as unknown as SchemaField[];
+    const located = groupInputsByLocation(resolved, inputs, step.path);
+
+    const url = await this.resolveStepUrl(step.appId, step.path, located, ctx);
 
     const options: RequestInit = {
       method: step.method,
       headers: {
         "Content-Type": "application/json",
-        ...this.toStringRecord(resolved.headers),
+        ...this.toStringRecord(located.header),
       },
     };
 
     if (step.method !== "GET" && step.method !== "DELETE") {
-      if (resolved.body !== undefined) {
-        options.body = JSON.stringify(resolved.body);
+      if (Object.keys(located.body).length > 0) {
+        options.body = JSON.stringify(located.body);
       }
     }
 
@@ -504,28 +512,18 @@ export class WorkerService
     return response.text();
   }
 
-  private applyPathParams(
-    path: string,
-    resolved: Record<string, unknown>,
-  ): string {
+  private applyPathParams(path: string, pathParams: Record<string, unknown>): string {
     let result = path;
 
-    const pathParams = this.toRecord(resolved.path);
-    if (pathParams) {
-      for (const [key, value] of Object.entries(pathParams)) {
-        result = result.replace(`{${key}}`, String(value));
-      }
+    for (const [key, value] of Object.entries(pathParams)) {
+      if (value === undefined || value === null) continue;
+      result = result.replace(`{${key}}`, encodeURIComponent(String(value)));
     }
 
     return result;
   }
 
-  private appendQuery(url: string, resolved: Record<string, unknown>): string {
-    const queryParams = this.toRecord(resolved.query);
-    if (!queryParams) {
-      return url;
-    }
-
+  private appendQuery(url: string, queryParams: Record<string, unknown>): string {
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(queryParams)) {
       if (value !== undefined && value !== null) {
@@ -550,15 +548,6 @@ export class WorkerService
     return result;
   }
 
-  private toRecord(
-    value: unknown,
-  ): Record<string, unknown> | undefined {
-    if (!value || typeof value !== "object") {
-      return undefined;
-    }
-    return value as Record<string, unknown>;
-  }
-
   private async executeDelayStep(step: DelayStep): Promise<unknown> {
     await this.sleep(step.seconds * 1000);
     return { delayed: step.seconds };
@@ -569,12 +558,10 @@ export class WorkerService
     ctx: StepContext,
   ): Promise<unknown> {
     const resolved = resolveMappings(step, ctx.stepResults, ctx.userInput, ctx.warnings);
-    const url = await this.resolveStepUrl(
-      step.appId,
-      step.pollPath,
-      resolved,
-      ctx,
-    );
+    // У периодического шага нет ссылки на эндпоинт, значит и схемы входов нет —
+    // раскладку спасают плейсхолдеры пути.
+    const located = groupInputsByLocation(resolved, [], step.pollPath);
+    const url = await this.resolveStepUrl(step.appId, step.pollPath, located, ctx);
     const intervalMs = (step.pollIntervalSec ?? 5) * 1000;
     const progressField = step.progressField;
     const startTime = Date.now();

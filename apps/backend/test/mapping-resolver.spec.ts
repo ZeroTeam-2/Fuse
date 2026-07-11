@@ -5,6 +5,7 @@ import {
   resolveTemplate,
   buildTemplateContext,
   filterInputKey,
+  groupInputsByLocation,
 } from "../src/execution/mapping-resolver";
 import { StepExecutionError } from "../src/execution/execution-errors";
 
@@ -258,6 +259,46 @@ describe("MappingResolver", () => {
     });
   });
 
+  describe("groupInputsByLocation", () => {
+    const INPUTS = [
+      { key: "guid", label: "guid", type: "string" as const, loc: "path" as const },
+      { key: "limit", label: "limit", type: "number" as const, loc: "query" as const },
+      { key: "Authorization", label: "Authorization", type: "string" as const, loc: "header" as const },
+      { key: "name", label: "name", type: "string" as const, loc: "body" as const },
+    ];
+
+    it("splits resolved inputs by their place in the request", () => {
+      const located = groupInputsByLocation(
+        { guid: "u-1", limit: 10, Authorization: "Bearer t", name: "ООО Ромашка" },
+        INPUTS,
+        "/collections/{guid}",
+      );
+
+      expect(located.path).toEqual({ guid: "u-1" });
+      expect(located.query).toEqual({ limit: 10 });
+      expect(located.header).toEqual({ Authorization: "Bearer t" });
+      expect(located.body).toEqual({ name: "ООО Ромашка" });
+    });
+
+    it("treats a path placeholder as authoritative over a stale schema", () => {
+      const located = groupInputsByLocation(
+        { guid: "u-1" },
+        [{ key: "guid", label: "guid", type: "string", loc: "body" }],
+        "/collections/{guid}",
+      );
+
+      expect(located.path).toEqual({ guid: "u-1" });
+      expect(located.body).toEqual({});
+    });
+
+    it("falls back to body for fields missing from the schema", () => {
+      const located = groupInputsByLocation({ extra: 1 }, [], "/collections");
+
+      expect(located.body).toEqual({ extra: 1 });
+      expect(located.path).toEqual({});
+    });
+  });
+
   describe("resolveMappings — array outputs", () => {
     const ORGS = [
       { id: "org-1", inn: "7707083893", amount: 900, active: false },
@@ -431,6 +472,27 @@ describe("MappingResolver", () => {
       });
 
       expect(result.orgId).toBe("org-1");
+    });
+
+    it("puts the filtered value where the request actually needs it", () => {
+      // Регрессия: раньше сборка запроса ждала `resolved.path`, а резолвер отдавал
+      // плоскую карту — path-параметр не подставлялся, и в URL уезжал `{orgId}`.
+      const step = stepWithFilter({
+        field: "inn",
+        op: "eq",
+        value: { mode: "const", const: "7707083893" },
+      });
+
+      const resolved = resolveMappings(step, collectionResult(ORGS));
+      const located = groupInputsByLocation(
+        resolved,
+        [{ key: "orgId", label: "orgId", type: "string", loc: "path" }],
+        "/orgs/{orgId}",
+      );
+
+      expect(located.path).toEqual({ orgId: "org-1" });
+      expect(located.query).toEqual({});
+      expect(located.body).toEqual({});
     });
 
     it("resolves a {{s0:key}} template in the condition operand", () => {

@@ -1,11 +1,20 @@
 import type {
   FilterOperator,
   RunStepResult,
+  SchemaField,
   Step,
   StepFilter,
   StepFilterValue,
 } from "@fuse/shared";
 import { StepExecutionError } from "./execution-errors";
+
+/** Разрешённые входы шага, разложенные по месту в HTTP-запросе. */
+export interface LocatedInputs {
+  path: Record<string, unknown>;
+  query: Record<string, unknown>;
+  header: Record<string, unknown>;
+  body: Record<string, unknown>;
+}
 
 const OPERATOR_LABELS: Record<FilterOperator, string> = {
   eq: "=",
@@ -235,6 +244,36 @@ export function resolveMappings(
   }
 
   return resolved;
+}
+
+/**
+ * Раскладывает плоский результат `resolveMappings` по месту в запросе.
+ *
+ * Без этого шага значения никуда не попадают: сборка запроса ждёт
+ * `resolved.path` / `resolved.query` / `resolved.headers`, а резолвер отдаёт
+ * плоскую карту по ключам полей — поэтому path- и query-параметры не
+ * подставлялись вообще, и в URL уезжал литеральный `{guid}`.
+ *
+ * Место берётся из схемы эндпоинта (`SchemaField.loc`), но плейсхолдер в пути
+ * важнее схемы: если в шаблоне есть `{guid}`, значение обязано уехать в путь,
+ * даже если схема разошлась с реальностью после переимпорта.
+ */
+export function groupInputsByLocation(
+  resolved: Record<string, unknown>,
+  inputs: SchemaField[],
+  pathTemplate: string,
+): LocatedInputs {
+  const locations = new Map(inputs.map((f) => [f.key, f.loc ?? "body"]));
+  const groups: LocatedInputs = { path: {}, query: {}, header: {}, body: {} };
+
+  for (const [key, value] of Object.entries(resolved)) {
+    const loc = pathTemplate.includes(`{${key}}`)
+      ? "path"
+      : (locations.get(key) ?? "body");
+    groups[loc as keyof LocatedInputs][key] = value;
+  }
+
+  return groups;
 }
 
 export function buildTemplateContext(
