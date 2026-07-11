@@ -32,6 +32,13 @@ describe("YandexAuthService", () => {
     mockUsersService = {
       findByYandexId: vi.fn().mockResolvedValue(null),
       findByEmail: vi.fn().mockResolvedValue(null),
+      findById: vi.fn().mockResolvedValue({
+        _id: "user-123",
+        email: "test@yandex.ru",
+        firstName: "Иван",
+        lastName: "Иванов",
+        avatarUrl: "https://avatars.yandex.net/test",
+      }),
       create: vi.fn().mockResolvedValue({
         _id: "user-123",
         email: "test@yandex.ru",
@@ -45,6 +52,8 @@ describe("YandexAuthService", () => {
 
     mockJwtService = {
       signAsync: vi.fn().mockResolvedValue("mock-jwt-token"),
+      verifyAsync: vi.fn().mockResolvedValue({ userId: "user-123", email: "test@yandex.ru" }),
+      decode: vi.fn().mockReturnValue({ exp: Math.floor(Date.now() / 1000) + 900 }),
     };
 
     service = new YandexAuthService(
@@ -113,6 +122,37 @@ describe("YandexAuthService", () => {
         lastName: "Иванов",
         avatarUrl: "https://avatars.yandex.net/get-yapic/avatar-1/islands-200",
       });
+    });
+  });
+
+  describe("refreshTokens", () => {
+    it("issues a new token pair when the refresh token is valid", async () => {
+      const result = await service.refreshTokens("valid-refresh-token");
+
+      expect(mockJwtService.verifyAsync).toHaveBeenCalledWith(
+        "valid-refresh-token",
+        expect.objectContaining({ secret: "test-secret-at-least-32-characters!!" }),
+      );
+      expect(mockUsersService.findById).toHaveBeenCalledWith("user-123");
+      expect(result.accessToken).toBe("mock-jwt-token");
+      expect(result.refreshToken).toBe("mock-jwt-token");
+      expect(result.accessTokenMaxAge).toBeGreaterThan(0);
+    });
+
+    it("throws when the refresh token is invalid or expired", async () => {
+      mockJwtService.verifyAsync = vi.fn().mockRejectedValue(new Error("expired"));
+
+      await expect(service.refreshTokens("bad-token")).rejects.toThrow(
+        "Invalid or expired refresh token",
+      );
+    });
+
+    it("throws when the user no longer exists", async () => {
+      mockUsersService.findById = vi.fn().mockRejectedValue(new Error("not found"));
+
+      await expect(service.refreshTokens("valid-refresh-token")).rejects.toThrow(
+        "User not found",
+      );
     });
   });
 });

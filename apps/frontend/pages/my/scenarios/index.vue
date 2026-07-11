@@ -44,8 +44,8 @@
             <Badge v-else tone="neutral">Черновик</Badge>
           </template>
           <template #actions>
-            <Button variant="secondary" size="sm" full-width @click.stop="openEditor(s.id)">
-              Редактировать
+            <Button variant="secondary" size="sm" full-width @click.stop="openPreview(s.id)">
+              Превью
             </Button>
           </template>
         </ScenarioCard>
@@ -118,6 +118,10 @@ function coverFor(s: Scenario, i: number): { src?: string; variant?: "striped" |
 
 function openEditor(id: string) {
   navigateTo(`/my/scenarios/${id}/edit`);
+}
+
+function openPreview(id: string) {
+  navigateTo(`/cards/${id}`);
 }
 
 async function loadScenarios() {
