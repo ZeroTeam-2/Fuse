@@ -39,13 +39,18 @@
             <strong class="text-zinc-900">{{ card.title }}</strong> — {{ card.tagline }}
           </p>
 
-          <template v-if="descriptionParagraphs.length">
+          <template v-if="descriptionHtml || descriptionParagraphs.length">
             <h3
               class="font-sans font-bold text-[1.0625rem] tracking-tight text-zinc-900 mb-3"
             >
               Описание
             </h3>
-            <div class="flex flex-col gap-2 mb-8">
+            <div
+              v-if="descriptionHtml"
+              class="fuse-richtext-view font-sans text-[0.9375rem] text-zinc-700 mb-8"
+              v-html="descriptionHtml"
+            />
+            <div v-else class="flex flex-col gap-2 mb-8">
               <p
                 v-for="(para, i) in descriptionParagraphs"
                 :key="i"
@@ -165,9 +170,18 @@ const runViews = ["Результат", "Playground"];
 const eyebrow =
   "font-sans text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-zinc-400 mb-3";
 
-const descriptionParagraphs = computed(() =>
-  card.value?.description ? card.value.description.split("\n").filter((p) => p.trim()) : [],
-);
+// Descriptions written via the RichTextEditor come back as sanitized HTML;
+// older, plain-text descriptions (no tags) still fall back to the
+// newline-split paragraph rendering below.
+const descriptionHtml = computed(() => {
+  const raw = card.value?.description ?? "";
+  return raw && hasHtmlTags(raw) ? sanitizeRichText(raw) : "";
+});
+
+const descriptionParagraphs = computed(() => {
+  const raw = card.value?.description ?? "";
+  return raw && !hasHtmlTags(raw) ? raw.split("\n").filter((p) => p.trim()) : [];
+});
 
 const allEndpoints = computed(() =>
   (card.value?.providersDetail ?? []).flatMap((p) =>

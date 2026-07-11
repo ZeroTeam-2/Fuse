@@ -103,12 +103,10 @@
           >
             Описание для маркетплейса
           </label>
-          <textarea
+          <RichTextEditor
             id="scenario-description"
             v-model="form.description"
-            rows="8"
             placeholder="Что делает этот сценарий и кому он полезен?"
-            class="w-full px-3.5 py-3 font-sans text-[0.9375rem] text-zinc-900 bg-white border border-zinc-200 rounded-xl outline-none transition resize-y placeholder:text-zinc-400 focus:border-rose-600 focus:ring-4 focus:ring-rose-600/20"
           />
         </div>
 
