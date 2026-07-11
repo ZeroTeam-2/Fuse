@@ -65,7 +65,11 @@ const canAdd = computed(() => {
 });
 
 async function loadApps() {
-  const { data } = await $api.GET("/api/apps", { params: { query: { limit: 100 } } });
+  // Any published app is fair game for a step, regardless of who owns it;
+  // unpublished apps (including the user's own drafts) must stay hidden here.
+  const { data } = await $api.GET("/api/apps", {
+    params: { query: { limit: 100, published: true } },
+  });
   if (data) apps.value = data.data ?? [];
 }
 

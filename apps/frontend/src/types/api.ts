@@ -645,6 +645,8 @@ export interface operations {
             query?: {
                 page?: number;
                 limit?: number;
+                /** @description Return any published app (any owner) instead of only the caller's apps */
+                published?: boolean;
             };
             header?: never;
             path?: never;
