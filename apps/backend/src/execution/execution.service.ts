@@ -11,6 +11,13 @@ import { Model } from "mongoose";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { RunStatus } from "@fuse/shared";
 import { Run, RunDocument } from "./run.schema";
+import { RunGateway } from "../websocket/run.gateway";
+
+const TERMINAL_RUN_STATUSES: RunStatus[] = [
+  RunStatus.COMPLETED,
+  RunStatus.FAILED,
+  RunStatus.CANCELLED,
+];
 
 @Injectable()
 export class ExecutionService {
@@ -21,6 +28,7 @@ export class ExecutionService {
   constructor(
     @InjectModel(Run.name) private readonly runModel: Model<RunDocument>,
     private readonly configService: ConfigService,
+    private readonly gateway: RunGateway,
   ) {
     const endpoint = this.configService.get<string>("AWS_ENDPOINT_URL");
     const region = this.configService.get<string>("AWS_REGION") ?? "us-east-1";
@@ -76,11 +84,7 @@ export class ExecutionService {
       throw new NotFoundException(`Run #${runId} not found`);
     }
 
-    if (
-      run.status === RunStatus.COMPLETED ||
-      run.status === RunStatus.FAILED ||
-      run.status === RunStatus.CANCELLED
-    ) {
+    if (TERMINAL_RUN_STATUSES.includes(run.status)) {
       throw new BadRequestException(
         `Cannot cancel run in status ${run.status}`,
       );
@@ -94,7 +98,61 @@ export class ExecutionService {
       )
       .exec();
 
+    await this.publishCancelled(updated!);
+
     return updated!;
+  }
+
+  /**
+   * Отменяет все незавершённые запуски для набора сценариев. Вызывается при
+   * удалении сценария/приложения — воркер проверяет `status === CANCELLED`
+   * между шагами (и во время поллинга/ожидания страницы), поэтому уже
+   * запущенные `Run`ы реально останавливаются, а не продолжают висеть в фоне
+   * после того, как сценарий/приложение исчезли из базы.
+   */
+  async cancelActiveRunsForScenarios(scenarioIds: string[]): Promise<number> {
+    if (scenarioIds.length === 0) {
+      return 0;
+    }
+
+    const activeRuns = await this.runModel
+      .find({
+        scenarioId: { $in: scenarioIds },
+        status: { $nin: TERMINAL_RUN_STATUSES },
+      })
+      .exec();
+
+    if (activeRuns.length === 0) {
+      return 0;
+    }
+
+    await this.runModel
+      .updateMany(
+        { _id: { $in: activeRuns.map((run) => run._id) } },
+        { $set: { status: RunStatus.CANCELLED } },
+      )
+      .exec();
+
+    await Promise.all(activeRuns.map((run) => this.publishCancelled(run)));
+
+    this.logger.log(
+      `Cancelled ${activeRuns.length} active run(s) for scenario(s): ${scenarioIds.join(", ")}`,
+    );
+
+    return activeRuns.length;
+  }
+
+  private async publishCancelled(run: RunDocument): Promise<void> {
+    this.gateway.publish(run._id.toString(), {
+      type: "run:status",
+      runId: run._id.toString(),
+      payload: {
+        status: RunStatus.CANCELLED,
+        currentStep: run.currentStep ?? 0,
+        stepResults: run.stepResults ?? [],
+      },
+      timestamp: new Date().toISOString(),
+    });
   }
 
   async submitPageData(

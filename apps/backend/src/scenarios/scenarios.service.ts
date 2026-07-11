@@ -15,6 +15,7 @@ import type {
 import { Scenario, ScenarioDocument } from "./scenario.schema";
 import { detectCycle } from "./cycle-guard";
 import { AppsService } from "../apps/apps.service";
+import { ExecutionService } from "../execution/execution.service";
 import type { CreateScenarioDto } from "./dto/create-scenario.dto";
 import type { UpdateScenarioDto } from "./dto/update-scenario.dto";
 
@@ -25,6 +26,7 @@ export class ScenariosService {
   constructor(
     @InjectModel(Scenario.name) private readonly scenarioModel: Model<ScenarioDocument>,
     private readonly appsService: AppsService,
+    private readonly executionService: ExecutionService,
   ) {}
 
   async findByOwner(
@@ -145,6 +147,11 @@ export class ScenariosService {
   }
 
   async delete(id: string): Promise<ScenarioDocument> {
+    // Уже запущенные `Run`ы этого сценария иначе продолжат исполняться в
+    // воркере даже после удаления самого сценария — их нужно остановить
+    // до (а не после) удаления, чтобы не проверять статус гонкой.
+    await this.executionService.cancelActiveRunsForScenarios([id]);
+
     const deleted = await this.scenarioModel.findByIdAndDelete(id).exec();
     if (!deleted) {
       throw new NotFoundException(`Scenario #${id} not found`);

@@ -12,8 +12,10 @@ import type {
   ReimportDiff,
 } from "@fuse/shared";
 import { App, AppDocument } from "./app.schema";
+import { Scenario, ScenarioDocument } from "../scenarios/scenario.schema";
 import { OpenApiParserService } from "./openapi-parser";
 import { SsrfGuard } from "./ssrf-guard";
+import { ExecutionService } from "../execution/execution.service";
 import type { CreateAppDto } from "./dto/create-app.dto";
 import type { ImportPreviewDto } from "./dto/import-preview.dto";
 import type { UpdateAppDto } from "./dto/update-app.dto";
@@ -32,8 +34,11 @@ function toSummary(ep: Endpoint): EndpointSummary {
 export class AppsService {
   constructor(
     @InjectModel(App.name) private readonly appModel: Model<AppDocument>,
+    @InjectModel(Scenario.name)
+    private readonly scenarioModel: Model<ScenarioDocument>,
     private readonly openapiParser: OpenApiParserService,
     private readonly ssrfGuard: SsrfGuard,
+    private readonly executionService: ExecutionService,
   ) {}
 
   async findByOwner(
@@ -212,10 +217,26 @@ export class AppsService {
   }
 
   async delete(id: string): Promise<AppDocument> {
+    // Сценарии, чьи шаги используют это приложение, всё равно перестанут
+    // работать (шаг ссылается на удалённый appId) — но уже запущенные их
+    // `Run`ы должны быть остановлены явно, а не продолжать висеть в воркере.
+    const affectedScenarioIds = await this.findScenarioIdsUsingApp(id);
+    await this.executionService.cancelActiveRunsForScenarios(affectedScenarioIds);
+
     const deleted = await this.appModel.findByIdAndDelete(id).exec();
     if (!deleted) {
       throw new NotFoundException(`App #${id} not found`);
     }
     return deleted;
+  }
+
+  private async findScenarioIdsUsingApp(appId: string): Promise<string[]> {
+    const scenarios = await this.scenarioModel
+      .find({ "steps.appId": appId })
+      .select("_id")
+      .lean()
+      .exec();
+
+    return scenarios.map((s) => s._id.toString());
   }
 }
