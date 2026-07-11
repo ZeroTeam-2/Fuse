@@ -23,7 +23,7 @@ FROM node:24-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
-    PORT=5173
+    NITRO_PORT=5173
 COPY --from=build /app/apps/frontend/.output ./.output
 EXPOSE 5173
 CMD ["node", ".output/server/index.mjs"]
