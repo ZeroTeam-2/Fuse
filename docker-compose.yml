@@ -66,12 +66,12 @@ services:
       NUXT_PUBLIC_API_BASE_URL: /
       NUXT_SESSION_SECRET: ${NUXT_SESSION_SECRET:?NUXT_SESSION_SECRET is required}
     expose:
-      - "3000"
+      - "5173"
     depends_on:
       backend:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:5173/"]
       interval: 15s
       timeout: 5s
       retries: 3
