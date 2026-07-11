@@ -1,16 +1,20 @@
 import {
   Controller,
   Get,
+  Post,
   Query,
+  Req,
   Res,
   Redirect,
   Logger,
+  UnauthorizedException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { ApiTags, ApiExcludeEndpoint } from "@nestjs/swagger";
-import type { Response } from "express";
+import type { Request, Response } from "express";
 import { YandexAuthService } from "./yandex-auth.service";
 import { Public } from "./decorators/public.decorator";
+import type { TokenPair } from "./auth.types";
 
 @ApiTags("auth")
 @Controller("auth")
@@ -48,24 +52,8 @@ export class AuthController {
     }
 
     try {
-      const { accessToken, refreshToken } = await this.yandexAuth.handleCallback(code);
-
-      const isProd = process.env.NODE_ENV === "production";
-      const cookieOpts = {
-        httpOnly: true,
-        secure: isProd,
-        sameSite: isProd ? ("none" as const) : ("lax" as const),
-        path: "/",
-      };
-
-      res.cookie("access_token", accessToken, {
-        ...cookieOpts,
-        maxAge: 15 * 60 * 1000,
-      });
-      res.cookie("refresh_token", refreshToken, {
-        ...cookieOpts,
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-      });
+      const tokens = await this.yandexAuth.handleCallback(code);
+      this.setAuthCookies(res, tokens);
 
       return res.redirect(appUrl);
     } catch (err) {
@@ -74,11 +62,46 @@ export class AuthController {
     }
   }
 
+  @Post("refresh")
+  @Public()
+  @ApiExcludeEndpoint()
+  async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    const refreshToken = (req.cookies as Record<string, string> | undefined)?.["refresh_token"];
+    if (!refreshToken) {
+      throw new UnauthorizedException("No refresh token");
+    }
+
+    const tokens = await this.yandexAuth.refreshTokens(refreshToken);
+    this.setAuthCookies(res, tokens);
+
+    return { success: true };
+  }
+
   @Get("logout")
+  @Public()
   @ApiExcludeEndpoint()
   logout(@Res({ passthrough: true }) res: Response) {
     res.clearCookie("access_token");
     res.clearCookie("refresh_token");
     return { success: true };
+  }
+
+  private setAuthCookies(res: Response, tokens: TokenPair) {
+    const isProd = process.env.NODE_ENV === "production";
+    const cookieOpts = {
+      httpOnly: true,
+      secure: isProd,
+      sameSite: isProd ? ("none" as const) : ("lax" as const),
+      path: "/",
+    };
+
+    res.cookie("access_token", tokens.accessToken, {
+      ...cookieOpts,
+      maxAge: tokens.accessTokenMaxAge,
+    });
+    res.cookie("refresh_token", tokens.refreshToken, {
+      ...cookieOpts,
+      maxAge: tokens.refreshTokenMaxAge,
+    });
   }
 }
