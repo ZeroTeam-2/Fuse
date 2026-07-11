@@ -40,16 +40,21 @@ export class AppsService {
     ownerId: string,
     page = 1,
     limit = 20,
+    onlyPublished = false,
   ): Promise<PaginatedResponse<AppDocument>> {
     const skip = (page - 1) * limit;
+    // Pickers that build on other apps (e.g. add-step app select) must only
+    // ever see published apps, from any owner, and never unpublished ones —
+    // including the caller's own drafts.
+    const filter = onlyPublished ? { published: true } : { ownerId };
     const [data, total] = await Promise.all([
       this.appModel
-        .find({ ownerId })
+        .find(filter)
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
         .exec(),
-      this.appModel.countDocuments({ ownerId }).exec(),
+      this.appModel.countDocuments(filter).exec(),
     ]);
 
     return {

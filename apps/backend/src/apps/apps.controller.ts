@@ -27,7 +27,10 @@ export class AppsController {
   constructor(private readonly appsService: AppsService) {}
 
   @Get()
-  @ApiOperation({ summary: "List user's apps (paginated)" })
+  @ApiOperation({
+    summary:
+      "List apps (paginated): by default the caller's own apps, or — with published=true — any published app from any owner",
+  })
   findByOwner(
     @Req() req: AuthenticatedRequest,
     @Query() query: PaginationQueryDto,
@@ -36,6 +39,7 @@ export class AppsController {
       req.user.userId,
       query.page,
       query.limit,
+      query.published,
     );
   }
 
