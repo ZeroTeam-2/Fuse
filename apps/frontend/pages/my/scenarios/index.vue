@@ -40,7 +40,8 @@
           :to="`/my/scenarios/${s.id}/edit`"
         >
           <template #status>
-            <Badge v-if="s.published" tone="success" dot>Опубликован</Badge>
+            <Badge v-if="s.blocked" tone="brand">Заблокирован</Badge>
+            <Badge v-else-if="s.published" tone="success" dot>Опубликован</Badge>
             <Badge v-else tone="neutral">Черновик</Badge>
           </template>
           <template #actions>

@@ -261,6 +261,9 @@ export class AppsService {
 
       scenario.steps = markedSteps as never;
       scenario.blocked = true;
+      // Заблокированный сценарий не может оставаться опубликованным — иначе
+      // он продолжил бы висеть в маркетплейсе со сломанным шагом.
+      scenario.published = false;
       scenario.blockedReason = `Приложение «${appName}» удалено — обновите или удалите отмеченный шаг, чтобы разблокировать сценарий`;
       await scenario.save();
       blockedIds.push(scenario._id.toString());
