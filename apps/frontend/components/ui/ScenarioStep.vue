@@ -62,7 +62,7 @@ const emit = defineEmits<{ edit: []; remove: [] }>();
         <span class="w-[7px] h-[7px] rounded-full" :style="{ background: providerDot }" />
         {{ provider }}
       </span>
-      <MethodBadge :method="method" />
+      <MethodBadge v-if="method" :method="method" />
       <code class="font-mono text-sm text-zinc-900 bg-transparent p-0">{{ path }}</code>
       <span class="ml-auto inline-flex items-center gap-2.5">
         <span v-if="auth" title="Требуется аутентификация" class="inline-flex text-amber-500">
@@ -84,7 +84,7 @@ const emit = defineEmits<{ edit: []; remove: [] }>();
           type="button"
           aria-label="Изменить"
           class="border-0 bg-transparent cursor-pointer text-zinc-400 hover:text-zinc-900 inline-flex p-0.5"
-          @click="emit('edit')"
+          @click.stop="emit('edit')"
         >
           <svg
             width="16"
@@ -104,7 +104,7 @@ const emit = defineEmits<{ edit: []; remove: [] }>();
           type="button"
           aria-label="Удалить"
           class="border-0 bg-transparent cursor-pointer text-zinc-400 hover:text-zinc-900 inline-flex p-0.5"
-          @click="emit('remove')"
+          @click.stop="emit('remove')"
         >
           <svg
             width="16"

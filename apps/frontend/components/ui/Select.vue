@@ -42,10 +42,42 @@ const norm = computed<SelectOption[]>(() =>
 const open = ref(false);
 const query = ref("");
 const rootRef = ref<HTMLElement | null>(null);
+const popRef = ref<HTMLElement | null>(null);
 const searchRef = ref<HTMLInputElement | null>(null);
 
+// The popover is teleported to <body> and positioned against the trigger, so it
+// is never clipped by (or forced to scroll inside) an overflow-hidden/auto
+// ancestor such as a Modal body or a drawer.
+const POPOVER_MAX = 360;
+const pos = ref({ top: 0, left: 0, width: 0, up: false });
+
+function reposition() {
+  const el = rootRef.value;
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  const below = window.innerHeight - r.bottom;
+  const up = below < POPOVER_MAX && r.top > below;
+  pos.value = {
+    top: up ? r.top - 8 : r.bottom + 8,
+    left: r.left,
+    width: r.width,
+    up,
+  };
+}
+
+const popStyle = computed(() => ({
+  position: "fixed" as const,
+  left: `${pos.value.left}px`,
+  width: `${pos.value.width}px`,
+  ...(pos.value.up
+    ? { bottom: `${window.innerHeight - pos.value.top}px` }
+    : { top: `${pos.value.top}px` }),
+  maxHeight: `${POPOVER_MAX}px`,
+}));
+
 const selectId = computed(
-  () => props.id || (props.label ? `sel-${props.label.replace(/\s+/g, "-").toLowerCase()}` : undefined),
+  () =>
+    props.id || (props.label ? `sel-${props.label.replace(/\s+/g, "-").toLowerCase()}` : undefined),
 );
 const selected = computed(() => norm.value.find((o) => o.value === model.value) || null);
 const hasMedia = computed(() => norm.value.some((o) => o.avatar || o.image));
@@ -54,7 +86,9 @@ const filtered = computed(() => {
   if (!props.searchable || !query.value.trim()) return norm.value;
   const q = query.value.trim().toLowerCase();
   return norm.value.filter((o) =>
-    [o.label, o.description, o.value].filter(Boolean).some((t) => String(t).toLowerCase().includes(q)),
+    [o.label, o.description, o.value]
+      .filter(Boolean)
+      .some((t) => String(t).toLowerCase().includes(q)),
   );
 });
 
@@ -69,7 +103,10 @@ function toggle() {
 }
 
 function onDocMouseDown(e: MouseEvent) {
-  if (open.value && rootRef.value && !rootRef.value.contains(e.target as Node)) open.value = false;
+  if (!open.value) return;
+  const target = e.target as Node;
+  if (rootRef.value?.contains(target) || popRef.value?.contains(target)) return;
+  open.value = false;
 }
 function onKey(e: KeyboardEvent) {
   if (open.value && e.key === "Escape") open.value = false;
@@ -77,8 +114,17 @@ function onKey(e: KeyboardEvent) {
 
 watch(open, (isOpen) => {
   if (isOpen) {
-    if (props.searchable) nextTick(() => searchRef.value?.focus());
+    reposition();
+    // Any scrollable ancestor moves the trigger, so track scroll in capture phase.
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    nextTick(() => {
+      reposition();
+      if (props.searchable) searchRef.value?.focus();
+    });
   } else {
+    window.removeEventListener("scroll", reposition, true);
+    window.removeEventListener("resize", reposition);
     query.value = "";
   }
 });
@@ -90,6 +136,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener("mousedown", onDocMouseDown);
   document.removeEventListener("keydown", onKey);
+  window.removeEventListener("scroll", reposition, true);
+  window.removeEventListener("resize", reposition);
 });
 </script>
 
@@ -146,106 +194,114 @@ onBeforeUnmount(() => {
     </button>
 
     <!-- Popover -->
-    <div
-      v-if="open"
-      class="absolute left-0 right-0 top-full mt-2 z-30 bg-white border border-zinc-200 rounded-xl shadow-[0_24px_64px_rgba(24,24,27,0.18)] overflow-hidden"
-    >
-      <div v-if="searchable" class="flex items-center gap-2.5 px-3.5 py-2.5 border-b border-zinc-150">
-        <span class="inline-flex text-zinc-400 shrink-0">
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <circle cx="11" cy="11" r="8" />
-            <path d="m21 21-4.3-4.3" />
-          </svg>
-        </span>
-        <input
-          ref="searchRef"
-          v-model="query"
-          type="text"
-          :placeholder="searchPlaceholder"
-          class="flex-1 min-w-0 border-0 outline-none bg-transparent font-sans text-[0.9375rem] text-zinc-900 placeholder:text-zinc-400"
-        />
-      </div>
-
-      <div class="max-h-72 overflow-y-auto p-1.5">
+    <Teleport to="body">
+      <div
+        v-if="open"
+        ref="popRef"
+        role="listbox"
+        :style="popStyle"
+        class="z-[1100] flex flex-col bg-white border border-zinc-200 rounded-xl shadow-[0_24px_64px_rgba(24,24,27,0.18)] overflow-hidden"
+      >
         <div
-          v-if="filtered.length === 0"
-          class="px-3 py-6 text-center font-sans text-[0.875rem] text-zinc-400"
+          v-if="searchable"
+          class="flex items-center gap-2.5 px-3.5 py-2.5 border-b border-zinc-150"
         >
-          Ничего не найдено
-        </div>
-        <button
-          v-for="opt in filtered"
-          :key="opt.value"
-          type="button"
-          :class="[
-            'flex items-center gap-3 w-full text-left rounded-lg transition cursor-pointer',
-            hasMedia ? 'px-2.5 py-2' : 'px-3 py-2.5',
-            opt.value === model
-              ? 'bg-rose-50 border border-rose-200'
-              : 'border border-transparent hover:bg-zinc-100',
-          ]"
-          @click="commit(opt)"
-        >
-          <!-- OptionMedia -->
-          <img
-            v-if="opt.image"
-            :src="opt.image"
-            alt=""
-            class="w-9 h-9 rounded-lg object-cover shrink-0 border border-zinc-200"
-          />
-          <span
-            v-else-if="opt.avatar"
-            class="w-9 h-9 rounded-lg shrink-0 inline-flex items-center justify-center font-sans font-bold text-[0.9375rem] text-white"
-            :style="{ background: opt.color || '#6366f1' }"
-            >{{ opt.avatar }}</span
-          >
-          <span
-            v-else
-            :class="[
-              'w-2 h-2 rounded-full shrink-0 transition',
-              opt.value === model ? 'bg-rose-600' : 'bg-zinc-300',
-            ]"
-          />
-
-          <span class="flex-1 min-w-0">
-            <span
-              :class="[
-                'block truncate font-sans text-[0.9375rem]',
-                opt.value === model ? 'font-semibold text-zinc-900' : 'font-medium text-zinc-800',
-              ]"
-              >{{ opt.label }}</span
-            >
-            <span
-              v-if="opt.description"
-              class="block truncate font-mono text-[0.75rem] text-zinc-400 mt-0.5"
-              >{{ opt.description }}</span
-            >
-          </span>
-          <span v-if="opt.value === model" class="inline-flex text-rose-600 shrink-0">
+          <span class="inline-flex text-zinc-400 shrink-0">
             <svg
               width="16"
               height="16"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              stroke-width="2.5"
+              stroke-width="2"
               stroke-linecap="round"
               stroke-linejoin="round"
             >
-              <polyline points="20 6 9 17 4 12" />
+              <circle cx="11" cy="11" r="8" />
+              <path d="m21 21-4.3-4.3" />
             </svg>
           </span>
-        </button>
+          <input
+            ref="searchRef"
+            v-model="query"
+            type="text"
+            :placeholder="searchPlaceholder"
+            class="flex-1 min-w-0 border-0 outline-none bg-transparent font-sans text-[0.9375rem] text-zinc-900 placeholder:text-zinc-400"
+          />
+        </div>
+
+        <div class="flex-1 min-h-0 overflow-y-auto p-1.5">
+          <div
+            v-if="filtered.length === 0"
+            class="px-3 py-6 text-center font-sans text-[0.875rem] text-zinc-400"
+          >
+            Ничего не найдено
+          </div>
+          <button
+            v-for="opt in filtered"
+            :key="opt.value"
+            type="button"
+            :class="[
+              'flex items-center gap-3 w-full text-left rounded-lg transition cursor-pointer',
+              hasMedia ? 'px-2.5 py-2' : 'px-3 py-2.5',
+              opt.value === model
+                ? 'bg-rose-50 border border-rose-200'
+                : 'border border-transparent hover:bg-zinc-100',
+            ]"
+            @click="commit(opt)"
+          >
+            <!-- OptionMedia -->
+            <img
+              v-if="opt.image"
+              :src="opt.image"
+              alt=""
+              class="w-9 h-9 rounded-lg object-cover shrink-0 border border-zinc-200"
+            />
+            <span
+              v-else-if="opt.avatar"
+              class="w-9 h-9 rounded-lg shrink-0 inline-flex items-center justify-center font-sans font-bold text-[0.9375rem] text-white"
+              :style="{ background: opt.color || '#6366f1' }"
+              >{{ opt.avatar }}</span
+            >
+            <span
+              v-else
+              :class="[
+                'w-2 h-2 rounded-full shrink-0 transition',
+                opt.value === model ? 'bg-rose-600' : 'bg-zinc-300',
+              ]"
+            />
+
+            <span class="flex-1 min-w-0">
+              <span
+                :class="[
+                  'block truncate font-sans text-[0.9375rem]',
+                  opt.value === model ? 'font-semibold text-zinc-900' : 'font-medium text-zinc-800',
+                ]"
+                >{{ opt.label }}</span
+              >
+              <span
+                v-if="opt.description"
+                class="block truncate font-mono text-[0.75rem] text-zinc-400 mt-0.5"
+                >{{ opt.description }}</span
+              >
+            </span>
+            <span v-if="opt.value === model" class="inline-flex text-rose-600 shrink-0">
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            </span>
+          </button>
+        </div>
       </div>
-    </div>
+    </Teleport>
   </div>
 </template>

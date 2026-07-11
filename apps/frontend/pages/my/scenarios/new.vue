@@ -1,57 +1,100 @@
 <template>
-  <div class="new-scenario-page">
-    <div class="form-card">
-      <h1 class="page-title">Новый сценарий</h1>
-      <form @submit.prevent="createScenario">
-        <label class="field">
-          <span class="label">Название</span>
-          <input v-model="form.title" type="text" class="input" required placeholder="Например: Проверка контрагента" />
-        </label>
-        <label class="field">
-          <span class="label">Описание</span>
-          <textarea v-model="form.description" class="input textarea" rows="4" placeholder="Что делает этот сценарий?" />
-        </label>
-        <label class="field">
-          <span class="label">Категория</span>
-          <select v-model="form.category" class="input" @change="form.subcategory = ''">
-            <option value="">Без категории</option>
-            <option v-for="cat in categories" :key="cat.name" :value="cat.name">{{ cat.name }}</option>
-          </select>
-        </label>
-        <label v-if="form.category && selectedCategory" class="field">
-          <span class="label">Подкатегория</span>
-          <select v-model="form.subcategory" class="input">
-            <option value="">Все</option>
-            <option v-for="sub in selectedCategory.subcategories" :key="sub" :value="sub">{{ sub }}</option>
-          </select>
-        </label>
-        <div v-if="error" class="error">{{ error }}</div>
-        <button type="submit" class="submit-btn" :disabled="creating">
-          {{ creating ? "Создание..." : "Создать сценарий" }}
-        </button>
+  <div class="max-w-[640px] mx-auto px-5 lg:px-8 pt-8 pb-20 flex flex-col gap-6">
+    <NuxtLink
+      to="/my/scenarios"
+      class="font-sans text-sm text-zinc-500 inline-flex items-center gap-1.5 hover:text-zinc-700"
+    >
+      ‹ Мои сценарии
+    </NuxtLink>
+
+    <Card padding="xl" class="flex flex-col gap-6">
+      <div>
+        <h1 class="font-sans font-extrabold text-[1.875rem] tracking-tight text-zinc-900">
+          Новый сценарий
+        </h1>
+        <p class="font-sans text-[0.9375rem] text-zinc-500 mt-1.5">
+          Опишите сценарий — шаги соберёте в редакторе.
+        </p>
+      </div>
+
+      <form class="flex flex-col gap-5" @submit.prevent="createScenario">
+        <Input v-model="form.title" label="Название" placeholder="Например: Проверка контрагента" />
+
+        <div class="flex flex-col gap-2">
+          <label
+            for="scenario-description"
+            class="text-[0.8125rem] font-sans font-semibold text-zinc-900"
+          >
+            Описание
+          </label>
+          <textarea
+            id="scenario-description"
+            v-model="form.description"
+            rows="4"
+            placeholder="Что делает этот сценарий?"
+            class="w-full px-3.5 py-3 font-sans text-[0.9375rem] text-zinc-900 bg-white border border-zinc-200 rounded-xl outline-none transition resize-y placeholder:text-zinc-400 focus:border-rose-600 focus:ring-4 focus:ring-rose-600/20"
+          />
+        </div>
+
+        <Select
+          v-model="form.category"
+          label="Категория"
+          placeholder="Без категории"
+          searchable
+          search-placeholder="Найти категорию…"
+          :options="categoryOptions"
+          @update:model-value="form.subcategory = ''"
+        />
+
+        <Select
+          v-if="subcategoryOptions.length"
+          v-model="form.subcategory"
+          label="Подкатегория"
+          placeholder="Все"
+          :options="subcategoryOptions"
+        />
+
+        <p
+          v-if="error"
+          class="font-sans text-[0.8125rem] text-rose-600 bg-rose-50 border border-rose-200 rounded-xl px-3.5 py-2.5"
+        >
+          {{ error }}
+        </p>
+
+        <div>
+          <Button variant="primary" type="submit" :disabled="!canCreate || creating">
+            {{ creating ? "Создание…" : "Создать сценарий" }}
+            <template #right><Icon name="arrow-right" :size="18" /></template>
+          </Button>
+        </div>
       </form>
-    </div>
+    </Card>
   </div>
 </template>
 
 <script setup lang="ts">
 import { CATEGORIES } from "@fuse/shared";
 
-const categories = CATEGORIES;
+const { $api } = useNuxtApp() as any;
+
 const form = reactive({ title: "", description: "", category: "", subcategory: "" });
 const creating = ref(false);
 const error = ref("");
 
-const selectedCategory = computed(() =>
-  form.category ? CATEGORIES.find((c) => c.name === form.category) : null,
+const canCreate = computed(() => !!form.title.trim());
+
+const categoryOptions = computed(() => CATEGORIES.map((c) => c.name));
+
+const subcategoryOptions = computed(
+  () => CATEGORIES.find((c) => c.name === form.category)?.subcategories ?? [],
 );
 
 async function createScenario() {
+  if (!canCreate.value) return;
   creating.value = true;
   error.value = "";
-  const { $api } = useNuxtApp() as any;
   try {
-    const { data, error: apiError } = await $api.POST("/api/scenarios", { body: form });
+    const { data, error: apiError } = await $api.POST("/api/scenarios", { body: { ...form } });
     if (apiError || !data) {
       error.value = "Не удалось создать сценарий";
       return;
@@ -64,16 +107,3 @@ async function createScenario() {
   }
 }
 </script>
-
-<style scoped>
-.new-scenario-page { max-width: 600px; margin: 0 auto; padding: 32px 24px; }
-.form-card { background: #fff; border: 1px solid #e4e4e7; border-radius: 12px; padding: 28px; }
-.page-title { font-size: 22px; font-weight: 800; color: #18181b; margin: 0 0 20px; }
-.field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
-.label { font-size: 13px; font-weight: 500; color: #52525b; }
-.input { padding: 10px 12px; border: 1px solid #e4e4e7; border-radius: 8px; font-size: 14px; color: #18181b; background: #fff; }
-.textarea { resize: vertical; }
-.error { color: #e11d48; font-size: 13px; margin-bottom: 12px; }
-.submit-btn { width: 100%; padding: 12px; border-radius: 8px; border: none; background: #6366f1; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; }
-.submit-btn:disabled { opacity: 0.5; }
-</style>

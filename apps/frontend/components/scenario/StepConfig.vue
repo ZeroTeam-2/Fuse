@@ -1,89 +1,23 @@
-<template>
-  <div class="step-config">
-    <h3 class="config-title">{{ step.title }}</h3>
-    <span class="config-type">{{ typeLabels[step.type] }}</span>
-
-    <div v-if="step.type === 'api'" class="api-config">
-      <div class="info-row">
-        <span class="method-badge" :style="methodStyle(step.method)">{{ step.method }}</span>
-        <code class="path-code">{{ step.path }}</code>
-      </div>
-
-      <div v-if="schema" class="mapping-section">
-        <h4 class="section-label">Входные данные</h4>
-        <div v-for="field in schema.inputs" :key="field.key" class="mapping-row">
-          <div class="field-info">
-            <span class="field-key">{{ field.key }}</span>
-            <span v-if="field.loc" class="field-loc">{{ field.loc }}</span>
-            <span v-if="field.required" class="field-required">*</span>
-          </div>
-          <select v-model="mappings[field.key]" class="mapping-select" @change="emitUpdate">
-            <option value="user">Ввод пользователя</option>
-            <option value="const">Константа</option>
-            <option v-for="up in upstreamOutputs" :key="up.token" :value="up.token">
-              {{ up.label }} (шаг {{ up.stepIdx + 1 }})
-            </option>
-          </select>
-          <input
-            v-if="mappings[field.key] === 'const'"
-            v-model="consts[field.key]"
-            type="text"
-            class="const-input"
-            :placeholder="field.key === 'Authorization' ? 'Bearer {{access_token}}' : 'Значение'"
-            @input="emitUpdate"
-          />
-        </div>
-
-        <h4 class="section-label">Выходные данные</h4>
-        <div class="output-list">
-          <div v-for="out in schema.outputs" :key="out.key" class="output-item">
-            <span class="output-key">{{ out.key }}</span>
-            <span v-if="out.ex !== undefined" class="output-ex">{{ out.ex }}</span>
-          </div>
-          <div v-if="!schema.outputs.length" class="empty-outputs">Нет выходных полей</div>
-        </div>
-      </div>
-    </div>
-
-    <div v-else-if="step.type === 'delay'" class="delay-config">
-      <label class="field-label">Секунд задержки</label>
-      <input :value="step.seconds" type="number" min="1" max="600" class="text-input" readonly />
-    </div>
-
-    <div v-else-if="step.type === 'scenario'" class="scenario-config">
-      <p class="config-note">Вложенный сценарий: входы → выходы</p>
-    </div>
-
-    <div v-else-if="step.type === 'file'" class="file-config">
-      <p class="config-note">Загрузка файла (авто-режим по размеру)</p>
-      <p class="config-note">≤ 10 МБ: single upload · > 10 МБ: chunked</p>
-    </div>
-
-    <div v-else-if="step.type === 'periodic'" class="periodic-config">
-      <div class="info-row">
-        <span class="method-badge" :style="methodStyle(step.pollMethod)">{{ step.pollMethod }}</span>
-        <code class="path-code">{{ step.pollPath }}</code>
-      </div>
-      <label class="field-label">Интервал (сек)</label>
-      <input :value="step.pollIntervalSec" type="number" class="text-input" readonly />
-    </div>
-  </div>
-</template>
-
 <script setup lang="ts">
-import type { Step, SchemaField } from "@fuse/shared";
+// Right-side drawer: configure where each input of a step comes from, review the
+// outputs it hands to later steps, and attach an input page.
+import type { SchemaField, Step } from "@fuse/shared";
 
 const props = defineProps<{
   step: Step;
   stepIndex: number;
-  scenarioId: string;
+  steps: Step[];
+  // Input/output schema per step index, resolved by the page.
+  schemas: { inputs: SchemaField[]; outputs: SchemaField[] }[];
 }>();
 
-const emit = defineEmits<{ update: [step: Step] }>();
+const emit = defineEmits<{
+  update: [step: Step];
+  "edit-page": [];
+  close: [];
+}>();
 
-const { $api } = useNuxtApp() as any;
-
-const typeLabels: Record<string, string> = {
+const TYPE_LABELS: Record<string, string> = {
   api: "Endpoint API",
   scenario: "Другой сценарий",
   delay: "Задержка",
@@ -91,61 +25,419 @@ const typeLabels: Record<string, string> = {
   periodic: "Периодический запрос",
 };
 
-const schema = ref<{ inputs: SchemaField[]; outputs: SchemaField[] } | null>(null);
-const mappings = reactive<Record<string, string>>({ ...props.step.mappings });
-const consts = reactive<Record<string, string>>({ ...props.step.consts });
-const upstreamOutputs = ref<{ token: string; label: string; stepIdx: number }[]>([]);
+const GROUPS = [
+  { loc: "path", title: "Path-параметры", dot: "bg-indigo-500" },
+  { loc: "query", title: "Query-параметры", dot: "bg-sky-500" },
+  { loc: "header", title: "Заголовки · Header", dot: "bg-amber-500" },
+  { loc: "body", title: "Тело запроса · Body", dot: "bg-emerald-500" },
+] as const;
 
-async function loadSchema() {
-  try {
-    const [schemaRes, upstreamRes] = await Promise.all([
-      $api.GET(`/api/scenarios/${props.scenarioId}/step-schema/${props.stepIndex}`, {}),
-      $api.GET(`/api/scenarios/${props.scenarioId}/step-schema/${props.stepIndex}`, {}),
-    ]);
-    if (schemaRes.data.value) {
-      schema.value = schemaRes.data.value;
-    }
-  } catch {
-    // schema not available
+const PAGE_LABELS: Record<string, string> = {
+  fields: "Ввод полей",
+  file: "Загрузка файла",
+  text: "Отображение текста",
+};
+
+interface FieldState {
+  mode: "user" | "const" | "ref";
+  constValue: string;
+  refStep: string;
+  refField: string;
+}
+
+const state = reactive<Record<string, FieldState>>({});
+
+const schema = computed(() => props.schemas[props.stepIndex] ?? { inputs: [], outputs: [] });
+
+const typeLabel = computed(() => TYPE_LABELS[props.step.type] ?? "Шаг");
+const method = computed(() =>
+  props.step.type === "api"
+    ? props.step.method
+    : props.step.type === "periodic"
+      ? props.step.pollMethod
+      : "",
+);
+const path = computed(() =>
+  props.step.type === "api"
+    ? props.step.path
+    : props.step.type === "periodic"
+      ? props.step.pollPath
+      : "",
+);
+
+const inputs = computed(() => schema.value.inputs ?? []);
+const outputs = computed(() => schema.value.outputs ?? []);
+
+const delaySeconds = computed(() => (props.step.type === "delay" ? props.step.seconds : 0));
+const pollInterval = computed(() =>
+  props.step.type === "periodic" ? props.step.pollIntervalSec : 0,
+);
+const pageTypeLabel = computed(() =>
+  props.step.page ? (PAGE_LABELS[props.step.page.type] ?? "") : "",
+);
+
+const CONST_HINT = "Можно подставить результат шага: {{s0:company_id}}";
+
+const prevStepOptions = computed(() =>
+  props.steps
+    .slice(0, props.stepIndex)
+    .map((s, i) => ({ value: String(i), label: `Шаг ${i + 1} · ${s.title}` }))
+    .filter((_, i) => (props.schemas[i]?.outputs.length ?? 0) > 0),
+);
+
+const modeOptions = computed(() => {
+  const base = [
+    { value: "user", label: "Ручной ввод" },
+    { value: "const", label: "Константа" },
+  ];
+  if (prevStepOptions.value.length) base.push({ value: "ref", label: "Из шага" });
+  return base;
+});
+
+function fieldsForStep(refStep: string) {
+  const idx = Number(refStep);
+  if (!refStep || Number.isNaN(idx)) return [];
+  return (props.schemas[idx]?.outputs ?? []).map((o) => ({
+    value: o.key,
+    label: o.label || o.key,
+    description: o.type,
+  }));
+}
+
+function groupFields(loc: string) {
+  return inputs.value.filter((f) => (f.loc ?? "body") === loc);
+}
+
+function hydrate() {
+  const mappings = props.step.mappings ?? {};
+  const consts = props.step.consts ?? {};
+  for (const field of inputs.value) {
+    const source = mappings[field.key];
+    const ref = typeof source === "string" ? source.match(/^s(\d+):(.+)$/) : null;
+    state[field.key] = {
+      mode: ref ? "ref" : source === "const" ? "const" : "user",
+      constValue: consts[field.key] ?? "",
+      refStep: ref ? ref[1] : "",
+      refField: ref ? ref[2] : "",
+    };
   }
 }
 
 function emitUpdate() {
-  emit("update", { ...props.step, mappings: { ...mappings }, consts: { ...consts } });
+  const mappings: Record<string, string> = {};
+  const consts: Record<string, string> = {};
+  for (const field of inputs.value) {
+    const s = state[field.key];
+    if (!s) continue;
+    if (s.mode === "const") {
+      mappings[field.key] = "const";
+      consts[field.key] = s.constValue;
+    } else if (s.mode === "ref") {
+      if (!s.refStep || !s.refField) continue;
+      mappings[field.key] = `s${s.refStep}:${s.refField}`;
+    } else {
+      mappings[field.key] = "user";
+    }
+  }
+  emit("update", { ...props.step, mappings, consts } as Step);
 }
 
-function methodStyle(m: string) {
-  const colors: Record<string, string> = { GET: "#0e9f6e", POST: "#e11d48", PUT: "#d97706", DELETE: "#dc2626", PATCH: "#6366f1" };
-  const bg: Record<string, string> = { GET: "#e7f8f1", POST: "#fdeaef", PUT: "#fef3e2", DELETE: "#fdecec", PATCH: "#eef2ff" };
-  return { color: colors[m] || "#6366f1", background: bg[m] || "#eef2ff" };
+function setMode(key: string, mode: string) {
+  state[key].mode = mode as FieldState["mode"];
+  if (mode !== "ref") {
+    state[key].refStep = "";
+    state[key].refField = "";
+  }
+  emitUpdate();
 }
 
-watch(() => props.stepIndex, loadSchema, { immediate: true });
+function setRefStep(key: string, value: string) {
+  state[key].refStep = value;
+  state[key].refField = "";
+  emitUpdate();
+}
+
+function setRefField(key: string, value: string) {
+  state[key].refField = value;
+  emitUpdate();
+}
+
+function updateDelay(seconds: number) {
+  emit("update", { ...props.step, seconds } as Step);
+}
+
+function updateInterval(pollIntervalSec: number) {
+  emit("update", { ...props.step, pollIntervalSec } as Step);
+}
+
+function removePage() {
+  const next = { ...props.step };
+  delete next.page;
+  emit("update", next as Step);
+}
+
+watch([() => props.stepIndex, inputs], hydrate, { immediate: true });
 </script>
 
-<style scoped>
-.step-config { display: flex; flex-direction: column; gap: 16px; }
-.config-title { font-size: 16px; font-weight: 700; color: #18181b; margin: 0; }
-.config-type { font-size: 12px; color: #71717a; }
-.api-config, .delay-config, .scenario-config, .file-config, .periodic-config { display: flex; flex-direction: column; gap: 12px; }
-.info-row { display: flex; align-items: center; gap: 8px; }
-.method-badge { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; font-family: monospace; }
-.path-code { font-size: 13px; color: #52525b; font-family: monospace; }
-.mapping-section { display: flex; flex-direction: column; gap: 12px; }
-.section-label { font-size: 13px; font-weight: 600; color: #52525b; margin: 0; }
-.mapping-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.field-info { display: flex; align-items: center; gap: 4px; min-width: 140px; }
-.field-key { font-size: 13px; font-weight: 500; color: #18181b; }
-.field-loc { font-size: 10px; color: #a1a1aa; background: #f4f4f5; padding: 1px 4px; border-radius: 3px; }
-.field-required { color: #e11d48; }
-.mapping-select { padding: 6px 10px; border: 1px solid #e4e4e7; border-radius: 6px; font-size: 13px; color: #18181b; flex: 1; min-width: 120px; }
-.const-input { padding: 6px 10px; border: 1px solid #e4e4e7; border-radius: 6px; font-size: 13px; flex: 1; min-width: 100px; }
-.output-list { display: flex; flex-direction: column; gap: 4px; }
-.output-item { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #f4f4f5; }
-.output-key { font-size: 13px; font-weight: 500; color: #18181b; }
-.output-ex { font-size: 12px; color: #71717a; }
-.empty-outputs { font-size: 13px; color: #a1a1aa; }
-.field-label { font-size: 13px; font-weight: 500; color: #52525b; }
-.text-input { padding: 8px 10px; border: 1px solid #e4e4e7; border-radius: 6px; font-size: 14px; }
-.config-note { font-size: 13px; color: #71717a; margin: 0; }
-</style>
+<template>
+  <div class="fixed inset-0 z-[1000] flex justify-end">
+    <div class="flex-1 bg-zinc-900/30 backdrop-blur-[1px]" @click="emit('close')" />
+    <div
+      class="w-[600px] max-w-full h-full bg-white border-l border-zinc-200 shadow-2xl flex flex-col"
+    >
+      <div class="flex items-start gap-3 px-7 pt-6 pb-5 border-b border-zinc-200">
+        <div class="flex-1 min-w-0">
+          <Badge tone="info" class="mb-2.5">{{ typeLabel }}</Badge>
+          <div class="font-sans font-bold text-[1.25rem] tracking-tight text-zinc-900 truncate">
+            {{ step.title }}
+          </div>
+          <div v-if="path" class="flex items-center gap-2 mt-2">
+            <MethodBadge :method="method" />
+            <code class="font-mono text-[0.8125rem] text-zinc-500 truncate">{{ path }}</code>
+          </div>
+        </div>
+        <IconButton variant="outline" label="Закрыть" :size="34" @click="emit('close')">
+          <Icon name="x" :size="16" />
+        </IconButton>
+      </div>
+
+      <div class="flex-1 overflow-y-auto px-7 py-7 flex flex-col">
+        <!-- Входные данные -->
+        <div>
+          <div class="flex items-start gap-3 mb-5">
+            <span
+              class="w-9 h-9 rounded-xl shrink-0 inline-flex items-center justify-center bg-indigo-50 text-indigo-600"
+            >
+              <Icon name="download" :size="18" />
+            </span>
+            <div class="min-w-0">
+              <div class="font-sans text-[0.9375rem] font-bold text-zinc-900">Входные данные</div>
+              <div class="font-sans text-[0.8125rem] text-zinc-500 mt-0.5">
+                Укажите, откуда брать значение для каждого параметра.
+              </div>
+            </div>
+          </div>
+
+          <div class="flex flex-col gap-7">
+            <div v-for="g in GROUPS" :key="g.loc">
+              <template v-if="groupFields(g.loc).length">
+                <div class="flex items-center gap-2 mb-3.5">
+                  <span :class="['w-2 h-2 rounded-full', g.dot]" />
+                  <div
+                    class="font-sans text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-zinc-500"
+                  >
+                    {{ g.title }}
+                  </div>
+                </div>
+                <div class="flex flex-col gap-3.5">
+                  <div
+                    v-for="f in groupFields(g.loc)"
+                    :key="f.key"
+                    class="border border-zinc-200 rounded-2xl p-4 flex flex-col gap-4"
+                  >
+                    <div>
+                      <div class="flex items-center gap-2">
+                        <code class="font-mono text-sm font-semibold text-zinc-900">{{ f.key }}</code>
+                        <span
+                          class="shrink-0 inline-flex items-center font-mono text-[0.6875rem] font-semibold tracking-wide text-sky-600"
+                          >{{ f.type }}</span
+                        >
+                        <span
+                          v-if="f.required"
+                          class="font-sans text-[0.6875rem] font-semibold text-rose-600 ml-auto"
+                          >обязательный</span
+                        >
+                      </div>
+                      <div
+                        v-if="f.label && f.label !== f.key"
+                        class="font-sans text-[0.8125rem] text-zinc-400 mt-1.5"
+                      >
+                        {{ f.label }}
+                      </div>
+                    </div>
+
+                    <SegmentedControl
+                      size="sm"
+                      :model-value="state[f.key]?.mode"
+                      :options="modeOptions"
+                      @update:model-value="setMode(f.key, $event as string)"
+                    />
+
+                    <Input
+                      v-if="state[f.key]?.mode === 'const'"
+                      v-model="state[f.key].constValue"
+                      mono
+                      placeholder="Значение константы"
+                      :hint="CONST_HINT"
+                      @update:model-value="emitUpdate"
+                    />
+
+                    <div v-else-if="state[f.key]?.mode === 'ref'" class="flex flex-col gap-2.5">
+                      <Select
+                        label="Шаг-источник"
+                        placeholder="Выберите шаг"
+                        :model-value="state[f.key].refStep"
+                        :options="prevStepOptions"
+                        @update:model-value="setRefStep(f.key, $event as string)"
+                      />
+                      <Select
+                        label="Поле результата"
+                        placeholder="Выберите поле"
+                        :model-value="state[f.key].refField"
+                        :options="fieldsForStep(state[f.key].refStep)"
+                        @update:model-value="setRefField(f.key, $event as string)"
+                      />
+                    </div>
+
+                    <div v-else class="font-sans text-[0.8125rem] text-zinc-400">
+                      Пользователь введёт значение при запуске сценария.
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </div>
+
+            <div
+              v-if="!inputs.length"
+              class="font-sans text-[0.8125rem] text-zinc-400 border border-dashed border-zinc-200 rounded-xl px-4 py-5 text-center"
+            >
+              У этого шага нет входных параметров.
+            </div>
+          </div>
+        </div>
+
+        <!-- Настройки типа шага -->
+        <div v-if="step.type === 'delay'" class="border-t border-zinc-200 mt-8 pt-8">
+          <div class="flex items-start gap-3 mb-5">
+            <span
+              class="w-9 h-9 rounded-xl shrink-0 inline-flex items-center justify-center bg-sky-50 text-sky-600"
+            >
+              <Icon name="clock" :size="18" />
+            </span>
+            <div class="min-w-0">
+              <div class="font-sans text-[0.9375rem] font-bold text-zinc-900">Длительность</div>
+              <div class="font-sans text-[0.8125rem] text-zinc-500 mt-0.5">
+                Пауза перед следующим шагом.
+              </div>
+            </div>
+          </div>
+          <Input
+            :model-value="delaySeconds"
+            type="number"
+            label="Секунд"
+            @update:model-value="updateDelay(Number($event))"
+          />
+        </div>
+
+        <div v-if="step.type === 'periodic'" class="border-t border-zinc-200 mt-8 pt-8">
+          <div class="flex items-start gap-3 mb-5">
+            <span
+              class="w-9 h-9 rounded-xl shrink-0 inline-flex items-center justify-center bg-sky-50 text-sky-600"
+            >
+              <Icon name="refresh-cw" :size="18" />
+            </span>
+            <div class="min-w-0">
+              <div class="font-sans text-[0.9375rem] font-bold text-zinc-900">Опрос</div>
+              <div class="font-sans text-[0.8125rem] text-zinc-500 mt-0.5">
+                Endpoint опрашивается, пока не вернёт результат.
+              </div>
+            </div>
+          </div>
+          <Input
+            :model-value="pollInterval"
+            type="number"
+            label="Интервал, секунд"
+            @update:model-value="updateInterval(Number($event))"
+          />
+        </div>
+
+        <!-- Выходные данные -->
+        <div class="border-t border-zinc-200 mt-8 pt-8">
+          <div class="flex items-start gap-3 mb-5">
+            <span
+              class="w-9 h-9 rounded-xl shrink-0 inline-flex items-center justify-center bg-violet-50 text-violet-600"
+            >
+              <Icon name="upload" :size="18" />
+            </span>
+            <div class="min-w-0">
+              <div class="font-sans text-[0.9375rem] font-bold text-zinc-900">Выходные данные</div>
+              <div class="font-sans text-[0.8125rem] text-zinc-500 mt-0.5">
+                Поля, которые шаг возвращает дальше.
+              </div>
+            </div>
+          </div>
+          <div v-if="outputs.length" class="border border-zinc-200 rounded-2xl overflow-hidden">
+            <div
+              v-for="(o, i) in outputs"
+              :key="o.key"
+              :class="['px-4 py-3 flex flex-col gap-1', i ? 'border-t border-zinc-100' : '']"
+            >
+              <div class="flex items-center gap-2">
+                <code class="font-mono text-sm font-semibold text-zinc-900">{{ o.key }}</code>
+                <span
+                  class="shrink-0 inline-flex items-center font-mono text-[0.6875rem] font-semibold tracking-wide text-sky-600"
+                  >{{ o.type }}</span
+                >
+                <code
+                  v-if="o.ex !== undefined"
+                  class="ml-auto font-mono text-[0.75rem] text-emerald-600 truncate max-w-[45%]"
+                  >{{ o.ex }}</code
+                >
+              </div>
+              <div v-if="o.label && o.label !== o.key" class="font-sans text-[0.8125rem] text-zinc-400">
+                {{ o.label }}
+              </div>
+            </div>
+          </div>
+          <div
+            v-else
+            class="font-sans text-[0.8125rem] text-zinc-400 border border-dashed border-zinc-200 rounded-xl px-4 py-5 text-center"
+          >
+            У этого шага нет выходных полей.
+          </div>
+          <div v-if="outputs.length" class="font-sans text-[0.75rem] text-zinc-400 mt-2.5">
+            Эти поля доступны как вход для следующих шагов.
+          </div>
+        </div>
+
+        <!-- Страница ввода -->
+        <div class="border-t border-zinc-200 mt-8 pt-8">
+          <div class="flex items-start gap-3 mb-5">
+            <span
+              class="w-9 h-9 rounded-xl shrink-0 inline-flex items-center justify-center bg-amber-50 text-amber-600"
+            >
+              <Icon name="layout-template" :size="18" />
+            </span>
+            <div class="min-w-0">
+              <div class="font-sans text-[0.9375rem] font-bold text-zinc-900">Страница ввода</div>
+              <div class="font-sans text-[0.8125rem] text-zinc-500 mt-0.5">
+                Экран, который увидит пользователь перед этим шагом.
+              </div>
+            </div>
+          </div>
+          <div v-if="step.page" class="border border-zinc-200 rounded-2xl p-4 flex items-center gap-3.5">
+            <div class="min-w-0 flex-1">
+              <div class="font-sans text-sm font-bold text-zinc-900 truncate">
+                {{ step.page.title }}
+              </div>
+              <div class="font-sans text-[0.8125rem] text-zinc-500 mt-0.5">
+                {{ pageTypeLabel }}
+              </div>
+            </div>
+            <Button variant="secondary" size="sm" @click="emit('edit-page')">Изменить</Button>
+            <Button variant="ghost" size="sm" @click="removePage">Удалить</Button>
+          </div>
+          <div v-else class="flex flex-col items-center gap-3 border border-dashed border-zinc-200 rounded-xl px-4 py-6">
+            <div class="font-sans text-[0.8125rem] text-zinc-400 text-center">
+              Страница не настроена — значения ручного ввода запросятся общей формой.
+            </div>
+            <Button variant="secondary" size="sm" @click="emit('edit-page')">
+              <template #left><Icon name="plus" :size="15" /></template>
+              Добавить страницу
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
