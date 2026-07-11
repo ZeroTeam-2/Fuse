@@ -22,7 +22,11 @@
       <p v-if="tagline" class="font-sans text-[0.9375rem] text-zinc-500 mt-1.5">{{ tagline }}</p>
     </div>
 
-    <RunPanel :scenario-id="scenarioId" @loaded="onLoaded" />
+    <RunPanel
+      :scenario-id="scenarioId"
+      @loaded="onLoaded"
+      @playground="navigateTo(`/cards/${scenarioId}/playground`)"
+    />
   </div>
 </template>
 

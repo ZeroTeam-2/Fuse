@@ -1,55 +1,50 @@
 <template>
-  <div class="apps-page">
-    <div class="page-header">
-      <h1 class="page-title">Мои API</h1>
-      <NuxtLink to="/my/apps/new" class="new-btn">Новое приложение</NuxtLink>
+  <div class="max-w-[1180px] xl:max-w-[1320px] mx-auto px-5 lg:px-8 pt-8 lg:pt-12 pb-20">
+    <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-4 sm:gap-6 mb-9">
+      <div class="max-w-[640px]">
+        <h1
+          class="font-sans font-extrabold text-[2rem] md:text-[2.75rem] leading-tight tracking-tight text-zinc-900 mb-3"
+        >
+          Приложения
+        </h1>
+        <p class="font-sans text-base text-zinc-500 leading-normal">
+          Подключённые API. Управляйте спецификациями и endpoints — сценарии собираются из них на
+          вкладке «Мои сценарии».
+        </p>
+      </div>
+      <Button variant="primary" @click="navigateTo('/my/apps/new')">
+        <template #left><Icon name="plus" :size="18" /></template>
+        Создать приложение
+      </Button>
     </div>
 
-    <div v-if="loading" class="state-text">Загрузка…</div>
+    <div v-if="loading" class="font-sans text-sm text-zinc-400 py-16 text-center">Загрузка…</div>
 
-    <div v-else-if="apps.length === 0" class="empty-state">
-      <p class="empty-text">У вас пока нет приложений</p>
-      <NuxtLink to="/my/apps/new" class="new-btn">Создать первое</NuxtLink>
+    <div v-else-if="!apps.length" class="flex flex-col items-center gap-5 py-16">
+      <p class="font-sans text-[0.9375rem] text-zinc-400">У вас пока нет приложений</p>
+      <Button variant="primary" @click="navigateTo('/my/apps/new')">
+        <template #left><Icon name="plus" :size="18" /></template>
+        Создать первое
+      </Button>
     </div>
 
     <template v-else>
-      <div class="apps-grid">
-        <NuxtLink
+      <div class="flex flex-col gap-4 mb-7">
+        <AppRow
           v-for="app in apps"
           :key="app.id"
-          :to="`/my/apps/${app.id}`"
-          class="app-card"
-        >
-          <div class="card-header">
-            <span class="card-name">{{ app.name }}</span>
-            <span :class="['badge', app.published ? 'badge-on' : 'badge-off']">
-              {{ app.published ? "Опубликован" : "Скрыт" }}
-            </span>
-          </div>
-          <p v-if="app.description" class="card-desc">{{ app.description }}</p>
-          <div class="card-meta">
-            <span v-if="app.host" class="meta-chip">{{ app.host }}</span>
-            <span v-if="app.apiVersion" class="meta-chip">v{{ app.apiVersion }}</span>
-          </div>
-          <div class="card-stats">
-            <span class="stat">{{ app.endpoints?.length ?? 0 }} endpoints</span>
-            <span class="stat">{{ app.scenarioCount ?? 0 }} сценариев</span>
-          </div>
-        </NuxtLink>
+          :name="app.name"
+          :description="app.description"
+          :meta="metaOf(app)"
+          :status="app.published ? 'Опубликован' : null"
+          :stats="statsOf(app)"
+          @click="navigateTo(`/my/apps/${app.id}`)"
+        />
       </div>
 
-      <div class="pagination">
-        <button :disabled="page <= 1" class="page-btn" @click="changePage(page - 1)">
-          Назад
-        </button>
-        <span class="page-info">Страница {{ page }} из {{ totalPages }}</span>
-        <button
-          :disabled="page >= totalPages"
-          class="page-btn"
-          @click="changePage(page + 1)"
-        >
-          Вперёд
-        </button>
+      <div v-if="totalPages > 1" class="flex items-center justify-between">
+        <span class="font-sans text-sm text-zinc-400">{{ rangeLabel }}</span>
+        <Pagination v-model:page="page" :page-count="totalPages" @change="fetchApps" />
       </div>
     </template>
   </div>
@@ -58,20 +53,39 @@
 <script setup lang="ts">
 import type { App } from "@fuse/shared";
 
+const { $api } = useNuxtApp() as any;
+
 const apps = ref<App[]>([]);
 const loading = ref(true);
 const page = ref(1);
 const limit = 10;
+const total = ref(0);
 const totalPages = ref(1);
+
+const rangeLabel = computed(() => {
+  const start = (page.value - 1) * limit + 1;
+  return `${start}–${start + apps.value.length - 1} из ${total.value}`;
+});
+
+function metaOf(app: App): string {
+  return [app.host, app.apiVersion && `v${app.apiVersion}`].filter(Boolean).join(" · ");
+}
+
+function statsOf(app: App & { scenarioCount?: number }) {
+  return [
+    { value: app.endpoints?.length ?? 0, label: "endpoints" },
+    { value: app.scenarioCount ?? 0, label: "сценариев" },
+  ];
+}
 
 async function fetchApps() {
   loading.value = true;
-  const { $api } = useNuxtApp() as any;
   try {
     const { data } = await $api.GET("/api/apps", {
       params: { query: { page: page.value, limit } },
     });
     apps.value = data?.data ?? [];
+    total.value = data?.total ?? apps.value.length;
     totalPages.value = data?.totalPages ?? 1;
   } catch {
     apps.value = [];
@@ -80,196 +94,5 @@ async function fetchApps() {
   }
 }
 
-function changePage(newPage: number) {
-  if (newPage < 1 || newPage > totalPages.value) return;
-  page.value = newPage;
-  fetchApps();
-}
-
 onMounted(fetchApps);
 </script>
-
-<style scoped>
-.apps-page {
-  max-width: 1024px;
-  margin: 0 auto;
-  padding: 32px 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-}
-
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.page-title {
-  font-size: 24px;
-  font-weight: 800;
-  color: #18181b;
-  margin: 0;
-}
-
-.new-btn {
-  padding: 9px 18px;
-  border-radius: 8px;
-  background: #6366f1;
-  color: #fff;
-  font-size: 14px;
-  font-weight: 600;
-  text-decoration: none;
-  transition: background 0.15s;
-}
-
-.new-btn:hover {
-  background: #4f46e5;
-}
-
-.state-text {
-  font-size: 15px;
-  color: #71717a;
-  text-align: center;
-  padding: 64px 0;
-}
-
-.empty-state {
-  text-align: center;
-  padding: 64px 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 20px;
-}
-
-.empty-text {
-  font-size: 15px;
-  color: #a1a1aa;
-  margin: 0;
-}
-
-.apps-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 16px;
-}
-
-.app-card {
-  background: #fff;
-  border: 1px solid #e4e4e7;
-  border-radius: 12px;
-  padding: 20px;
-  text-decoration: none;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-
-.app-card:hover {
-  border-color: #d4d4d8;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
-}
-
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.card-name {
-  font-size: 16px;
-  font-weight: 700;
-  color: #18181b;
-}
-
-.card-desc {
-  font-size: 14px;
-  color: #71717a;
-  margin: 0;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.card-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.meta-chip {
-  font-size: 12px;
-  color: #52525b;
-  background: #f4f4f5;
-  padding: 3px 8px;
-  border-radius: 6px;
-}
-
-.card-stats {
-  display: flex;
-  gap: 16px;
-  padding-top: 8px;
-  border-top: 1px solid #f4f4f5;
-}
-
-.stat {
-  font-size: 13px;
-  color: #a1a1aa;
-}
-
-.badge {
-  font-size: 12px;
-  font-weight: 600;
-  padding: 3px 10px;
-  border-radius: 100px;
-  white-space: nowrap;
-}
-
-.badge-on {
-  background: #dcfce7;
-  color: #16a34a;
-}
-
-.badge-off {
-  background: #f4f4f5;
-  color: #71717a;
-}
-
-.pagination {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 16px;
-  padding-top: 8px;
-}
-
-.page-btn {
-  padding: 8px 16px;
-  border-radius: 8px;
-  border: 1px solid #e4e4e7;
-  background: #fff;
-  color: #18181b;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.page-btn:hover:not(:disabled) {
-  background: #f4f4f5;
-}
-
-.page-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.page-info {
-  font-size: 14px;
-  color: #71717a;
-}
-</style>

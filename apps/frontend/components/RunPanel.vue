@@ -139,8 +139,15 @@
         <Card v-if="resultItems.length" padding="lg">
           <KeyValueGrid :items="resultItems" :columns="1" />
         </Card>
-        <div>
+        <div class="flex items-center gap-[18px]">
           <Button variant="dark" @click="reset">Запустить снова</Button>
+          <button
+            type="button"
+            class="font-sans text-[0.9375rem] font-semibold text-violet-600 hover:text-violet-700"
+            @click="emit('playground')"
+          >
+            Посмотреть, как это работает →
+          </button>
         </div>
       </template>
 
@@ -184,7 +191,10 @@
 import type { Step, StepPage, ServerWsEvent, RunStatus } from "@fuse/shared";
 
 const props = defineProps<{ scenarioId: string }>();
-const emit = defineEmits<{ loaded: [{ title: string; tagline?: string }] }>();
+const emit = defineEmits<{
+  loaded: [{ title: string; tagline?: string }];
+  playground: [];
+}>();
 
 const { $api } = useNuxtApp() as any;
 
