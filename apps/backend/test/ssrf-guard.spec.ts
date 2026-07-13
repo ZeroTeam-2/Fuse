@@ -1,6 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { SsrfGuard } from "../src/apps/ssrf-guard";
 import { BadRequestException } from "@nestjs/common";
+
+vi.mock("node:dns/promises", () => ({
+  lookup: vi.fn().mockResolvedValue([{ address: "93.184.216.34" }]),
+}));
 
 describe("SsrfGuard", () => {
   const guard = new SsrfGuard();
@@ -28,6 +32,60 @@ describe("SsrfGuard", () => {
 
     it("rejects 169.254.x (link-local)", () => {
       expect(() => guard.validateUrl("http://169.254.169.254/latest/meta-data")).toThrow(BadRequestException);
+    });
+  });
+
+  describe("fetchSpec", () => {
+    const url = "https://api.example.com/openapi.json";
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    function mockFetch(text: string, contentType: string): void {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(text, {
+            status: 200,
+            headers: { "content-type": contentType },
+          }),
+        ),
+      );
+    }
+
+    it("parses JSON spec with application/json content-type", async () => {
+      mockFetch(JSON.stringify({ openapi: "3.0.0", info: { title: "Test" } }), "application/json");
+      const result = await guard.fetchSpec(url);
+      expect(result).toEqual({ openapi: "3.0.0", info: { title: "Test" } });
+    });
+
+    it("parses YAML spec with application/yaml content-type", async () => {
+      mockFetch("openapi: \"3.0.0\"\ninfo:\n  title: \"Test\"\n", "application/yaml");
+      const result = await guard.fetchSpec(url);
+      expect(result).toEqual({ openapi: "3.0.0", info: { title: "Test" } });
+    });
+
+    it("parses YAML spec with text/plain content-type via body sniffing", async () => {
+      mockFetch("openapi: \"3.0.0\"\ninfo:\n  title: \"Test\"\n", "text/plain");
+      const result = await guard.fetchSpec(url);
+      expect(result).toEqual({ openapi: "3.0.0", info: { title: "Test" } });
+    });
+
+    it("falls back to YAML when JSON parse fails on YAML body with json content-type", async () => {
+      mockFetch("openapi: \"3.0.0\"\ninfo:\n  title: \"Test\"\n", "application/json");
+      const result = await guard.fetchSpec(url);
+      expect(result).toEqual({ openapi: "3.0.0", info: { title: "Test" } });
+    });
+
+    it("throws when body is invalid in both formats", async () => {
+      mockFetch("key:\n\tvalue", "text/plain");
+      await expect(guard.fetchSpec(url)).rejects.toThrow("Spec response is not valid JSON or YAML");
+    });
+
+    it("throws BadRequestException when parsed result is not an object", async () => {
+      mockFetch("just a string\n", "text/plain");
+      await expect(guard.fetchSpec(url)).rejects.toThrow(BadRequestException);
     });
   });
 });
