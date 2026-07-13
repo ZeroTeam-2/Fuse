@@ -14,6 +14,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import type { AuthenticatedRequest } from "../auth/auth.types";
 import { ScenariosService } from "./scenarios.service";
+import { ManualInputsService } from "../execution/manual-inputs.service";
 import { CreateScenarioDto } from "./dto/create-scenario.dto";
 import { UpdateScenarioDto } from "./dto/update-scenario.dto";
 import { ScenarioPaginationQueryDto } from "./dto/pagination-query.dto";
@@ -23,7 +24,10 @@ import { ScenarioPaginationQueryDto } from "./dto/pagination-query.dto";
 @UseGuards(JwtAuthGuard)
 @Controller("scenarios")
 export class ScenariosController {
-  constructor(private readonly scenariosService: ScenariosService) {}
+  constructor(
+    private readonly scenariosService: ScenariosService,
+    private readonly manualInputsService: ManualInputsService,
+  ) {}
 
   @Get()
   @ApiOperation({ summary: "List user's scenarios (paginated)" })
@@ -81,5 +85,13 @@ export class ScenariosController {
     @Param("index") index: string,
   ) {
     return this.scenariosService.getStepSchema(id, Number(index));
+  }
+
+  @Get(":id/manual-inputs")
+  @ApiOperation({
+    summary: "List every value marked as manual input across all steps",
+  })
+  getManualInputs(@Param("id") id: string) {
+    return this.manualInputsService.forScenario(id);
   }
 }

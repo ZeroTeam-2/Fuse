@@ -17,6 +17,7 @@ import type {
   PeriodicStep,
   ScenarioStepRef,
   FileStep,
+  ManualInputDescriptor,
   RunStepResult,
   SchemaField,
   ServerWsEvent,
@@ -29,9 +30,17 @@ import { joinBaseUrl } from "../apps/base-url";
 import { RunGateway } from "../websocket/run.gateway";
 import { resolveMappings, groupInputsByLocation } from "./mapping-resolver";
 import type { LocatedInputs } from "./mapping-resolver";
+import { ManualInputsService } from "./manual-inputs.service";
+import {
+  isBlank,
+  localKeyOf,
+  mapPageDataToLocalKeys,
+  sliceInputsForStep,
+} from "./manual-inputs";
 import { StepExecutionError, RunCancelledError } from "./execution-errors";
 
 const POLL_TIMEOUT_MS = 5 * 60 * 1000;
+/** Общий таймаут ожидания пользователя: и страница шага, и добор ручных значений. */
 const PAGE_INPUT_TIMEOUT_MS = 30 * 60 * 1000;
 
 const TERMINAL_STATUSES: RunStatus[] = [
@@ -40,14 +49,28 @@ const TERMINAL_STATUSES: RunStatus[] = [
   RunStatus.CANCELLED,
 ];
 
+function samePath(a: number[], b: number[]): boolean {
+  return a.length === b.length && a.every((value, i) => value === b[i]);
+}
+
 interface StepContext {
   runId: string;
   stepIndex: number;
+  /** Путь до шага от корня запуска: `[3]` либо `[2, 0]` для шага вложенного сценария. */
+  stepPath: number[];
   stepResults: RunStepResult[];
   /** Кэш приложений на время одного запуска: N шагов к одному API — один запрос в БД. */
   appCache: Map<string, AppDocument>;
-  /** Данные пользователя: входы запуска + то, что он ввёл на странице шага. */
+  /**
+   * Ввод шага по ЛОКАЛЬНЫМ ключам (`inn`, `filter:orgId`) — ровно то, что ищет
+   * резолвер: срез входов запуска, адресованных этому шагу, поверх накопленного
+   * по предыдущим шагам, и поверх всего — данные страницы шага.
+   */
   userInput?: Record<string, unknown>;
+  /** Входы запуска целиком, по скоуп-ключам. Обновляются при доборе значений. */
+  runInputs: Record<string, unknown>;
+  /** Ручные значения всего сценария: по ним видно, чего шагу не хватает. */
+  descriptors: ManualInputDescriptor[];
   /** Некритичные замечания резолвера (неоднозначный фильтр) — уходят в результат шага. */
   warnings: string[];
 }
@@ -67,6 +90,7 @@ export class WorkerService
     private readonly configService: ConfigService,
     private readonly gateway: RunGateway,
     private readonly ssrfGuard: SsrfGuard,
+    private readonly manualInputsService: ManualInputsService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -203,6 +227,18 @@ export class WorkerService
     const startStep = run.currentStep ?? 0;
     const appCache = new Map<string, AppDocument>();
 
+    // Считается один раз на запуск: этим же списком форма запуска строила поля.
+    const descriptors = await this.manualInputsService.forSteps(
+      steps,
+      run.scenarioId,
+    );
+    const runInputs = (run.inputs ?? {}) as Record<string, unknown>;
+
+    // Ввод, накопленный по ходу (данные страниц шагов), переживает переход к
+    // следующему шагу: раньше `StepContext` пересоздавался пустым, и введённое
+    // на шаге 1 не видел уже шаг 2.
+    let accumulatedInput: Record<string, unknown> = {};
+
     await this.initStepResults(
       runId,
       steps,
@@ -249,12 +285,22 @@ export class WorkerService
         const ctx: StepContext = {
           runId,
           stepIndex: i,
+          stepPath: [i],
           stepResults: reloadedRun.stepResults as unknown as RunStepResult[],
           appCache,
+          // Свой срез входов запуска важнее значения, принесённого с прошлых
+          // шагов: одноимённые ключи разных шагов не должны склеиваться.
+          userInput: {
+            ...accumulatedInput,
+            ...sliceInputsForStep(runInputs, [i]),
+          },
+          runInputs,
+          descriptors,
           warnings: [],
         };
 
         const result = await this.executeStep(step, ctx);
+        accumulatedInput = { ...accumulatedInput, ...(ctx.userInput ?? {}) };
 
         const finishedAt = new Date().toISOString();
         const durationMs =
@@ -371,11 +417,32 @@ export class WorkerService
       // То, что пользователь ввёл на странице, — это и есть входные данные шага:
       // раньше результат ожидания отбрасывался, и ветка «Ручной ввод» в маппингах
       // (а с ней и ручное значение условия фильтра) была мертва.
-      const pageData = await this.waitForPageInput(ctx.runId, step, ctx.stepIndex);
-      if (pageData && typeof pageData === "object") {
-        ctx.userInput = { ...ctx.userInput, ...(pageData as Record<string, unknown>) };
+      const { data } = await this.waitForUserInput(
+        ctx.runId,
+        ctx.stepIndex,
+        step.title,
+        {
+          type: "page:required",
+          runId: ctx.runId,
+          payload: {
+            stepIndex: ctx.stepIndex,
+            stepTitle: step.title,
+            page: step.page,
+          },
+          timestamp: new Date().toISOString(),
+        },
+      );
+
+      if (data && typeof data === "object") {
+        // Ключи полей страницы → ключи значений шага по привязке (`target`).
+        ctx.userInput = {
+          ...ctx.userInput,
+          ...mapPageDataToLocalKeys(step, data),
+        };
       }
     }
+
+    await this.ensureManualInputs(step, ctx);
 
     switch (step.type) {
       case "api":
@@ -649,12 +716,21 @@ export class WorkerService
 
     for (let i = 0; i < refSteps.length; i++) {
       const refStep = refSteps[i];
+      // Путь от корня запуска: по нему вложенный шаг находит адресованные
+      // именно ему входы (`s2.s0:inn`), а не значения объемлющего сценария.
+      const nestedPath = [...ctx.stepPath, i];
       const nestedCtx: StepContext = {
         runId: ctx.runId,
         stepIndex: i,
+        stepPath: nestedPath,
         stepResults: nestedResults,
         appCache: ctx.appCache,
-        userInput: ctx.userInput,
+        userInput: {
+          ...ctx.userInput,
+          ...sliceInputsForStep(ctx.runInputs, nestedPath),
+        },
+        runInputs: ctx.runInputs,
+        descriptors: ctx.descriptors,
         // Замечания вложенных шагов всплывают в результат объемлющего шага.
         warnings: ctx.warnings,
       };
@@ -683,11 +759,73 @@ export class WorkerService
     return { placeholder: true, message: "File step not yet implemented" };
   }
 
-  private async waitForPageInput(
+  /**
+   * Обязательного ручного значения нет во входах запуска — спрашиваем его,
+   * а не отправляем параметр пустым и не падаем на фильтре, который ничего не
+   * отобрал. Страховка на случаи, которых форма запуска знать не могла:
+   * программный запуск, отредактированный после создания запуска сценарий,
+   * вложенный сценарий.
+   */
+  private async ensureManualInputs(step: Step, ctx: StepContext): Promise<void> {
+    const missing = ctx.descriptors.filter(
+      (d) =>
+        d.required &&
+        samePath(d.stepPath, ctx.stepPath) &&
+        isBlank(ctx.userInput?.[localKeyOf(d.paramKey, d.kind)]),
+    );
+
+    if (missing.length === 0) {
+      return;
+    }
+
+    const { inputs } = await this.waitForUserInput(
+      ctx.runId,
+      ctx.stepIndex,
+      step.title,
+      {
+        type: "input:required",
+        runId: ctx.runId,
+        payload: {
+          stepIndex: ctx.stepIndex,
+          stepTitle: step.title,
+          fields: missing,
+        },
+        timestamp: new Date().toISOString(),
+      },
+    );
+
+    // Добранное лежит в `Run.inputs` — переживёт перезапуск воркера и не будет
+    // спрошено повторно.
+    ctx.runInputs = inputs;
+    ctx.userInput = {
+      ...ctx.userInput,
+      ...sliceInputsForStep(inputs, ctx.stepPath),
+    };
+
+    const stillMissing = missing.filter((d) =>
+      isBlank(ctx.userInput?.[localKeyOf(d.paramKey, d.kind)]),
+    );
+
+    if (stillMissing.length > 0) {
+      throw new StepExecutionError(
+        `Шаг «${step.title}»: не заданы обязательные значения ручного ввода — ${stillMissing
+          .map((d) => `«${d.label}»`)
+          .join(", ")}`,
+      );
+    }
+  }
+
+  /**
+   * Одно ожидание пользователя на два случая: страница шага и добор ручных
+   * значений. Различается только вопрос — событие; механика (перевод запуска в
+   * `waiting_input`, опрос ящика, отмена, таймаут) общая.
+   */
+  private async waitForUserInput(
     runId: string,
-    step: Step,
     stepIndex: number,
-  ): Promise<Record<string, unknown>> {
+    stepTitle: string,
+    request: ServerWsEvent,
+  ): Promise<{ data: Record<string, unknown>; inputs: Record<string, unknown> }> {
     await this.runModel
       .updateOne(
         { _id: runId },
@@ -700,16 +838,7 @@ export class WorkerService
       )
       .exec();
 
-    await this.publish(runId, {
-      type: "page:required",
-      runId,
-      payload: {
-        stepIndex,
-        stepTitle: step.title,
-        page: step.page,
-      },
-      timestamp: new Date().toISOString(),
-    });
+    await this.publish(runId, request);
 
     const deadline = Date.now() + PAGE_INPUT_TIMEOUT_MS;
 
@@ -721,17 +850,30 @@ export class WorkerService
       if (run.status === RunStatus.CANCELLED) {
         throw new RunCancelledError("Run was cancelled while waiting for input");
       }
-      if (run.status === RunStatus.RUNNING && run.pageData) {
-        const data = run.pageData as Record<string, unknown>;
+
+      // `pageData` — ящик запусков, созданных до появления `pendingInput`:
+      // читаем его, пока такие запуски есть в полёте.
+      const pending =
+        run.pendingInput?.data ??
+        (run.pageData as Record<string, unknown> | undefined);
+
+      if (run.status === RunStatus.RUNNING && pending) {
         await this.runModel
-          .updateOne({ _id: runId }, { $unset: { pageData: "" } })
+          .updateOne({ _id: runId }, { $unset: { pendingInput: "", pageData: "" } })
           .exec();
-        return data;
+
+        return {
+          data: pending,
+          inputs: (run.inputs ?? {}) as Record<string, unknown>,
+        };
       }
+
       await this.sleep(1000);
     }
 
-    throw new StepExecutionError("Timed out waiting for page input");
+    throw new StepExecutionError(
+      `Шаг «${stepTitle}»: пользователь не ввёл данные за отведённое время`,
+    );
   }
 
   private async failRun(runId: string, error: string): Promise<void> {

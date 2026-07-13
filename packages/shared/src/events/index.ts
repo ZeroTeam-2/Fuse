@@ -1,3 +1,4 @@
+import type { ManualInputDescriptor } from "../types";
 import type { RunStatus } from "../enums";
 
 export interface WsEvent<TType extends string, TPayload = unknown> {
@@ -24,6 +25,17 @@ export interface PageRequiredPayload {
   stepIndex: number;
   stepTitle: string;
   page: unknown;
+}
+
+/**
+ * Обязательного значения ручного ввода не оказалось во входах запуска — воркер
+ * останавливается перед шагом и просит его. Не `page:required`: там payload —
+ * страница шага, и клиент рисует её как страницу.
+ */
+export interface InputRequiredPayload {
+  stepIndex: number;
+  stepTitle: string;
+  fields: ManualInputDescriptor[];
 }
 
 export interface RunDonePayload {
@@ -59,6 +71,7 @@ export type ServerWsEvent =
   | WsEvent<"step:start", StepStartPayload>
   | WsEvent<"step:done", StepDonePayload>
   | WsEvent<"page:required", PageRequiredPayload>
+  | WsEvent<"input:required", InputRequiredPayload>
   | WsEvent<"run:done", RunDonePayload>
   | WsEvent<"run:error", RunErrorPayload>
   | WsEvent<"progress", ProgressPayload>

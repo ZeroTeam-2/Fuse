@@ -9,19 +9,32 @@
     <Card v-else padding="none">
       <div class="flex items-center justify-between gap-3 px-6 py-5 border-b border-zinc-200">
         <div class="flex items-center gap-2.5">
+          <!-- Есть ручные значения — запуск идёт из формы ниже: она и блокирует
+               кнопку, пока обязательные поля не заполнены. -->
           <Button
+            v-if="!showInputsForm"
             variant="primary"
             :disabled="running || phase === 'done' || scenario.blocked"
-            @click="runAll"
+            @click="runAll({})"
           >
             {{ running ? "Выполнение…" : "Выполнить все" }}
             <template #right><Icon name="play" :size="18" /></template>
           </Button>
-          <Button v-if="phase === 'waiting'" variant="secondary" @click="advanceStep">
+          <Button v-if="phase === 'waiting' && waitingForStep !== null" variant="secondary" @click="advanceStep">
             Выполнить шаг
           </Button>
         </div>
         <Button variant="secondary" size="sm" @click="reset">Сбросить</Button>
+      </div>
+
+      <!-- Ручные значения всех шагов — те же поля, что и в простом режиме. -->
+      <div v-if="showInputsForm" class="px-6 py-5 border-b border-zinc-200">
+        <RunManualInputsForm
+          :fields="manualInputs"
+          submit-text="Выполнить все"
+          :busy="running || scenario.blocked"
+          @submit="runAll"
+        />
       </div>
 
       <div
@@ -78,9 +91,24 @@
             {{ stepErrors[i] }}
           </p>
 
+          <!-- inline top-up: обязательного значения не оказалось во входах -->
+          <div
+            v-if="pendingInputs && pendingInputs.stepIndex === i"
+            class="rounded-2xl border border-zinc-200 bg-zinc-50 p-5 flex flex-col gap-4"
+          >
+            <p class="font-sans text-[0.8125rem] text-zinc-500">
+              Шагу не хватает данных — введите их, чтобы продолжить.
+            </p>
+            <RunManualInputsForm
+              :fields="pendingInputs.fields"
+              submit-text="Продолжить"
+              @submit="submitPendingInputs"
+            />
+          </div>
+
           <!-- inline page: awaiting user input on this step -->
           <div
-            v-if="waitingForStep === i && step.page"
+            v-else-if="waitingForStep === i && step.page"
             class="rounded-2xl border border-zinc-200 bg-zinc-50 p-5 flex flex-col gap-4"
           >
             <template v-if="step.page.type === 'fields'">
@@ -176,7 +204,7 @@
 // PlaygroundPanel — step-by-step view of a run: every step shows its raw JSON
 // result. Reused by the scenario view "Запуск" tab (Playground segment) and the
 // standalone /cards/[id]/playground route.
-import type { Step, ServerWsEvent } from "@fuse/shared";
+import type { ManualInputDescriptor, Step, ServerWsEvent } from "@fuse/shared";
 
 const props = defineProps<{ scenarioId: string }>();
 const emit = defineEmits<{ loaded: [{ title: string; tagline?: string }] }>();
@@ -199,6 +227,17 @@ const stepTimings = ref<Record<number, number>>({});
 const stepErrors = ref<Record<number, string>>({});
 const totalDurationMs = ref(0);
 const waitingForStep = ref<number | null>(null);
+/** Ручные значения сценария (форма перед запуском) и добор посреди выполнения. */
+const manualInputs = ref<ManualInputDescriptor[]>([]);
+const pendingInputs = ref<{
+  stepIndex: number;
+  stepTitle: string;
+  fields: ManualInputDescriptor[];
+} | null>(null);
+
+const showInputsForm = computed(
+  () => phase.value === "idle" && manualInputs.value.length > 0,
+);
 const pageFormData = ref<Record<string, string>>({});
 const pgFiles = ref<Record<number, File | null>>({});
 const isDragOver = ref(false);
@@ -207,6 +246,13 @@ const fileInputs = ref<Record<number, HTMLInputElement | null>>({});
 const runId = ref("");
 const socketApi = shallowRef<ReturnType<typeof useRunSocket> | null>(null);
 let processedCount = 0;
+
+// Запуск завершился — сторожить тишину больше нечего.
+watch(phase, (value) => {
+  if (value === "done" || value === "error") {
+    socketApi.value?.stopWatchdog();
+  }
+});
 
 watch(
   () => socketApi.value?.events.value.length ?? 0,
@@ -272,7 +318,17 @@ async function fetchScenario() {
   }
 }
 
-async function runAll() {
+/** Тот же список, что и в простом режиме: считает сервер, проверяет воркер. */
+async function fetchManualInputs() {
+  try {
+    const { data } = await $api.GET(`/api/marketplace/${props.scenarioId}/manual-inputs`, {});
+    manualInputs.value = (data ?? []) as ManualInputDescriptor[];
+  } catch {
+    manualInputs.value = [];
+  }
+}
+
+async function runAll(inputs: Record<string, unknown> = {}) {
   // Запуск создаёт run под пользователем — гостя сначала просим войти.
   if (!useAuthStore().isAuthenticated) {
     useLoginModal().openLogin("Войдите, чтобы запустить сценарий.");
@@ -284,7 +340,7 @@ async function runAll() {
 
   try {
     const { data, error: apiError } = await $api.POST("/api/runs", {
-      body: { scenarioId: props.scenarioId },
+      body: { scenarioId: props.scenarioId, inputs },
     });
     if (apiError || !data) {
       running.value = false;
@@ -301,7 +357,7 @@ async function runAll() {
     }
 
     processedCount = 0;
-    socketApi.value = useRunSocket(runId.value);
+    socketApi.value = useRunSocket(runId.value, { onSilence: resyncRun });
     socketApi.value.connect();
   } catch {
     running.value = false;
@@ -329,8 +385,20 @@ function handleWsEvent(event: ServerWsEvent) {
     case "page:required": {
       phase.value = "waiting";
       running.value = false;
+      pendingInputs.value = null;
       waitingForStep.value = event.payload.stepIndex;
       pageFormData.value = {};
+      break;
+    }
+    case "input:required": {
+      phase.value = "waiting";
+      running.value = false;
+      waitingForStep.value = null;
+      pendingInputs.value = {
+        stepIndex: event.payload.stepIndex,
+        stepTitle: event.payload.stepTitle,
+        fields: event.payload.fields,
+      };
       break;
     }
     case "run:done": {
@@ -338,6 +406,7 @@ function handleWsEvent(event: ServerWsEvent) {
       phase.value = "done";
       running.value = false;
       waitingForStep.value = null;
+      pendingInputs.value = null;
       break;
     }
     case "run:error": {
@@ -346,16 +415,81 @@ function handleWsEvent(event: ServerWsEvent) {
       phase.value = "error";
       running.value = false;
       waitingForStep.value = null;
+      pendingInputs.value = null;
       break;
     }
     case "run:status": {
-      const payload = event.payload as { status: string };
-      if (payload.status === "completed") {
-        phase.value = "done";
-        running.value = false;
-      }
+      applyRunSnapshot(event.payload as RunSnapshot);
       break;
     }
+  }
+}
+
+interface RunSnapshot {
+  status: string;
+  currentStep?: number;
+  stepResults?: {
+    stepIndex: number;
+    status: "pending" | "running" | "completed" | "failed";
+    result?: unknown;
+    durationMs?: number;
+    error?: string;
+  }[];
+  error?: string;
+}
+
+/** Состояние запуска целиком: и снапшот сокета, и ответ на перечитывание по тишине. */
+function applyRunSnapshot(snapshot: RunSnapshot) {
+  for (const sr of snapshot.stepResults ?? []) {
+    stepStatuses.value[sr.stepIndex] = sr.status;
+    if (sr.result !== undefined) stepResultsData.value[sr.stepIndex] = sr.result;
+    if (sr.durationMs != null) stepTimings.value[sr.stepIndex] = sr.durationMs;
+    if (sr.error) stepErrors.value[sr.stepIndex] = sr.error;
+  }
+
+  if (snapshot.status === "completed") {
+    phase.value = "done";
+    running.value = false;
+    waitingForStep.value = null;
+    pendingInputs.value = null;
+    if (!totalDurationMs.value) {
+      totalDurationMs.value = Object.values(stepTimings.value).reduce(
+        (sum, ms) => sum + (ms ?? 0),
+        0,
+      );
+    }
+    return;
+  }
+
+  if (snapshot.status === "failed") {
+    phase.value = "error";
+    running.value = false;
+    waitingForStep.value = null;
+    pendingInputs.value = null;
+    return;
+  }
+
+  if (snapshot.status === "cancelled") {
+    phase.value = "idle";
+    running.value = false;
+    waitingForStep.value = null;
+    pendingInputs.value = null;
+  }
+}
+
+/**
+ * Поток событий молчит дольше положенного — перечитываем состояние запуска из
+ * БД. Без этого потерянный поток событий оставляет playground в вечном
+ * «Выполнение…» (см. `useRunSocket`).
+ */
+async function resyncRun() {
+  if (!runId.value || phase.value !== "running") return;
+
+  try {
+    const { data } = await $api.GET(`/api/runs/${runId.value}`, {});
+    if (data) applyRunSnapshot(data as RunSnapshot);
+  } catch {
+    // Сеть моргнула — следующая проверка сторожа попробует снова.
   }
 }
 
@@ -364,6 +498,14 @@ function submitPageForm(stepIndex: number, overrideData?: Record<string, unknown
   const data = overrideData ?? { ...pageFormData.value };
   socketApi.value.submitPage(stepIndex, data);
   waitingForStep.value = null;
+  phase.value = "running";
+  running.value = true;
+}
+
+function submitPendingInputs(values: Record<string, unknown>) {
+  if (!pendingInputs.value || !socketApi.value) return;
+  socketApi.value.submitInputs(pendingInputs.value.stepIndex, values);
+  pendingInputs.value = null;
   phase.value = "running";
   running.value = true;
 }
@@ -422,10 +564,13 @@ function reset() {
   phase.value = "idle";
   running.value = false;
   resetStepData();
+  pendingInputs.value = null;
   runId.value = "";
 }
 
-onMounted(fetchScenario);
+onMounted(async () => {
+  await Promise.all([fetchScenario(), fetchManualInputs()]);
+});
 
 onUnmounted(() => {
   socketApi.value?.disconnect();

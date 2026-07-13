@@ -212,6 +212,7 @@
     <ScenarioPageEditor
       v-if="pageIndex !== null && steps[pageIndex]"
       :step="steps[pageIndex]"
+      :step-schema="schemas[pageIndex]"
       @save="savePage"
       @close="pageIndex = null"
     />

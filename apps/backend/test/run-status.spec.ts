@@ -107,6 +107,7 @@ describe("Run status transitions", () => {
       MockScenarioModel as any,
       mockConfig as ConfigService,
       mockGateway as any,
+      { forSteps: vi.fn().mockResolvedValue([]) } as any,
     );
   });
 

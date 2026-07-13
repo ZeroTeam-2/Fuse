@@ -23,9 +23,13 @@ export class ExecutionController {
   @ApiOperation({ summary: "Create a new scenario run" })
   create(
     @Req() req: AuthenticatedRequest,
-    @Body() body: { scenarioId: string },
+    @Body() body: { scenarioId: string; inputs?: Record<string, unknown> },
   ) {
-    return this.executionService.createRun(req.user.userId, body.scenarioId);
+    return this.executionService.createRun(
+      req.user.userId,
+      body.scenarioId,
+      body.inputs,
+    );
   }
 
   @Get(":id")
@@ -51,5 +55,16 @@ export class ExecutionController {
       body.stepIndex,
       body.data,
     );
+  }
+
+  @Post(":id/input-submit")
+  @ApiOperation({
+    summary: "Submit manual input values the worker asked for mid-run",
+  })
+  submitInputs(
+    @Param("id") id: string,
+    @Body() body: { stepIndex: number; values: Record<string, unknown> },
+  ) {
+    return this.executionService.submitInputs(id, body.stepIndex, body.values);
   }
 }

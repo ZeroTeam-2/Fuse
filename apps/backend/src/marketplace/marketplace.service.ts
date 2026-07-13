@@ -4,6 +4,7 @@ import { Model } from "mongoose";
 import { SortOrder } from "@fuse/shared";
 import type {
   CategoryCount,
+  ManualInputDescriptor,
   MarketplaceCard,
   MarketplaceQuery,
   PaginatedResponse,
@@ -11,6 +12,7 @@ import type {
 } from "@fuse/shared";
 import { Scenario, ScenarioDocument } from "../scenarios/scenario.schema";
 import { App, AppDocument } from "../apps/app.schema";
+import { ManualInputsService } from "../execution/manual-inputs.service";
 
 export interface ProviderDetail {
   appId: string;
@@ -49,7 +51,22 @@ export class MarketplaceService {
   constructor(
     @InjectModel(Scenario.name) private readonly scenarioModel: Model<ScenarioDocument>,
     @InjectModel(App.name) private readonly appModel: Model<AppDocument>,
+    private readonly manualInputsService: ManualInputsService,
   ) {}
+
+  /**
+   * Ручные входы карточки — публичны ровно настолько же, насколько её шаги
+   * (`getCard` их уже отдаёт): панель запуска рисует форму гостю до входа.
+   */
+  async getManualInputs(id: string): Promise<ManualInputDescriptor[]> {
+    const scenario = await this.scenarioModel.findById(id).lean().exec();
+
+    if (!scenario || !scenario.published) {
+      throw new NotFoundException(`Scenario #${id} not found`);
+    }
+
+    return this.manualInputsService.forSteps((scenario.steps ?? []) as Step[], id);
+  }
 
   async getCatalog(
     query: MarketplaceQuery,
