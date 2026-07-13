@@ -28,8 +28,16 @@
           </p>
         </div>
         <StepProgress :steps="previewSteps" />
-        <div>
-          <Button variant="primary" :disabled="starting || scenario.blocked" @click="startRun">
+
+        <!-- Ручные значения всех шагов: обязательные блокируют запуск. -->
+        <RunManualInputsForm
+          v-if="manualInputs.length"
+          :fields="manualInputs"
+          :busy="starting || scenario.blocked"
+          @submit="startRun"
+        />
+        <div v-else>
+          <Button variant="primary" :disabled="starting || scenario.blocked" @click="startRun({})">
             {{ starting ? "Запуск…" : "Получить результат" }}
             <template #right><Icon name="arrow-right" :size="18" /></template>
           </Button>
@@ -45,6 +53,23 @@
         <div v-if="phase === 'running'">
           <Button variant="secondary" size="sm" @click="cancelRun">Отменить</Button>
         </div>
+      </template>
+
+      <!-- waiting: input:required — обязательного значения не оказалось во входах -->
+      <template v-else-if="phase === 'waiting' && pendingInputs">
+        <div>
+          <h3 class="font-sans font-bold text-[1.0625rem] tracking-tight text-zinc-900 mb-1.5">
+            Нужны данные для шага «{{ pendingInputs.stepTitle }}»
+          </h3>
+          <p class="font-sans text-sm text-zinc-500">
+            Без этих значений шаг не сможет выполниться.
+          </p>
+        </div>
+        <RunManualInputsForm
+          :fields="pendingInputs.fields"
+          submit-text="Продолжить"
+          @submit="submitPendingInputs"
+        />
       </template>
 
       <!-- waiting: page:required -->
@@ -224,6 +249,7 @@
 // RunPanel — the scenario execution flow (WS-driven), reused by the scenario
 // view "Запуск" tab and the standalone /cards/[id]/run route.
 import type {
+  ManualInputDescriptor,
   Step,
   StepPage,
   ServerWsEvent,
@@ -255,6 +281,13 @@ interface PageState {
   page: StepPage;
 }
 
+/** Значения, которых воркер не нашёл во входах и просит по ходу выполнения. */
+interface PendingInputsState {
+  stepIndex: number;
+  stepTitle: string;
+  fields: ManualInputDescriptor[];
+}
+
 type Phase = "idle" | "starting" | "running" | "waiting" | "done" | "error" | "cancelled";
 
 const loading = ref(true);
@@ -269,6 +302,9 @@ const starting = ref(false);
 const phase = ref<Phase>("idle");
 const stepProgress = ref<StepProgress[]>([]);
 const currentPage = ref<PageState | null>(null);
+/** Ручные значения сценария, которые спрашивает форма перед запуском. */
+const manualInputs = ref<ManualInputDescriptor[]>([]);
+const pendingInputs = ref<PendingInputsState | null>(null);
 const totalDurationMs = ref(0);
 const errorMessage = ref("");
 const formData = ref<Record<string, string>>({});
@@ -366,6 +402,13 @@ const stepTimings = computed(() =>
     .map((s) => ({ label: s.title, value: `${s.durationMs} мс` })),
 );
 
+// Запуск завершился — сторожить тишину больше нечего.
+watch(phase, (value) => {
+  if (value === "done" || value === "error" || value === "cancelled") {
+    socketApi.value?.stopWatchdog();
+  }
+});
+
 watch(
   () => socketApi.value?.events.value.length ?? 0,
   (newLen) => {
@@ -401,7 +444,21 @@ async function fetchScenario() {
   }
 }
 
-async function startRun() {
+/**
+ * Что спросить у пользователя перед стартом, считает сервер: тем же
+ * перечислением воркер потом проверяет полноту входов. Список приходит
+ * без значений, которые спросит страница ввода своего шага.
+ */
+async function fetchManualInputs() {
+  try {
+    const { data } = await $api.GET(`/api/marketplace/${props.scenarioId}/manual-inputs`, {});
+    manualInputs.value = (data ?? []) as ManualInputDescriptor[];
+  } catch {
+    manualInputs.value = [];
+  }
+}
+
+async function startRun(inputs: Record<string, unknown> = {}) {
   // Запуск создаёт run под пользователем — гостя сначала просим войти.
   if (!useAuthStore().isAuthenticated) {
     useLoginModal().openLogin("Войдите, чтобы запустить сценарий.");
@@ -411,7 +468,7 @@ async function startRun() {
   phase.value = "starting";
   try {
     const { data, error: apiError } = await $api.POST("/api/runs", {
-      body: { scenarioId: props.scenarioId },
+      body: { scenarioId: props.scenarioId, inputs },
     });
     if (apiError || !data) {
       starting.value = false;
@@ -447,8 +504,42 @@ async function startRun() {
 function attachToRun(id: string) {
   runId.value = id;
   processedCount = 0;
-  socketApi.value = useRunSocket(id);
+  socketApi.value = useRunSocket(id, { onSilence: resyncRun });
   socketApi.value.connect();
+}
+
+/**
+ * Поток событий молчит дольше положенного — перечитываем состояние запуска из
+ * БД и применяем его тем же кодом, что и снапшот сокета. Без этого потерянный
+ * поток (запуск исполнил другой процесс, воркер умер, gateway моргнул)
+ * оставляет пользователя в вечном «Выполняем сценарий…».
+ */
+async function resyncRun() {
+  if (!runId.value) return;
+  // В фазе ожидания ввода тишина нормальна — ждём пользователя. Перечитывание
+  // здесь ещё и затёрло бы уже набранные в форме значения.
+  if (phase.value !== "running" && phase.value !== "starting") return;
+
+  try {
+    const { data } = await $api.GET(`/api/runs/${runId.value}`, {});
+    if (!data) return;
+
+    const run = data as {
+      status: RunStatusPayload["status"];
+      currentStep?: number;
+      stepResults?: unknown[];
+      error?: string;
+    };
+
+    applySnapshot({
+      status: run.status,
+      currentStep: run.currentStep ?? 0,
+      stepResults: run.stepResults ?? [],
+      error: run.error,
+    });
+  } catch {
+    // Сеть моргнула — следующая проверка сторожа попробует снова.
+  }
 }
 
 /**
@@ -488,6 +579,7 @@ function handleWsEvent(event: ServerWsEvent) {
     }
     case "page:required": {
       phase.value = "waiting";
+      pendingInputs.value = null;
       currentPage.value = {
         stepIndex: event.payload.stepIndex,
         stepTitle: event.payload.stepTitle,
@@ -498,16 +590,30 @@ function handleWsEvent(event: ServerWsEvent) {
       fileError.value = "";
       break;
     }
+    // Обязательного значения не оказалось во входах запуска — воркер остановился
+    // и просит его: спрашиваем теми же полями, что и форма перед запуском.
+    case "input:required": {
+      phase.value = "waiting";
+      currentPage.value = null;
+      pendingInputs.value = {
+        stepIndex: event.payload.stepIndex,
+        stepTitle: event.payload.stepTitle,
+        fields: event.payload.fields,
+      };
+      break;
+    }
     case "run:done": {
       totalDurationMs.value = event.payload.totalDurationMs ?? 0;
       phase.value = "done";
       currentPage.value = null;
+      pendingInputs.value = null;
       break;
     }
     case "run:error": {
       errorMessage.value = event.payload.error;
       phase.value = "error";
       currentPage.value = null;
+      pendingInputs.value = null;
       break;
     }
     // Снапшот состояния: сервер шлёт его сразу при подключении к комнате, потому
@@ -554,6 +660,7 @@ function applySnapshot(payload: RunStatusPayload) {
     case "completed":
       phase.value = "done";
       currentPage.value = null;
+      pendingInputs.value = null;
       if (!totalDurationMs.value) {
         totalDurationMs.value = stepProgress.value.reduce(
           (sum, s) => sum + (s.durationMs ?? 0),
@@ -570,15 +677,22 @@ function applySnapshot(payload: RunStatusPayload) {
         "Выполнение завершилось ошибкой";
       phase.value = "error";
       currentPage.value = null;
+      pendingInputs.value = null;
       break;
     case "cancelled":
       phase.value = "cancelled";
       currentPage.value = null;
+      pendingInputs.value = null;
       break;
     case "waiting_input":
-      // Определение страницы в снапшот не входит — берём его из сценария,
-      // который уже загружен на клиенте.
-      restoreWaitingPage(payload.currentStep);
+      // Ни страницы, ни списка запрошенных значений в снапшоте нет — шаг ждёт
+      // либо своей страницы (она есть в сценарии), либо добора (тогда считаем,
+      // чего именно не хватает, по входам запуска).
+      if (scenario.value?.steps?.[payload.currentStep]?.page) {
+        restoreWaitingPage(payload.currentStep);
+      } else {
+        void restoreWaitingInputs(payload.currentStep);
+      }
       break;
     case "pending":
     case "running":
@@ -595,9 +709,44 @@ function restoreWaitingPage(stepIndex: number) {
     stepTitle: step.title,
     page: step.page,
   };
+  pendingInputs.value = null;
   formData.value = {};
   selectedFile.value = null;
   fileError.value = "";
+  phase.value = "waiting";
+}
+
+/**
+ * После перезагрузки страницы список запрошенных значений взять неоткуда:
+ * пересобираем его сами — обязательные значения шага, которых нет во входах
+ * запуска. Иначе пользователь остался бы на бесконечном «Выполняем сценарий…».
+ */
+async function restoreWaitingInputs(stepIndex: number) {
+  const stepFields = manualInputs.value.filter(
+    (field) => field.required && field.stepPath[0] === stepIndex,
+  );
+  if (!stepFields.length) return;
+
+  let inputs: Record<string, unknown> = {};
+  try {
+    const { data } = await $api.GET(`/api/runs/${runId.value}`, {});
+    inputs = ((data as { inputs?: Record<string, unknown> })?.inputs ?? {});
+  } catch {
+    inputs = {};
+  }
+
+  const missing = stepFields.filter((field) => {
+    const value = inputs[field.key];
+    return value === undefined || value === null || value === "";
+  });
+  if (!missing.length) return;
+
+  currentPage.value = null;
+  pendingInputs.value = {
+    stepIndex,
+    stepTitle: missing[0].stepTitle,
+    fields: missing,
+  };
   phase.value = "waiting";
 }
 
@@ -605,6 +754,13 @@ function submitFields() {
   if (!currentPage.value || !socketApi.value) return;
   socketApi.value.submitPage(currentPage.value.stepIndex, { ...formData.value });
   currentPage.value = null;
+  phase.value = "running";
+}
+
+function submitPendingInputs(values: Record<string, unknown>) {
+  if (!pendingInputs.value || !socketApi.value) return;
+  socketApi.value.submitInputs(pendingInputs.value.stepIndex, values);
+  pendingInputs.value = null;
   phase.value = "running";
 }
 
@@ -681,6 +837,7 @@ function reset() {
   phase.value = "idle";
   stepProgress.value = [];
   currentPage.value = null;
+  pendingInputs.value = null;
   totalDurationMs.value = 0;
   errorMessage.value = "";
   formData.value = {};
@@ -696,7 +853,7 @@ function formatFileSize(bytes: number): string {
 }
 
 onMounted(async () => {
-  await fetchScenario();
+  await Promise.all([fetchScenario(), fetchManualInputs()]);
   resumeFromUrl();
 });
 

@@ -5,6 +5,7 @@ import { Scenario, ScenarioSchema } from "../scenarios/scenario.schema";
 import { App, AppSchema } from "../apps/app.schema";
 import { ExecutionController } from "./execution.controller";
 import { ExecutionService } from "./execution.service";
+import { ManualInputsService } from "./manual-inputs.service";
 import { WorkerService } from "./worker.service";
 import { WebSocketModule } from "../websocket/websocket.module";
 import { SsrfGuard } from "../apps/ssrf-guard";
@@ -20,7 +21,7 @@ import { SsrfGuard } from "../apps/ssrf-guard";
     WebSocketModule,
   ],
   controllers: [ExecutionController],
-  providers: [ExecutionService, WorkerService, SsrfGuard],
-  exports: [ExecutionService],
+  providers: [ExecutionService, ManualInputsService, WorkerService, SsrfGuard],
+  exports: [ExecutionService, ManualInputsService],
 })
 export class ExecutionModule {}

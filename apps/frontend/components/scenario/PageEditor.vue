@@ -1,11 +1,38 @@
 <script setup lang="ts">
 // Page editor: the screen a user sees before a step runs — a field form, a file
 // dropzone, or a text block. Form on the left, live preview on the right.
-import type { PageField, Step, StepPage } from "@fuse/shared";
+import type { PageField, Step, StepPage, StepSchema } from "@fuse/shared";
 
-const props = defineProps<{ step: Step }>();
+const props = defineProps<{ step: Step; stepSchema?: StepSchema }>();
 
 const emit = defineEmits<{ save: [page: StepPage]; close: [] }>();
+
+/**
+ * К чему поле страницы может быть привязано: ручные значения ЭТОГО шага —
+ * сами параметры и операнды условий фильтрации. Раньше связь держалась на
+ * совпадении ключа поля с ключом параметра, а ключ выводился из подписи, так
+ * что связать «ИНН организации» с `inn` было нельзя вообще.
+ */
+const targetOptions = computed(() => {
+  const inputs = props.stepSchema?.inputs ?? [];
+  const options = [{ value: "", label: "Не привязано" }];
+
+  for (const [key, source] of Object.entries(props.step.mappings ?? {})) {
+    if (source !== "user") continue;
+    const field = inputs.find((f) => f.key === key);
+    options.push({ value: key, label: field?.label || key });
+  }
+
+  for (const [key, filter] of Object.entries(props.step.filters ?? {})) {
+    if (filter.value?.mode !== "user") continue;
+    options.push({
+      value: `filter:${key}`,
+      label: `Условие отбора: ${filter.field}`,
+    });
+  }
+
+  return options;
+});
 
 const PAGE_TYPES = [
   { value: "fields", label: "Ввод полей" },
@@ -38,7 +65,13 @@ function switchType(type: StepPage["type"]) {
 
 function addField() {
   if (page.type !== "fields") return;
-  page.fields.push({ key: `field_${page.fields.length + 1}`, label: "", placeholder: "", required: false });
+  page.fields.push({
+    key: `field_${page.fields.length + 1}`,
+    label: "",
+    placeholder: "",
+    required: false,
+    target: "",
+  });
 }
 
 function removeField(idx: number) {
@@ -120,8 +153,18 @@ function save() {
                 </IconButton>
               </div>
               <Input v-model="field.placeholder" placeholder="Плейсхолдер" />
-              <div class="flex items-center justify-between">
-                <code class="font-mono text-[0.75rem] text-zinc-400">{{ field.key }}</code>
+
+              <Select
+                v-model="field.target"
+                label="Заполняет"
+                :options="targetOptions"
+                placeholder="Не привязано"
+              />
+              <p v-if="targetOptions.length === 1" class="font-sans text-[0.75rem] text-zinc-400">
+                У шага нет значений с источником «Ручной ввод» — привязывать поле не к чему.
+              </p>
+
+              <div class="flex items-center justify-end">
                 <label
                   class="inline-flex items-center gap-2 font-sans text-[0.8125rem] text-zinc-600 cursor-pointer"
                 >

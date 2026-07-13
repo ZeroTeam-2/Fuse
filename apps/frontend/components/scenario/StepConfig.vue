@@ -103,6 +103,25 @@ const pageTypeLabel = computed(() =>
   props.step.page ? (PAGE_LABELS[props.step.page.type] ?? "") : "",
 );
 
+/**
+ * Откуда придёт значение ручного ввода: со страницы этого шага (если её поле
+ * привязано к значению) либо из общей формы перед запуском. Раньше панель
+ * обещала «пользователь введёт при запуске», не уточняя — кто и где спросит,
+ * а собрать значение у шага без страницы было вообще некому.
+ */
+function manualSourceHint(localKey: string): string {
+  const page = props.step.page;
+  const fields = page?.type === "fields" ? page.fields : [];
+
+  const boundByPage = fields.some((field) =>
+    field.target ? field.target === localKey : field.key === localKey,
+  );
+
+  return boundByPage
+    ? "Значение запросит страница этого шага."
+    : "Значение запросит форма перед запуском сценария.";
+}
+
 const CONST_HINT = "Можно подставить результат шага: {{s0:company_id}}";
 
 const prevStepOptions = computed(() =>
@@ -591,13 +610,13 @@ watch(hydrateKey, hydrate, { immediate: true });
                         </div>
 
                         <div v-else class="font-sans text-[0.8125rem] text-zinc-400">
-                          Пользователь введёт значение для сравнения при запуске сценария.
+                          {{ manualSourceHint(`filter:${f.key}`) }}
                         </div>
                       </div>
                     </div>
 
                     <div v-else class="font-sans text-[0.8125rem] text-zinc-400">
-                      Пользователь введёт значение при запуске сценария.
+                      {{ manualSourceHint(f.key) }}
                     </div>
                   </div>
                 </div>
@@ -736,7 +755,7 @@ watch(hydrateKey, hydrate, { immediate: true });
           </div>
           <div v-else class="flex flex-col items-center gap-3 border border-dashed border-zinc-200 rounded-xl px-4 py-6">
             <div class="font-sans text-[0.8125rem] text-zinc-400 text-center">
-              Страница не настроена — значения ручного ввода запросятся общей формой.
+              Страница не настроена — пользователь увидит шаг без отдельного экрана.
             </div>
             <Button variant="secondary" size="sm" @click="emit('edit-page')">
               <template #left><Icon name="plus" :size="15" /></template>

@@ -42,6 +42,8 @@ function makeWorker(app: unknown) {
   const ssrfGuard = { assertSafeUrl: vi.fn().mockResolvedValue(undefined) };
   const config = { get: vi.fn(() => undefined) };
 
+  const manualInputs = { forSteps: vi.fn().mockResolvedValue([]) };
+
   const worker = new WorkerService(
     runModel as any,
     scenarioModel as any,
@@ -49,6 +51,7 @@ function makeWorker(app: unknown) {
     config as any,
     gateway as any,
     ssrfGuard as any,
+    manualInputs as any,
   );
 
   return { worker, ssrfGuard };
@@ -58,8 +61,12 @@ function runStep(worker: WorkerService, step: unknown) {
   return (worker as any).executeStep(step, {
     runId: "run-1",
     stepIndex: 0,
+    stepPath: [0],
     stepResults: [],
     appCache: new Map(),
+    runInputs: {},
+    descriptors: [],
+    warnings: [],
   });
 }
 

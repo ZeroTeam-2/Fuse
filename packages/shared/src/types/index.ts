@@ -129,6 +129,13 @@ export interface PageField {
   label: string;
   placeholder?: string;
   required: boolean;
+  /**
+   * Значение шага, которое заполняет это поле: ключ входа (`inn`) либо операнд
+   * его условия фильтрации (`filter:inn`). Без привязки поле уходит во входы
+   * шага под собственным `key` — правило, по которому страницы работали до
+   * появления `target`.
+   */
+  target?: string;
 }
 
 export type StepPage =
@@ -308,6 +315,37 @@ export interface Run {
 
 export interface CreateRunDto {
   scenarioId: string;
+  /** Значения ручного ввода по скоуп-ключам (`s0:inn`, `s2.s0:filter:status`). */
+  inputs?: Record<string, unknown>;
+}
+
+/**
+ * Одно значение сценария, помеченное ручным вводом: либо сам параметр шага
+ * (`mappings[key] = "user"`), либо операнд его условия фильтрации
+ * (`filters[key].value.mode = "user"`). Считается на сервере по всем шагам —
+ * этим списком форма запуска строит поля, а воркер проверяет полноту входов.
+ */
+export interface ManualInputDescriptor {
+  /** Ключ во входах запуска: `s0:inn`, `s2.s0:filter:status`. */
+  key: string;
+  /** Путь до шага: `[3]` или `[2, 0]` для шага вложенного сценария. */
+  stepPath: number[];
+  /** Индекс шага на своём уровне вложенности. */
+  stepIndex: number;
+  stepTitle: string;
+  /** Ключ входа шага, к которому относится значение. */
+  paramKey: string;
+  kind: "param" | "filter";
+  label: string;
+  type: SchemaField["type"];
+  required: boolean;
+  /** Кто спросит значение: общая форма перед запуском или страница ввода шага. */
+  source: "form" | "page";
+}
+
+export interface SubmitInputsDto {
+  stepIndex: number;
+  values: Record<string, unknown>;
 }
 
 export interface MarketplaceQuery extends PaginationQuery {
