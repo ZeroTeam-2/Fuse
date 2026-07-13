@@ -21,7 +21,10 @@ import { JwtAuthGuard } from "./auth/guards/jwt-auth.guard";
     ConfigModule.forRoot({
       isGlobal: true,
       validate: validateEnv,
-      envFilePath: ["../../.env", ".env"],
+      // .env.local перекрывает .env (первый файл в списке выигрывает при коллизии
+      // ключей): локальный профиль инфраструктуры включается созданием файла из
+      // .env.local.example, выключается — его удалением. Боевой .env не трогаем.
+      envFilePath: ["../../.env.local", "../../.env", ".env"],
     }),
     MongooseModule.forRootAsync({
       imports: [ConfigModule],

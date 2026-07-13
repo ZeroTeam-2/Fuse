@@ -150,19 +150,35 @@ async function create() {
   if (!canCreate.value || submitting.value) return;
   submitting.value = true;
   createError.value = "";
+
+  let id: string;
   try {
     const { data, error } = await $api.POST("/api/scenarios", {
       body: { title: newTitle.value.trim() },
     });
     if (error || !data) {
       createError.value = "Не удалось создать сценарий";
+      submitting.value = false;
       return;
     }
-    await navigateTo(`/my/scenarios/${data.id}/edit`);
+    id = data.id;
   } catch {
     createError.value = "Не удалось создать сценарий";
-  } finally {
     submitting.value = false;
+    return;
+  }
+
+  // Сценарий уже создан. Если переход в редактор упадёт (в dev это делает Vite:
+  // редактор — первое место, где подгружается Tiptap, из-за чего пересобираются
+  // зависимости и страница перезагружается прямо посреди перехода), показывать
+  // «не удалось создать» нельзя: пользователь нажмёт «Создать» ещё раз и получит
+  // дубль. Уходим жёстким переходом; submitting не сбрасываем, чтобы кнопка
+  // осталась заблокированной.
+  const target = `/my/scenarios/${id}/edit`;
+  try {
+    await navigateTo(target);
+  } catch {
+    window.location.assign(target);
   }
 }
 
