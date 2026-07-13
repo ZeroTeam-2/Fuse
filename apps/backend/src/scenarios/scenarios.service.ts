@@ -59,8 +59,9 @@ export class ScenariosService {
     };
   }
 
-  async findById(id: string): Promise<ScenarioDocument> {
-    const scenario = await this.scenarioModel.findById(id).exec();
+  async findById(id: string, ownerId?: string): Promise<ScenarioDocument> {
+    const filter = ownerId ? { _id: id, ownerId } : { _id: id };
+    const scenario = await this.scenarioModel.findOne(filter).exec();
     if (!scenario) {
       throw new NotFoundException(`Scenario #${id} not found`);
     }
@@ -85,9 +86,10 @@ export class ScenariosService {
 
   async update(
     id: string,
+    ownerId: string,
     dto: UpdateScenarioDto,
   ): Promise<ScenarioDocument> {
-    const scenario = await this.findById(id);
+    const scenario = await this.findById(id, ownerId);
 
     if (dto.steps) {
       const refSteps = (dto.steps as Step[]).filter(
@@ -134,7 +136,7 @@ export class ScenariosService {
     }
 
     const updated = await this.scenarioModel
-      .findByIdAndUpdate(id, updateQuery, { new: true })
+      .findOneAndUpdate({ _id: id, ownerId }, updateQuery, { new: true })
       .exec();
 
     if (!updated) {
@@ -143,8 +145,8 @@ export class ScenariosService {
     return updated;
   }
 
-  async togglePublish(id: string): Promise<ScenarioDocument> {
-    const scenario = await this.findById(id);
+  async togglePublish(id: string, ownerId: string): Promise<ScenarioDocument> {
+    const scenario = await this.findById(id, ownerId);
 
     if (!scenario.published && scenario.steps.length === 0) {
       throw new BadRequestException(
@@ -160,8 +162,8 @@ export class ScenariosService {
     }
 
     const updated = await this.scenarioModel
-      .findByIdAndUpdate(
-        id,
+      .findOneAndUpdate(
+        { _id: id, ownerId },
         { $set: { published: !scenario.published } },
         { new: true },
       )
@@ -173,13 +175,18 @@ export class ScenariosService {
     return updated;
   }
 
-  async delete(id: string): Promise<ScenarioDocument> {
+  async delete(id: string, ownerId: string): Promise<ScenarioDocument> {
+    // Проверяем владение перед отменой ранов и удалением
+    await this.findById(id, ownerId);
+
     // Уже запущенные `Run`ы этого сценария иначе продолжат исполняться в
     // воркере даже после удаления самого сценария — их нужно остановить
     // до (а не после) удаления, чтобы не проверять статус гонкой.
     await this.executionService.cancelActiveRunsForScenarios([id]);
 
-    const deleted = await this.scenarioModel.findByIdAndDelete(id).exec();
+    const deleted = await this.scenarioModel
+      .findOneAndDelete({ _id: id, ownerId })
+      .exec();
     if (!deleted) {
       throw new NotFoundException(`Scenario #${id} not found`);
     }
@@ -192,8 +199,12 @@ export class ScenariosService {
       .exec();
   }
 
-  async getStepSchema(scenarioId: string, stepIndex: number): Promise<StepSchema> {
-    const scenario = await this.findById(scenarioId);
+  async getStepSchema(
+    scenarioId: string,
+    stepIndex: number,
+    ownerId?: string,
+  ): Promise<StepSchema> {
+    const scenario = await this.findById(scenarioId, ownerId);
 
     const steps = (scenario.steps ?? []) as Step[];
 

@@ -72,8 +72,9 @@ export class App {
   @Prop()
   description?: string;
 
-  @Prop({ required: true })
-  openapiUrl: string;
+  // Optional: file-imported apps have no spec URL to fetch from.
+  @Prop()
+  openapiUrl?: string;
 
   // Absolute base every endpoint path is resolved against at execution time.
   // Optional on the schema so pre-existing apps load; the worker rejects a step

@@ -40,8 +40,8 @@ export class ScenariosController {
 
   @Get(":id")
   @ApiOperation({ summary: "Get a single scenario" })
-  findById(@Param("id") id: string) {
-    return this.scenariosService.findById(id);
+  findById(@Param("id") id: string, @Req() req: AuthenticatedRequest) {
+    return this.scenariosService.findById(id, req.user.userId);
   }
 
   @Post()
@@ -58,20 +58,21 @@ export class ScenariosController {
   update(
     @Param("id") id: string,
     @Body() dto: UpdateScenarioDto,
+    @Req() req: AuthenticatedRequest,
   ) {
-    return this.scenariosService.update(id, dto);
+    return this.scenariosService.update(id, req.user.userId, dto);
   }
 
   @Patch(":id/publish")
   @ApiOperation({ summary: "Toggle scenario published status" })
-  togglePublish(@Param("id") id: string) {
-    return this.scenariosService.togglePublish(id);
+  togglePublish(@Param("id") id: string, @Req() req: AuthenticatedRequest) {
+    return this.scenariosService.togglePublish(id, req.user.userId);
   }
 
   @Delete(":id")
   @ApiOperation({ summary: "Delete a scenario" })
-  delete(@Param("id") id: string) {
-    return this.scenariosService.delete(id);
+  delete(@Param("id") id: string, @Req() req: AuthenticatedRequest) {
+    return this.scenariosService.delete(id, req.user.userId);
   }
 
   @Get(":id/step-schema/:index")
@@ -79,7 +80,8 @@ export class ScenariosController {
   getStepSchema(
     @Param("id") id: string,
     @Param("index") index: string,
+    @Req() req: AuthenticatedRequest,
   ) {
-    return this.scenariosService.getStepSchema(id, Number(index));
+    return this.scenariosService.getStepSchema(id, Number(index), req.user.userId);
   }
 }

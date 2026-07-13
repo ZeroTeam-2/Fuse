@@ -1,5 +1,6 @@
 import { Injectable, BadRequestException } from "@nestjs/common";
 import { lookup as dnsLookup } from "node:dns/promises";
+import { parseSpecText } from "./spec-text-parser";
 
 const FETCH_TIMEOUT_MS = 30_000;
 const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
@@ -146,10 +147,9 @@ export class SsrfGuard {
 
     const text = Buffer.concat(chunks).toString("utf-8");
 
-    try {
-      return JSON.parse(text) as Record<string, unknown>;
-    } catch {
-      throw new BadRequestException("Spec response is not valid JSON");
-    }
+    return parseSpecText(
+      text,
+      response.headers.get("content-type") ?? "",
+    );
   }
 }
