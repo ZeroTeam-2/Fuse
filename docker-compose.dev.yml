@@ -76,6 +76,15 @@ services:
       retries: 5
       start_period: 15s
 
+  # Мок внешнего API: на него смотрит baseUrl сид-приложения, чтобы api-шаги
+  # сценариев исполнялись против локального эндпоинта, а не чужого сервиса.
+  mock-api:
+    image: mccutchen/go-httpbin:v2.15.0
+    container_name: fuse-mock-api
+    restart: unless-stopped
+    ports:
+      - "8085:8080"
+
   # Одноразовый бутстрап: создаёт бакет и завершается. Идемпотентен.
   minio-init:
     image: minio/mc:latest

@@ -9,7 +9,9 @@
     "start": "node dist/main",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "backfill:base-url": "node scripts/backfill-app-base-url.mts"
+    "test:infra": "vitest run --config vitest.infra.config.ts",
+    "backfill:base-url": "node scripts/backfill-app-base-url.mts",
+    "seed": "node scripts/seed-local.mts"
   },
   "dependencies": {
     "@fuse/shared": "workspace:*",
