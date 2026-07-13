@@ -41,6 +41,18 @@ export default defineNuxtConfig({
 
   modules: ["@nuxtjs/tailwindcss", "@pinia/nuxt", "nuxt-tiptap-editor"],
 
+  vite: {
+    optimizeDeps: {
+      // Tiptap подключается только в редакторе (RichTextEditor). Без этого Vite
+      // обнаруживает его лишь при первом переходе туда, пересобирает зависимости
+      // и перезагружает страницу прямо посреди навигации — переход падает, а
+      // вызвавшая его форма получает ошибку на ровном месте.
+      // Здесь только пакет, который импортирует само приложение: @tiptap/vue-3 и
+      // starter-kit — зависимости nuxt-tiptap-editor и из фронтенда не резолвятся.
+      include: ["@tiptap/extension-placeholder"],
+    },
+  },
+
   components: [
     // Design-system primitives registered without a path prefix so their names
     // match the source design system (<Button>, <Card>, <ScenarioCard>…).
