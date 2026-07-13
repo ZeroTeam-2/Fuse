@@ -64,6 +64,9 @@ export default defineNuxtConfig({
 
   app: {
     head: {
+      // Заголовок по умолчанию: без него вкладка браузера остаётся безымянной
+      // (страницы могут переопределять его через useHead).
+      title: "Fuse",
       link: [
         { rel: "preconnect", href: "https://fonts.googleapis.com" },
         {

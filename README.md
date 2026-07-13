@@ -90,6 +90,21 @@ pnpm dev:frontend  # frontend
 | SQS (LocalStack) | `4566` | очередь + DLQ создаются на старте |
 | S3 (MinIO) | `9000` | бакет `fuse` создаётся на старте |
 | Консоль MinIO | `9001` | `minioadmin` / `minioadmin` |
+| Мок-API | `8085` | go-httpbin; на него смотрит сид-приложение |
+
+### Сид локальной БД
+
+После `pnpm infra:reset` база пустая — в UI нечего открыть. `pnpm seed` заводит
+пользователя, демо-приложение на мок-API и два сценария: «Демо: задержка»
+(без внешних вызовов) и «Демо: запрос к API».
+
+```bash
+pnpm seed   # идемпотентен: повторный запуск не плодит дубликаты
+```
+
+Сид отказывается работать, если `MONGODB_URL` указывает не на локальную БД —
+случайно засеять прод не получится. Id созданных сущностей пишутся в `.seed.json`
+(в `.gitignore`) — оттуда их берут e2e-тесты.
 
 ### Переключение профилей окружения
 
@@ -179,7 +194,10 @@ pnpm dev:main         # Только backend API (+ SQS-worker)
 pnpm dev:frontend     # Только frontend
 pnpm build            # Сборка всех пакетов
 pnpm typecheck        # TypeScript проверка всех пакетов
-pnpm test             # Запуск тестов (vitest)
+pnpm test             # Юнит-тесты (vitest)
+pnpm test:infra       # Smoke-тест локальной инфраструктуры (нужен pnpm infra)
+pnpm test:e2e         # E2E в браузере (нужны pnpm infra + pnpm seed + pnpm dev)
+pnpm seed             # Наполнить локальную БД сид-данными
 pnpm lint             # Линтинг (oxlint)
 pnpm format           # Форматирование (oxfmt)
 pnpm gen:types        # Генерация типов из OpenAPI-спеки backend'а
