@@ -22,6 +22,22 @@ function run(cmd, args) {
   execFileSync(cmd, args, { stdio: "inherit" });
 }
 
+// change-id — имя папки, kebab-case. Заодно это гарантия, что id безопасно
+// подставлять в шелл-строку openspec-вызова (см. openspec ниже).
+function assertValidId(id) {
+  if (!/^[a-z0-9][a-z0-9._-]*$/.test(id)) {
+    die(`Недопустимый change-id '${id}'. Ожидается kebab-case: [a-z0-9._-].`);
+  }
+}
+
+// openspec ставится как .cmd-шим; современный Node не запускает .cmd без
+// оболочки (git — настоящий .exe, ему shell не нужен). Массив аргументов с
+// shell:true устарел как небезопасный, поэтому собираем строку сами — id уже
+// провалидирован assertValidId, а остальные аргументы литеральны.
+function openspecRun(argv) {
+  execSync(`openspec ${argv.join(" ")}`, { stdio: "inherit" });
+}
+
 function capture(cmd) {
   return execSync(cmd, { encoding: "utf8" }).trim();
 }
@@ -42,6 +58,7 @@ function assertChangeExists(id) {
       }\n\n  Использование: pnpm change:start <change-id>`,
     );
   }
+  assertValidId(id);
   if (!existsSync(join(CHANGES_DIR, id, "proposal.md"))) {
     die(
       `Нет ${CHANGES_DIR}/${id}/proposal.md.\n` +
@@ -52,7 +69,7 @@ function assertChangeExists(id) {
 
 function openspec(args) {
   try {
-    run("openspec", args);
+    openspecRun(args);
   } catch {
     die(
       `Команда 'openspec' недоступна или завершилась с ошибкой.\n` +
@@ -111,6 +128,7 @@ function archive(idArg) {
 
   if (!id && branch.startsWith("change/")) id = branch.slice("change/".length);
   if (!id) die("Не указан change-id и текущая ветка не change/*.");
+  assertValidId(id);
 
   if (branch !== `change/${id}`) {
     die(`Архивировать '${id}' нужно на ветке change/${id}, а вы на '${branch}'.`);
