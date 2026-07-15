@@ -23,6 +23,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # nuxt.config.ts валидирует env уже на этапе typecheck (и тесты читают тот
+      # же .env). В CI настоящего .env нет — берём плейсхолдеры из .env.example,
+      # чтобы набор переменных не разъезжался со схемой config/env.schema.ts.
+      - name: Prepare env
+        run: cp .env.example .env
+
       - name: Lint
         run: pnpm lint
 
