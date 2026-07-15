@@ -13,6 +13,8 @@
     "infra:reset": "docker compose -f docker-compose.dev.yml down -v && pnpm infra",
     "infra:logs": "docker compose -f docker-compose.dev.yml logs -f",
     "seed": "pnpm --filter @fuse/backend seed",
+    "change:start": "node scripts/change.mjs start",
+    "change:archive": "node scripts/change.mjs archive",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",

@@ -1,0 +1,26 @@
+#!/bin/sh
+# Сеть безопасности: ловит несоответствие имени ветки change/<id> и папки
+# openspec/changes/<id> ДО пуша, пока ошибку легко исправить локально.
+# Happy path (pnpm change:start) сюда не упирается — имя ветки там выводится
+# из папки автоматически. Хук защищает тех, кто вёл ветку руками.
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  # Удаление ветки (local_sha из одних нулей) не проверяем.
+  case "$local_sha" in
+    *[!0]*) ;;
+    *) continue ;;
+  esac
+
+  case "$remote_ref" in
+    refs/heads/change/*)
+      id=${remote_ref#refs/heads/change/}
+      if [ ! -d "openspec/changes/$id" ] && ! ls -d openspec/changes/archive/*-"$id" >/dev/null 2>&1; then
+        echo "pre-push: ветка 'change/$id' не соответствует ни одной change." >&2
+        echo "  Нет ни openspec/changes/$id, ни записи в openspec/changes/archive/." >&2
+        echo "  Имя ветки должно совпадать с именем папки change." >&2
+        echo "  Проще всего заводить ветку через: pnpm change:start <id>" >&2
+        exit 1
+      fi
+      ;;
+  esac
+done
