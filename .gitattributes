@@ -4,3 +4,7 @@
 # про сам скрипт). На Windows с core.autocrlf=true это происходит молча при
 # каждом checkout — так у нас годами не создавалась SQS-очередь в LocalStack.
 *.sh text eol=lf
+
+# Git-хуки исполняются через sh, но расширения не имеют — *.sh их не ловит.
+# Тот же CRLF-шебанг сломал бы их при checkout на Windows.
+.githooks/** text eol=lf

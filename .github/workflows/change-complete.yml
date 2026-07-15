@@ -1,0 +1,37 @@
+name: Change complete
+
+# Закрывает issue, когда PR change/<id> влит в develop.
+# Отдельный workflow нужен потому, что ключевые слова вроде "Closes #N" закрывают
+# issue только при мерже в дефолтную ветку репозитория, а мы вливаем в develop.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [develop]
+
+permissions:
+  contents: read
+
+jobs:
+  close-issue:
+    if: github.event.pull_request.merged == true && startsWith(github.head_ref, 'change/')
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.FLOW_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      ID: ${{ github.head_ref }}
+      PR: ${{ github.event.pull_request.number }}
+
+    steps:
+      - name: Закрыть связанный issue
+        run: |
+          set -euo pipefail
+          id="${ID#change/}"
+          num=$(gh issue list --label "change:$id" --state open --limit 1 --json number --jq '.[0].number // empty')
+
+          if [ -z "$num" ]; then
+            echo "Открытого issue с лейблом change:$id нет — закрывать нечего."
+            exit 0
+          fi
+
+          gh issue close "$num" --reason completed --comment "Влито в develop через #$PR. Change заархивирован, спеки капабилити обновлены."
