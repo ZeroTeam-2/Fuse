@@ -106,29 +106,73 @@ function readResultField(result: unknown, key: string): unknown {
   return (source as Record<string, unknown>)[key];
 }
 
+function isPrimitive(value: unknown): value is string | number | boolean {
+  return (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  );
+}
+
+/** Разбор `s{idx}:{outKey}` в индекс шага и ключ поля. */
+function parseStepRef(ref: string): { index: number; key: string } | null {
+  const match = ref.match(/^s(\d+):(.+)$/);
+  return match ? { index: Number(match[1]), key: match[2] } : null;
+}
+
 /**
- * Значения блоков отображения, разрешённые из результатов пройденных шагов, по
- * `blockId`. Привязка `s{idx}:{outKey}` читает поле результата шага-источника;
- * недоступный источник (нет шага/поля/результата) даёт `undefined` — блок
- * покажется пустым, шаг не упадёт.
+ * Разворот результата шага-источника в список вариантов `select`. Покрывает обе
+ * формы массива, как и резолвер условий: результат-объект с массивным полем
+ * (`{ cars: [...] }` → берём `cars`) и результат-массив объектов (собираем поле
+ * `key` каждого элемента). Оставляем только примитивы, приводим к строке.
  */
-export function resolveDisplayBindings(
+function collectOptionValues(result: unknown, key: string): string[] {
+  let list: unknown[] = [];
+
+  if (Array.isArray(result)) {
+    // Массив объектов — поле `key` каждого; массив примитивов — сами элементы.
+    list = result.map((el) =>
+      el && typeof el === "object" ? (el as Record<string, unknown>)[key] : el,
+    );
+  } else if (result && typeof result === "object") {
+    const field = (result as Record<string, unknown>)[key];
+    if (Array.isArray(field)) list = field;
+  }
+
+  return list.filter(isPrimitive).map((v) => String(v));
+}
+
+/**
+ * Данные блоков страницы, разрешённые из результатов пройденных шагов, по
+ * `blockId`:
+ * - блок отображения (`paragraph`) с `binding = s{idx}:{outKey}` → скалярное
+ *   значение поля результата шага-источника;
+ * - блок `select` с `optionsSource = s{idx}:{outKey}` → массив строк-вариантов,
+ *   развёрнутый из массивного поля/результата шага-источника.
+ * Недоступный источник (нет шага/поля/результата) блок не роняет: отображение
+ * покажется пустым, у select останутся статические `options`.
+ */
+export function resolvePageBindings(
   page: StepPage | undefined,
   stepResults: RunStepResult[],
 ): Record<string, unknown> {
   const resolved: Record<string, unknown> = {};
 
   for (const block of pageBlocks(page)) {
-    if (!isDisplayBlock(block) || !block.binding) continue;
+    if (isDisplayBlock(block) && block.binding) {
+      const ref = parseStepRef(block.binding);
+      if (!ref) continue;
+      const value = readResultField(stepResults[ref.index]?.result, ref.key);
+      if (value !== undefined) resolved[block.id] = value;
+      continue;
+    }
 
-    const match = block.binding.match(/^s(\d+):(.+)$/);
-    if (!match) continue;
-
-    const value = readResultField(
-      stepResults[Number(match[1])]?.result,
-      match[2],
-    );
-    if (value !== undefined) resolved[block.id] = value;
+    if (block.type === "select" && block.optionsSource) {
+      const ref = parseStepRef(block.optionsSource);
+      if (!ref) continue;
+      const options = collectOptionValues(stepResults[ref.index]?.result, ref.key);
+      if (options.length) resolved[block.id] = options;
+    }
   }
 
   return resolved;
