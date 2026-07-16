@@ -30,20 +30,27 @@ jobs:
           id="${GITHUB_REF_NAME#change/}"
           dir="openspec/changes/$id"
 
-          if [ ! -f "$dir/proposal.md" ]; then
+          if [ -f "$dir/proposal.md" ]; then
+            echo "id=$id" >> "$GITHUB_OUTPUT"
+            echo "title=Change: $id" >> "$GITHUB_OUTPUT"
+          elif ls -d openspec/changes/archive/*-"$id" >/dev/null 2>&1; then
+            # Архивный коммит — легитимный push последнего шага. Issue и PR уже
+            # созданы на первом пуше, бутстрапить нечего. Не падаем.
+            echo "Change '$id' уже заархивирован — пропускаю бутстрап."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
             echo "::error::Ветка '$GITHUB_REF_NAME' не несёт артефактов OpenSpec: нет $dir/proposal.md."
             echo "::error::Первым коммитом ветки change/<id> должны приехать артефакты из openspec/changes/<id>/."
             exit 1
           fi
 
-          echo "id=$id" >> "$GITHUB_OUTPUT"
-          echo "title=Change: $id" >> "$GITHUB_OUTPUT"
-
       - name: Убедиться, что лейбл существует
+        if: steps.change.outputs.skip != 'true'
         run: gh label create "change:${{ steps.change.outputs.id }}" --color BFD4F2 --description "OpenSpec change" --force
 
       - name: Найти или создать issue
         id: issue
+        if: steps.change.outputs.skip != 'true'
         env:
           ID: ${{ steps.change.outputs.id }}
           TITLE: ${{ steps.change.outputs.title }}
@@ -71,6 +78,7 @@ jobs:
           echo "number=$num" >> "$GITHUB_OUTPUT"
 
       - name: Найти или открыть черновой PR
+        if: steps.change.outputs.skip != 'true'
         env:
           ID: ${{ steps.change.outputs.id }}
           TITLE: ${{ steps.change.outputs.title }}
