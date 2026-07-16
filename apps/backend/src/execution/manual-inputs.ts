@@ -1,11 +1,13 @@
 import type {
   ManualInputDescriptor,
-  PageField,
+  PageBlock,
+  RunStepResult,
   SchemaField,
   Step,
   StepPage,
   StepSchema,
 } from "@fuse/shared";
+import { isDisplayBlock, isInputBlock, pageBlocks } from "@fuse/shared";
 
 /**
  * Перечисление значений сценария, помеченных ручным вводом, — параметров
@@ -61,41 +63,75 @@ export function sliceInputsForStep(
   return slice;
 }
 
-function pageFields(page: StepPage | undefined): PageField[] {
-  return page?.type === "fields" ? page.fields : [];
+/** Блоки ввода страницы — только они собирают значения шага. */
+function pageInputBlocks(page: StepPage | undefined): PageBlock[] {
+  return pageBlocks(page).filter(isInputBlock);
 }
 
 /**
- * Поле страницы закрывает значение шага, если привязано к нему через `target`.
- * Поля без `target` (страницы, настроенные до появления привязок) закрывают
- * параметр по совпадению ключа — так они работали до сих пор.
+ * Блок ввода закрывает значение шага, если привязан к нему через `binding`.
+ * Блоки без привязки ничего не закрывают: их значение уйдёт во входы шага под
+ * собственным `id`, не подменяя ручной параметр.
  */
 export function pageCovers(step: Step, localKey: string): boolean {
-  return pageFields(step.page).some((field) =>
-    field.target ? field.target === localKey : field.key === localKey,
-  );
+  return pageInputBlocks(step.page).some((block) => block.binding === localKey);
 }
 
 /**
- * Данные страницы — из ключей полей в локальные ключи значений шага.
- * Поле без привязки кладётся по собственному ключу, как раньше.
+ * Данные страницы — из id блоков в локальные ключи значений шага. Значение
+ * привязанного блока кладётся под его `binding`, непривязанного — под `id`.
  */
 export function mapPageDataToLocalKeys(
   step: Step,
   data: Record<string, unknown>,
 ): Record<string, unknown> {
-  const targets = new Map(
-    pageFields(step.page)
-      .filter((field) => field.target)
-      .map((field) => [field.key, field.target as string]),
+  const bindings = new Map(
+    pageInputBlocks(step.page)
+      .filter((block) => block.binding)
+      .map((block) => [block.id, block.binding as string]),
   );
 
   const mapped: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data)) {
-    mapped[targets.get(key) ?? key] = value;
+    mapped[bindings.get(key) ?? key] = value;
   }
 
   return mapped;
+}
+
+/** Поле результата шага; массивный выход сводится к первому элементу. */
+function readResultField(result: unknown, key: string): unknown {
+  const source = Array.isArray(result) ? result[0] : result;
+  if (!source || typeof source !== "object") return undefined;
+  return (source as Record<string, unknown>)[key];
+}
+
+/**
+ * Значения блоков отображения, разрешённые из результатов пройденных шагов, по
+ * `blockId`. Привязка `s{idx}:{outKey}` читает поле результата шага-источника;
+ * недоступный источник (нет шага/поля/результата) даёт `undefined` — блок
+ * покажется пустым, шаг не упадёт.
+ */
+export function resolveDisplayBindings(
+  page: StepPage | undefined,
+  stepResults: RunStepResult[],
+): Record<string, unknown> {
+  const resolved: Record<string, unknown> = {};
+
+  for (const block of pageBlocks(page)) {
+    if (!isDisplayBlock(block) || !block.binding) continue;
+
+    const match = block.binding.match(/^s(\d+):(.+)$/);
+    if (!match) continue;
+
+    const value = readResultField(
+      stepResults[Number(match[1])]?.result,
+      match[2],
+    );
+    if (value !== undefined) resolved[block.id] = value;
+  }
+
+  return resolved;
 }
 
 export interface ManualInputDeps {

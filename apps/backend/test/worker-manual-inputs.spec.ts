@@ -253,16 +253,19 @@ describe("WorkerService — manual inputs", () => {
     expect(calledUrls()[1]).toContain("orgId=org-2");
   });
 
-  it("routes page data to the param it is bound to, despite a different field key", async () => {
+  it("routes page data to the param it is bound to, despite a different block id", async () => {
     const steps = [
       apiStep("Организации", "e1", {
         mappings: { inn: "user" },
         page: {
-          type: "fields",
           title: "Данные",
-          buttonText: "Продолжить",
-          fields: [
-            { key: "инн_организации", label: "ИНН организации", required: true, target: "inn" },
+          rows: [
+            {
+              id: "r1",
+              items: [
+                { id: "инн_организации", type: "input", span: 4, label: "ИНН организации", binding: "inn" },
+              ],
+            },
           ],
         },
       }),
@@ -287,6 +290,48 @@ describe("WorkerService — manual inputs", () => {
     await (worker as any).executeRun("run-1");
 
     expect(calledUrls()[0]).toContain("inn=7707083893");
+  });
+
+  it("resolves a display block from a previous step's result into the page payload", async () => {
+    const steps = [
+      apiStep("Организации", "e2"),
+      apiStep("Заказы", "e2", {
+        page: {
+          title: "Проверьте",
+          rows: [
+            {
+              id: "r1",
+              items: [
+                { id: "out1", type: "paragraph", span: 4, binding: "s0:id" },
+              ],
+            },
+          ],
+        },
+      }),
+    ];
+
+    const run: Record<string, unknown> = {
+      _id: "run-1",
+      scenarioId: "sc1",
+      status: RunStatus.PENDING,
+      currentStep: 0,
+      stepResults: [],
+      inputs: {},
+    };
+
+    const { worker, runModel } = harness(run, steps, []);
+    const publish = vi.fn();
+    (worker as any).gateway = { publish };
+
+    // Страница шага 2 требует ответа — отвечаем, пока воркер ждёт.
+    respondWhileWaiting(runModel, run, {});
+
+    await (worker as any).executeRun("run-1");
+
+    const page = publish.mock.calls.find((call) => call[1].type === "page:required");
+    expect(page).toBeTruthy();
+    // Шаг 0 вернул { id: "org-1" } — блок отображения показывает это значение.
+    expect(page![1].payload.resolved).toEqual({ out1: "org-1" });
   });
 
   it("asks for a missing required value instead of failing the step", async () => {

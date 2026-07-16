@@ -140,11 +140,20 @@ function makeScenario(opts: {
         appId: opts.appId,
         fileMode: "single",
         page: {
-          type: "file",
           title: "Загрузите данные",
-          accept: "*/*",
-          maxMb: 10,
-          buttonText: "Продолжить",
+          rows: [
+            {
+              id: randomUUID(),
+              items: [
+                {
+                  id: randomUUID(),
+                  type: "dropzone",
+                  span: 6,
+                  label: "Загрузка файла",
+                },
+              ],
+            },
+          ],
         },
       },
       {

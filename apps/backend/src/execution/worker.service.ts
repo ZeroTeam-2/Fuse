@@ -35,6 +35,7 @@ import {
   isBlank,
   localKeyOf,
   mapPageDataToLocalKeys,
+  resolveDisplayBindings,
   sliceInputsForStep,
 } from "./manual-inputs";
 import { StepExecutionError, RunCancelledError } from "./execution-errors";
@@ -428,6 +429,9 @@ export class WorkerService
             stepIndex: ctx.stepIndex,
             stepTitle: step.title,
             page: step.page,
+            // Блоки отображения показывают данные пройденных шагов: клиент их
+            // сам не видит, поэтому значения разрешаются здесь и едут в payload.
+            resolved: resolveDisplayBindings(step.page, ctx.stepResults),
           },
           timestamp: new Date().toISOString(),
         },

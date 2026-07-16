@@ -29,10 +29,10 @@
         </div>
         <StepProgress :steps="previewSteps" />
 
-        <!-- Ручные значения всех шагов: обязательные блокируют запуск. -->
+        <!-- Ручные значения без страницы: обязательные блокируют запуск. -->
         <RunManualInputsForm
-          v-if="manualInputs.length"
-          :fields="manualInputs"
+          v-if="formFields.length"
+          :fields="formFields"
           :busy="starting || scenario.blocked"
           @submit="startRun"
         />
@@ -74,87 +74,11 @@
 
       <!-- waiting: page:required -->
       <template v-else-if="phase === 'waiting' && currentPage">
-        <!-- fields -->
-        <template v-if="currentPage.page.type === 'fields'">
-          <div>
-            <h3 class="font-sans font-bold text-[1.0625rem] tracking-tight text-zinc-900 mb-1.5">
-              {{ currentPage.page.title }}
-            </h3>
-            <p v-if="currentPage.page.hint" class="font-sans text-sm text-zinc-500">
-              {{ currentPage.page.hint }}
-            </p>
-          </div>
-          <form class="flex flex-col gap-4" @submit.prevent="submitFields">
-            <Input
-              v-for="field in currentPage.page.fields"
-              :key="field.key"
-              v-model="formData[field.key]"
-              :label="field.required ? `${field.label} *` : field.label"
-              :placeholder="field.placeholder || ''"
-            />
-            <div>
-              <Button variant="primary" type="submit">{{ currentPage.page.buttonText }}</Button>
-            </div>
-          </form>
-        </template>
-
-        <!-- file -->
-        <template v-else-if="currentPage.page.type === 'file'">
-          <div>
-            <h3 class="font-sans font-bold text-[1.0625rem] tracking-tight text-zinc-900 mb-1.5">
-              {{ currentPage.page.title }}
-            </h3>
-            <p v-if="currentPage.page.hint" class="font-sans text-sm text-zinc-500">
-              {{ currentPage.page.hint }}
-            </p>
-          </div>
-          <div
-            :class="[
-              'rounded-2xl border-2 border-dashed p-8 text-center cursor-pointer transition-colors',
-              isDragOver ? 'border-rose-600 bg-rose-50' : 'border-zinc-300 hover:border-rose-400 hover:bg-zinc-50',
-            ]"
-            @click="triggerFileInput"
-            @dragover.prevent="isDragOver = true"
-            @dragleave.prevent="isDragOver = false"
-            @drop.prevent="onFileDrop"
-          >
-            <span v-if="!selectedFile" class="font-sans text-sm text-zinc-500">
-              Перетащите файл сюда или нажмите для выбора
-              <span v-if="currentPage.page.maxMb">(макс. {{ currentPage.page.maxMb }} МБ)</span>
-            </span>
-            <span v-else class="font-sans text-sm font-semibold text-zinc-900">
-              {{ selectedFile.name }} ({{ formatFileSize(selectedFile.size) }})
-            </span>
-          </div>
-          <input
-            ref="fileInput"
-            type="file"
-            class="hidden"
-            :accept="currentPage.page.accept || undefined"
-            @change="onFileSelect"
-          />
-          <p v-if="fileError" class="font-sans text-[0.8125rem] text-rose-600">{{ fileError }}</p>
-          <div>
-            <Button variant="primary" :disabled="!selectedFile || !!fileError" @click="submitFile">
-              {{ currentPage.page.buttonText }}
-            </Button>
-          </div>
-        </template>
-
-        <!-- text -->
-        <template v-else-if="currentPage.page.type === 'text'">
-          <div>
-            <h3 class="font-sans font-bold text-[1.0625rem] tracking-tight text-zinc-900 mb-1.5">
-              {{ currentPage.page.title }}
-            </h3>
-            <div class="font-sans text-[0.9375rem] text-zinc-700 leading-relaxed whitespace-pre-wrap">
-              {{ currentPage.page.body }}
-            </div>
-          </div>
-          <div>
-            <Button variant="primary" @click="submitText">Продолжить</Button>
-          </div>
-        </template>
+        <RunPageRunner
+          :page="currentPage.page"
+          :resolved="currentPage.resolved"
+          @submit="submitPage"
+        />
       </template>
 
       <!-- done -->
@@ -279,6 +203,8 @@ interface PageState {
   stepIndex: number;
   stepTitle: string;
   page: StepPage;
+  /** Значения блоков отображения, разрешённые воркером из результатов пройденных шагов. */
+  resolved?: Record<string, unknown>;
 }
 
 /** Значения, которых воркер не нашёл во входах и просит по ходу выполнения. */
@@ -302,16 +228,19 @@ const starting = ref(false);
 const phase = ref<Phase>("idle");
 const stepProgress = ref<StepProgress[]>([]);
 const currentPage = ref<PageState | null>(null);
-/** Ручные значения сценария, которые спрашивает форма перед запуском. */
+/** Ручные значения сценария — включая те, что собирают страницы шагов. */
 const manualInputs = ref<ManualInputDescriptor[]>([]);
+/**
+ * Форма перед запуском спрашивает ТОЛЬКО значения без страницы (`source: "form"`).
+ * Значения, покрытые страницей шага (`source: "page"`), собирает сама страница по
+ * ходу выполнения — иначе их спросили бы дважды.
+ */
+const formFields = computed(() =>
+  manualInputs.value.filter((field) => field.source === "form"),
+);
 const pendingInputs = ref<PendingInputsState | null>(null);
 const totalDurationMs = ref(0);
 const errorMessage = ref("");
-const formData = ref<Record<string, string>>({});
-const selectedFile = ref<File | null>(null);
-const fileError = ref("");
-const isDragOver = ref(false);
-const fileInput = ref<HTMLInputElement | null>(null);
 
 const runId = ref("");
 const socketApi = shallowRef<ReturnType<typeof useRunSocket> | null>(null);
@@ -584,10 +513,8 @@ function handleWsEvent(event: ServerWsEvent) {
         stepIndex: event.payload.stepIndex,
         stepTitle: event.payload.stepTitle,
         page: event.payload.page as StepPage,
+        resolved: event.payload.resolved,
       };
-      formData.value = {};
-      selectedFile.value = null;
-      fileError.value = "";
       break;
     }
     // Обязательного значения не оказалось во входах запуска — воркер остановился
@@ -704,15 +631,14 @@ function applySnapshot(payload: RunStatusPayload) {
 function restoreWaitingPage(stepIndex: number) {
   const step = scenario.value?.steps?.[stepIndex];
   if (!step?.page) return;
+  // Данные блоков отображения при восстановлении взять неоткуда (событие уже
+  // прошло) — блоки покажутся пустыми, ввод по-прежнему собирается.
   currentPage.value = {
     stepIndex,
     stepTitle: step.title,
     page: step.page,
   };
   pendingInputs.value = null;
-  formData.value = {};
-  selectedFile.value = null;
-  fileError.value = "";
   phase.value = "waiting";
 }
 
@@ -722,7 +648,7 @@ function restoreWaitingPage(stepIndex: number) {
  * запуска. Иначе пользователь остался бы на бесконечном «Выполняем сценарий…».
  */
 async function restoreWaitingInputs(stepIndex: number) {
-  const stepFields = manualInputs.value.filter(
+  const stepFields = formFields.value.filter(
     (field) => field.required && field.stepPath[0] === stepIndex,
   );
   if (!stepFields.length) return;
@@ -750,9 +676,9 @@ async function restoreWaitingInputs(stepIndex: number) {
   phase.value = "waiting";
 }
 
-function submitFields() {
+function submitPage(data: Record<string, unknown>) {
   if (!currentPage.value || !socketApi.value) return;
-  socketApi.value.submitPage(currentPage.value.stepIndex, { ...formData.value });
+  socketApi.value.submitPage(currentPage.value.stepIndex, data);
   currentPage.value = null;
   phase.value = "running";
 }
@@ -761,63 +687,6 @@ function submitPendingInputs(values: Record<string, unknown>) {
   if (!pendingInputs.value || !socketApi.value) return;
   socketApi.value.submitInputs(pendingInputs.value.stepIndex, values);
   pendingInputs.value = null;
-  phase.value = "running";
-}
-
-function submitText() {
-  if (!currentPage.value || !socketApi.value) return;
-  socketApi.value.submitPage(currentPage.value.stepIndex, {});
-  currentPage.value = null;
-  phase.value = "running";
-}
-
-function triggerFileInput() {
-  fileInput.value?.click();
-}
-
-function onFileSelect(e: Event) {
-  const target = e.target as HTMLInputElement;
-  if (target.files && target.files.length > 0) {
-    validateAndSetFile(target.files[0]);
-  }
-}
-
-function onFileDrop(e: DragEvent) {
-  isDragOver.value = false;
-  const files = e.dataTransfer?.files;
-  if (files && files.length > 0) {
-    validateAndSetFile(files[0]);
-  }
-}
-
-function validateAndSetFile(file: File) {
-  fileError.value = "";
-  const page = currentPage.value?.page;
-  if (page && page.type === "file") {
-    if (page.maxMb && file.size > page.maxMb * 1024 * 1024) {
-      fileError.value = `Файл превышает максимальный размер ${page.maxMb} МБ`;
-      return;
-    }
-    if (page.accept) {
-      const accepted = page.accept.split(",").map((a) => a.trim());
-      const ext = "." + (file.name.split(".").pop() || "");
-      if (!accepted.includes(file.type) && !accepted.includes(ext)) {
-        fileError.value = `Неподдерживаемый формат. Допустимо: ${page.accept}`;
-        return;
-      }
-    }
-  }
-  selectedFile.value = file;
-}
-
-function submitFile() {
-  if (!currentPage.value || !socketApi.value || !selectedFile.value) return;
-  socketApi.value.submitPage(currentPage.value.stepIndex, {
-    fileName: selectedFile.value.name,
-    fileSize: selectedFile.value.size,
-    fileType: selectedFile.value.type,
-  });
-  currentPage.value = null;
   phase.value = "running";
 }
 
@@ -840,16 +709,7 @@ function reset() {
   pendingInputs.value = null;
   totalDurationMs.value = 0;
   errorMessage.value = "";
-  formData.value = {};
-  selectedFile.value = null;
-  fileError.value = "";
   runId.value = "";
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} Б`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} КБ`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
 }
 
 onMounted(async () => {
