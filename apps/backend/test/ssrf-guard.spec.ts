@@ -29,5 +29,19 @@ describe("SsrfGuard", () => {
     it("rejects 169.254.x (link-local)", () => {
       expect(() => guard.validateUrl("http://169.254.169.254/latest/meta-data")).toThrow(BadRequestException);
     });
+
+    it("allows hosts listed in SSRF_ALLOWED_HOSTS", () => {
+      const prev = process.env.SSRF_ALLOWED_HOSTS;
+      process.env.SSRF_ALLOWED_HOSTS = "localhost,127.0.0.1";
+      try {
+        expect(() => guard.validateUrl("http://localhost:8085/post")).not.toThrow();
+        expect(() => guard.validateUrl("http://127.0.0.1:8085/post")).not.toThrow();
+        // Не входящий в список приватный хост по-прежнему блокируется.
+        expect(() => guard.validateUrl("http://192.168.1.1/api.json")).toThrow(BadRequestException);
+      } finally {
+        if (prev === undefined) delete process.env.SSRF_ALLOWED_HOSTS;
+        else process.env.SSRF_ALLOWED_HOSTS = prev;
+      }
+    });
   });
 });

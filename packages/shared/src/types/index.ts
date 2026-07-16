@@ -124,41 +124,54 @@ export interface ReimportDiff {
   kept: Pick<Endpoint, "method" | "path" | "summary">[];
 }
 
-export interface PageField {
-  key: string;
-  label: string;
+/** Типы блоков страницы. `paragraph` — отображение, остальное — ввод. */
+export type PageBlockType =
+  | "input"
+  | "select"
+  | "dropzone"
+  | "richtext"
+  | "paragraph";
+
+/** Категория блока: заполняет пользователь (ввод) либо показывает данные (отображение). */
+export type PageBlockCategory = "input" | "display";
+
+/** Ширина блока в колонках сетки страницы (сетка из 6 колонок). */
+export type PageBlockSpan = 1 | 2 | 3 | 4 | 5 | 6;
+
+/**
+ * Один элемент страницы на сетке из 4 колонок.
+ *
+ * `binding` зависит от категории блока:
+ * - ввод (`input`/`select`/`dropzone`/`richtext`) — локальный ключ значения
+ *   ЭТОГО шага: параметр (`inn`) либо операнд условия фильтрации (`filter:inn`);
+ * - отображение (`paragraph`) — выход пройденного шага (`s{idx}:{outKey}`).
+ * Без привязки блок ввода уходит во входы шага под собственным `id`.
+ */
+export interface PageBlock {
+  id: string;
+  type: PageBlockType;
+  span: PageBlockSpan;
+  label?: string;
   placeholder?: string;
-  required: boolean;
-  /**
-   * Значение шага, которое заполняет это поле: ключ входа (`inn`) либо операнд
-   * его условия фильтрации (`filter:inn`). Без привязки поле уходит во входы
-   * шага под собственным `key` — правило, по которому страницы работали до
-   * появления `target`.
-   */
-  target?: string;
+  text?: string;
+  binding?: string;
+  /** Ввод: пустое значение блокирует продолжение шага. Для отображения не имеет смысла. */
+  required?: boolean;
+  /** Варианты для блока `select` (текст варианта — и подпись, и значение). */
+  options?: string[];
 }
 
-export type StepPage =
-  | {
-      type: "fields";
-      title: string;
-      hint?: string;
-      fields: PageField[];
-      buttonText: string;
-    }
-  | {
-      type: "file";
-      title: string;
-      hint?: string;
-      accept?: string;
-      maxMb?: number;
-      buttonText: string;
-    }
-  | {
-      type: "text";
-      title: string;
-      body: string;
-    };
+/** Строка страницы — набор блоков на сетке из 4 колонок. */
+export interface PageRow {
+  id: string;
+  items: PageBlock[];
+}
+
+/** Страница шага — композиционная раскладка из строк и блоков. */
+export interface StepPage {
+  title: string;
+  rows: PageRow[];
+}
 
 export type MappingValue = "user" | "const" | string;
 

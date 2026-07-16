@@ -13,6 +13,21 @@ const PRIVATE_IPV4_PATTERNS: RegExp[] = [
   /^0\./,
 ];
 
+/**
+ * Хосты, которым разрешён обход блок-листа (localhost/.local/приватные IP), —
+ * из `SSRF_ALLOWED_HOSTS` (через запятую). Нужно локальной разработке: сценарии
+ * бьют по мок-API на `localhost` (`pnpm infra`). По умолчанию список пуст —
+ * прод-поведение не меняется.
+ */
+function allowedHosts(): Set<string> {
+  return new Set(
+    (process.env.SSRF_ALLOWED_HOSTS ?? "")
+      .split(",")
+      .map((h) => h.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
 function isPrivateIp(ip: string): boolean {
   const cleaned = ip.replace(/^::ffff:/, "");
 
@@ -57,6 +72,11 @@ export class SsrfGuard {
 
     const hostname = parsed.hostname;
 
+    // Явно разрешённый хост (напр. локальный мок-API в dev) минует блок-лист.
+    if (allowedHosts().has(hostname.toLowerCase())) {
+      return;
+    }
+
     if (hostname === "localhost" || hostname.endsWith(".local")) {
       throw new BadRequestException("Localhost and .local domains are blocked");
     }
@@ -92,7 +112,15 @@ export class SsrfGuard {
    */
   async assertSafeUrl(rawUrl: string): Promise<void> {
     this.validateUrl(rawUrl);
-    await this.assertPublicHostname(new URL(rawUrl).hostname);
+
+    // Разрешённый хост уже прошёл проверку; его DNS-резолв (localhost → 127.0.0.1)
+    // упёрся бы в приватный IP, поэтому DNS-шаг для него пропускаем.
+    const hostname = new URL(rawUrl).hostname;
+    if (allowedHosts().has(hostname.toLowerCase())) {
+      return;
+    }
+
+    await this.assertPublicHostname(hostname);
   }
 
   async fetchSpec(rawUrl: string): Promise<Record<string, unknown>> {

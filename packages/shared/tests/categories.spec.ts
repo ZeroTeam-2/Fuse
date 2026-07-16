@@ -6,7 +6,7 @@ import {
   isValidCategory,
   isValidSubcategory,
 } from "../src/categories";
-import { StepType, PageType, RunStatus, HttpMethod, ParamLocation } from "../src/enums";
+import { StepType, RunStatus, HttpMethod, ParamLocation } from "../src/enums";
 
 describe("Categories", () => {
   it("has at least 17 categories", () => {
@@ -53,13 +53,6 @@ describe("Enums", () => {
     expect(StepType.DELAY).toBe("delay");
     expect(StepType.FILE).toBe("file");
     expect(StepType.PERIODIC).toBe("periodic");
-  });
-
-  it("PageType has 3 types", () => {
-    expect(Object.keys(PageType)).toHaveLength(3);
-    expect(PageType.FIELDS).toBe("fields");
-    expect(PageType.FILE).toBe("file");
-    expect(PageType.TEXT).toBe("text");
   });
 
   it("RunStatus has 6 statuses", () => {
