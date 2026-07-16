@@ -113,13 +113,15 @@ interface BindOption {
  */
 const inputBindings = computed<BindOption[]>(() => {
   const inputs = props.schemas[props.stepIndex]?.inputs ?? [];
+  // Показываем оригинальный ключ параметра (query), а не русскую подпись —
+  // редактор мыслит техническими именами входов шага. Подпись уходит в описание.
   const opts: BindOption[] = inputs.map((f) => ({
     value: f.key,
-    label: f.label || f.key,
-    description: f.type,
+    label: f.key,
+    description: f.label && f.label !== f.key ? `${f.label} · ${f.type}` : f.type,
   }));
   for (const [key, filter] of Object.entries(props.step.filters ?? {})) {
-    opts.push({ value: `filter:${key}`, label: `Условие отбора: ${filter.field}` });
+    opts.push({ value: `filter:${key}`, label: `filter:${filter.field}` });
   }
   return opts;
 });
@@ -136,6 +138,27 @@ const displayBindings = computed<BindOption[]>(() => {
   }
   return opts;
 });
+/**
+ * Источник вариантов select — выходы предыдущих шагов техническими ключами
+ * (`cars`). Массивное поле развернётся в список опций на рантайме; тип поля
+ * подсказан в описании, чтобы было видно, где массив.
+ */
+const optionSourceBindings = computed<BindOption[]>(() => {
+  const opts: BindOption[] = [];
+  for (let i = 0; i < props.stepIndex; i++) {
+    const outputs = props.schemas[i]?.outputs ?? [];
+    if (!outputs.length) continue;
+    const stepTitle = props.steps[i]?.title || `Шаг ${i + 1}`;
+    for (const o of outputs) {
+      opts.push({ value: `s${i}:${o.key}`, label: o.key, description: `${o.type} · Шаг ${i + 1} · ${stepTitle}` });
+    }
+  }
+  return opts;
+});
+const optionSourceSelectOptions = computed(() => [
+  { value: "", label: "Не выбрано" },
+  ...optionSourceBindings.value,
+]);
 function bindingsFor(block: PageBlock): BindOption[] {
   return blockCategory(block.type) === "input" ? inputBindings.value : displayBindings.value;
 }
@@ -202,6 +225,28 @@ function removeOption(index: number) {
   if (!selected.value) return;
   const next = selectOptions(selected.value.block).filter((_, i) => i !== index);
   patchSelected({ options: next });
+}
+
+// Источник вариантов select: «Вручную» (статический список) либо «Из шага»
+// (`optionsSource` из выхода пройденного шага). Режим следует за выбранным
+// блоком и переключается сегментами инспектора.
+const optionsMode = ref<"manual" | "dynamic">("manual");
+watch(
+  () => selected.value?.block.id,
+  () => {
+    optionsMode.value = selected.value?.block.optionsSource ? "dynamic" : "manual";
+  },
+  { immediate: true },
+);
+function setOptionsMode(mode: "manual" | "dynamic") {
+  optionsMode.value = mode;
+  // Активной остаётся одна модель вариантов: ручной режим снимает источник,
+  // динамический — расчищает статический список, чтобы он не подменял его.
+  if (mode === "manual") patchSelected({ optionsSource: undefined });
+  else patchSelected({ options: [] });
+}
+function onOptionsSourceChange(value: string) {
+  patchSelected({ optionsSource: value || undefined });
 }
 
 // ---- Drag lifecycle ------------------------------------------------------
@@ -412,7 +457,7 @@ function save() {
         <div
           class="px-5 py-4 mt-2 border-t border-zinc-100 font-sans text-[0.75rem] text-zinc-400 leading-relaxed"
         >
-          Каждый элемент можно растянуть на 1–4 колонки. Тяните за правый край.
+          Каждый элемент можно растянуть на 1–6 колонок. Тяните за правый край.
         </div>
       </aside>
 
@@ -738,43 +783,87 @@ function save() {
           />
 
           <!-- Варианты выпадающего списка -->
-          <div v-if="selected.block.type === 'select'" class="flex flex-col gap-2">
-            <div class="flex items-center justify-between">
-              <span class="text-[0.8125rem] font-sans font-semibold text-zinc-900">Варианты</span>
+          <div v-if="selected.block.type === 'select'" class="flex flex-col gap-2.5">
+            <span class="text-[0.8125rem] font-sans font-semibold text-zinc-900">Варианты</span>
+            <!-- источник: вручную или из выхода пройденного шага -->
+            <div class="grid grid-cols-2 gap-1.5 p-1 rounded-xl bg-zinc-100">
               <button
+                v-for="m in [
+                  { key: 'manual', label: 'Вручную' },
+                  { key: 'dynamic', label: 'Из шага' },
+                ]"
+                :key="m.key"
                 type="button"
-                class="inline-flex items-center gap-1 font-sans text-[0.75rem] font-semibold text-rose-600 hover:text-rose-700 cursor-pointer"
-                @click="addOption"
+                :class="[
+                  'h-8 rounded-lg font-sans text-[0.8125rem] font-semibold transition-colors cursor-pointer',
+                  optionsMode === m.key
+                    ? 'bg-white text-zinc-900 shadow-sm'
+                    : 'text-zinc-500 hover:text-zinc-800',
+                ]"
+                @click="setOptionsMode(m.key as 'manual' | 'dynamic')"
               >
-                <Icon name="plus" :size="14" />Добавить
+                {{ m.label }}
               </button>
             </div>
-            <p
-              v-if="!selectOptions(selected.block).length"
-              class="font-sans text-[0.75rem] text-zinc-400"
-            >
-              Пока нет вариантов — добавьте те, из которых будет выбирать пользователь.
-            </p>
-            <div
-              v-for="(opt, i) in selectOptions(selected.block)"
-              :key="i"
-              class="flex items-center gap-2"
-            >
-              <input
-                :value="opt"
-                :placeholder="`Вариант ${i + 1}`"
-                class="flex-1 min-w-0 px-3 py-2 bg-white border border-zinc-200 rounded-lg outline-none transition font-sans text-[0.875rem] text-zinc-900 focus:border-rose-600 focus:ring-4 focus:ring-rose-600/20"
-                @input="updateOption(i, ($event.target as HTMLInputElement).value)"
+
+            <!-- динамический источник -->
+            <template v-if="optionsMode === 'dynamic'">
+              <Select
+                label="Поле-массив пройденного шага"
+                :model-value="selected.block.optionsSource || ''"
+                :options="optionSourceSelectOptions"
+                placeholder="Не выбрано"
+                @change="onOptionsSourceChange"
               />
-              <button
-                type="button"
-                aria-label="Удалить вариант"
-                class="w-8 h-8 shrink-0 rounded-lg inline-flex items-center justify-center text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 cursor-pointer"
-                @click="removeOption(i)"
+              <p
+                v-if="!optionSourceBindings.length"
+                class="font-sans text-[0.75rem] text-amber-600"
               >
-                <Icon name="x" :size="15" />
-              </button>
-            </div>
+                У предыдущих шагов нет выходов, из которых можно взять варианты.
+              </p>
+              <p v-else class="font-sans text-[0.75rem] text-zinc-400">
+                Значения массива этого поля станут вариантами списка при запуске.
+              </p>
+            </template>
+
+            <!-- ручной список -->
+            <template v-else>
+              <div class="flex items-center justify-end">
+                <button
+                  type="button"
+                  class="inline-flex items-center gap-1 font-sans text-[0.75rem] font-semibold text-rose-600 hover:text-rose-700 cursor-pointer"
+                  @click="addOption"
+                >
+                  <Icon name="plus" :size="14" />Добавить
+                </button>
+              </div>
+              <p
+                v-if="!selectOptions(selected.block).length"
+                class="font-sans text-[0.75rem] text-zinc-400"
+              >
+                Пока нет вариантов — добавьте те, из которых будет выбирать пользователь.
+              </p>
+              <div
+                v-for="(opt, i) in selectOptions(selected.block)"
+                :key="i"
+                class="flex items-center gap-2"
+              >
+                <input
+                  :value="opt"
+                  :placeholder="`Вариант ${i + 1}`"
+                  class="flex-1 min-w-0 px-3 py-2 bg-white border border-zinc-200 rounded-lg outline-none transition font-sans text-[0.875rem] text-zinc-900 focus:border-rose-600 focus:ring-4 focus:ring-rose-600/20"
+                  @input="updateOption(i, ($event.target as HTMLInputElement).value)"
+                />
+                <button
+                  type="button"
+                  aria-label="Удалить вариант"
+                  class="w-8 h-8 shrink-0 rounded-lg inline-flex items-center justify-center text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 cursor-pointer"
+                  @click="removeOption(i)"
+                >
+                  <Icon name="x" :size="15" />
+                </button>
+              </div>
+            </template>
           </div>
 
           <label

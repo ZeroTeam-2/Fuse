@@ -418,6 +418,35 @@ function applyRunSnapshot(snapshot: RunSnapshot) {
     running.value = false;
     waitingForStep.value = null;
     pendingInputs.value = null;
+    return;
+  }
+
+  // Запуск ждёт ввода, а живое событие (`page:required`/`input:required`) до
+  // клиента не дошло: сокет входит в комнату ПОСЛЕ POST /api/runs, и для
+  // мгновенного шага воркер успевает дойти до страницы раньше — тогда состояние
+  // приезжает только снапшотом. Без этой ветки playground навсегда застревал в
+  // «Выполнение…»: страница ввода не показывалась.
+  if (snapshot.status === "waiting_input") {
+    const stepIndex = snapshot.currentStep ?? 0;
+    const step = scenario.value?.steps?.[stepIndex];
+    running.value = false;
+    phase.value = "waiting";
+    if (step?.page) {
+      // Данные блоков отображения/динамических вариантов при восстановлении
+      // взять неоткуда (событие уже прошло) — блоки покажутся пустыми, а select
+      // сохранит статические варианты; ввод по-прежнему собирается.
+      pendingInputs.value = null;
+      waitingForStep.value = stepIndex;
+    } else {
+      // Шаг без страницы ждёт добора обязательного значения — спрашиваем его.
+      waitingForStep.value = null;
+      const fields = formFields.value.filter(
+        (field) => field.required && field.stepPath[0] === stepIndex,
+      );
+      pendingInputs.value = fields.length
+        ? { stepIndex, stepTitle: step?.title ?? "", fields }
+        : null;
+    }
   }
 }
 
