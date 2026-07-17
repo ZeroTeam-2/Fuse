@@ -27,6 +27,11 @@ export class Scenario {
   @Prop({ type: [MongooseSchema.Types.Mixed], default: [] })
   steps: unknown[];
 
+  // Per-provider environment choice: { appId, environmentId }. Providers without
+  // an entry run against Prod. Kept as Mixed — a small, UI-driven mapping.
+  @Prop({ type: [MongooseSchema.Types.Mixed], default: [] })
+  environmentSelections: { appId: string; environmentId: string }[];
+
   @Prop({ default: false })
   published: boolean;
 
