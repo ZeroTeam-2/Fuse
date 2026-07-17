@@ -77,6 +77,7 @@ export class OpenApiParserService {
   async parse(
     rawSpec: Record<string, unknown>,
     openapiUrl: string,
+    options?: { baseUrlOverride?: string },
   ): Promise<ParsedSpec> {
     let spec: OpenAPIDocument;
     try {
@@ -85,7 +86,10 @@ export class OpenApiParserService {
       throw new BadRequestException("Failed to parse OpenAPI specification");
     }
 
-    const baseUrl = deriveBaseUrl(spec, openapiUrl);
+    let baseUrl = deriveBaseUrl(spec, openapiUrl);
+    if (baseUrl === undefined && options?.baseUrlOverride) {
+      baseUrl = options.baseUrlOverride;
+    }
 
     return {
       baseUrl,

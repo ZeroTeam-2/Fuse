@@ -1,6 +1,7 @@
 import {
   Injectable,
   NotFoundException,
+  BadRequestException,
 } from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
@@ -16,6 +17,7 @@ import { App, AppDocument } from "./app.schema";
 import { Scenario, ScenarioDocument } from "../scenarios/scenario.schema";
 import { OpenApiParserService } from "./openapi-parser";
 import { SsrfGuard } from "./ssrf-guard";
+import { parseSpecText } from "./spec-text-parser";
 import { ExecutionService } from "../execution/execution.service";
 import type { CreateAppDto } from "./dto/create-app.dto";
 import type { ImportPreviewDto } from "./dto/import-preview.dto";
@@ -72,8 +74,9 @@ export class AppsService {
     };
   }
 
-  async findById(id: string): Promise<AppDocument> {
-    const app = await this.appModel.findById(id).exec();
+  async findById(id: string, ownerId?: string): Promise<AppDocument> {
+    const filter = ownerId ? { _id: id, ownerId } : { _id: id };
+    const app = await this.appModel.findOne(filter).exec();
     if (!app) {
       throw new NotFoundException(`App #${id} not found`);
     }
@@ -112,11 +115,72 @@ export class AppsService {
     };
   }
 
-  async reimport(id: string): Promise<ReimportDiff> {
-    const app = await this.findById(id);
+  async importPreviewFile(
+    specText: string,
+    contentType: string,
+    baseUrlOverride?: string,
+  ): Promise<ImportPreviewResult> {
+    const rawSpec = parseSpecText(specText, contentType);
+    const parsed = await this.openapiParser.parse(rawSpec, "", {
+      baseUrlOverride,
+    });
 
-    const rawSpec = await this.ssrfGuard.fetchSpec(app.openapiUrl);
-    const parsed = await this.openapiParser.parse(rawSpec, app.openapiUrl);
+    if (!parsed.baseUrl) {
+      throw new BadRequestException(
+        "Не удалось определить базовый URL API. Укажите его в поле «Базовый URL API».",
+      );
+    }
+
+    return {
+      baseUrl: parsed.baseUrl,
+      host: parsed.host,
+      apiVersion: parsed.apiVersion,
+      endpointCount: parsed.endpoints.length,
+      endpoints: parsed.endpoints.map(toSummary),
+    };
+  }
+
+  async createFromFile(
+    ownerId: string,
+    params: {
+      name: string;
+      description?: string;
+      specText: string;
+      contentType: string;
+      baseUrlOverride?: string;
+    },
+  ): Promise<AppDocument> {
+    const rawSpec = parseSpecText(params.specText, params.contentType);
+    const parsed = await this.openapiParser.parse(rawSpec, "", {
+      baseUrlOverride: params.baseUrlOverride,
+    });
+
+    if (!parsed.baseUrl) {
+      throw new BadRequestException(
+        "Не удалось определить базовый URL API. Укажите его в поле «Базовый URL API».",
+      );
+    }
+
+    return new this.appModel({
+      ownerId,
+      name: params.name,
+      description: params.description,
+      baseUrl: parsed.baseUrl,
+      host: parsed.host,
+      apiVersion: parsed.apiVersion,
+      specSnapshot: parsed.specSnapshot,
+      endpoints: parsed.endpoints,
+      published: false,
+      syncedAt: new Date(),
+    }).save();
+  }
+
+  async reimport(id: string, ownerId: string): Promise<ReimportDiff> {
+    const app = await this.findById(id, ownerId);
+    const openapiUrl = this.requireOpenapiUrl(app);
+
+    const rawSpec = await this.ssrfGuard.fetchSpec(openapiUrl);
+    const parsed = await this.openapiParser.parse(rawSpec, openapiUrl);
 
     const oldKeys = new Set(app.endpoints.map(endpointKey));
     const newKeys = new Set(parsed.endpoints.map(endpointKey));
@@ -139,11 +203,12 @@ export class AppsService {
     return { added, deprecated, kept };
   }
 
-  async applyReimport(id: string): Promise<AppDocument> {
-    const app = await this.findById(id);
+  async applyReimport(id: string, ownerId: string): Promise<AppDocument> {
+    const app = await this.findById(id, ownerId);
+    const openapiUrl = this.requireOpenapiUrl(app);
 
-    const rawSpec = await this.ssrfGuard.fetchSpec(app.openapiUrl);
-    const parsed = await this.openapiParser.parse(rawSpec, app.openapiUrl);
+    const rawSpec = await this.ssrfGuard.fetchSpec(openapiUrl);
+    const parsed = await this.openapiParser.parse(rawSpec, openapiUrl);
 
     const oldEndpoints = new Map<string, Endpoint>();
     for (const ep of app.endpoints) {
@@ -168,8 +233,8 @@ export class AppsService {
     }
 
     const updated = await this.appModel
-      .findByIdAndUpdate(
-        id,
+      .findOneAndUpdate(
+        { _id: id, ownerId },
         {
           $set: {
             endpoints: merged,
@@ -190,11 +255,11 @@ export class AppsService {
     return updated;
   }
 
-  async togglePublish(id: string): Promise<AppDocument> {
-    const app = await this.findById(id);
+  async togglePublish(id: string, ownerId: string): Promise<AppDocument> {
+    const app = await this.findById(id, ownerId);
     const updated = await this.appModel
-      .findByIdAndUpdate(
-        id,
+      .findOneAndUpdate(
+        { _id: id, ownerId },
         { $set: { published: !app.published } },
         { new: true },
       )
@@ -206,9 +271,13 @@ export class AppsService {
     return updated;
   }
 
-  async update(id: string, dto: UpdateAppDto): Promise<AppDocument> {
+  async update(
+    id: string,
+    ownerId: string,
+    dto: UpdateAppDto,
+  ): Promise<AppDocument> {
     const updated = await this.appModel
-      .findByIdAndUpdate(id, { $set: dto }, { new: true })
+      .findOneAndUpdate({ _id: id, ownerId }, { $set: dto }, { new: true })
       .exec();
 
     if (!updated) {
@@ -217,8 +286,8 @@ export class AppsService {
     return updated;
   }
 
-  async delete(id: string): Promise<AppDocument> {
-    const app = await this.findById(id);
+  async delete(id: string, ownerId: string): Promise<AppDocument> {
+    const app = await this.findById(id, ownerId);
 
     // Сценарии, чьи шаги используют это приложение, теперь не просто
     // "перестанут работать" молча — шаг помечается `broken`, а сам сценарий
@@ -228,11 +297,22 @@ export class AppsService {
     const blockedScenarioIds = await this.blockScenariosUsingApp(id, app.name);
     await this.executionService.cancelActiveRunsForScenarios(blockedScenarioIds);
 
-    const deleted = await this.appModel.findByIdAndDelete(id).exec();
+    const deleted = await this.appModel
+      .findOneAndDelete({ _id: id, ownerId })
+      .exec();
     if (!deleted) {
       throw new NotFoundException(`App #${id} not found`);
     }
     return deleted;
+  }
+
+  private requireOpenapiUrl(app: AppDocument): string {
+    if (!app.openapiUrl) {
+      throw new BadRequestException(
+        "Переимпорт недоступен: приложение импортировано из файла без URL спецификации",
+      );
+    }
+    return app.openapiUrl;
   }
 
   private async blockScenariosUsingApp(
