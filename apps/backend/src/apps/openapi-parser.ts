@@ -67,7 +67,6 @@ export interface ParsedSpec {
   host?: string;
   apiVersion?: string;
   endpoints: Endpoint[];
-  specSnapshot: unknown;
 }
 
 const VALID_METHODS = new Set(["get", "post", "put", "delete", "patch"]);
@@ -96,7 +95,6 @@ export class OpenApiParserService {
       host: this.extractHost(baseUrl),
       apiVersion: spec.info?.version,
       endpoints: this.extractEndpoints(spec),
-      specSnapshot: spec,
     };
   }
 

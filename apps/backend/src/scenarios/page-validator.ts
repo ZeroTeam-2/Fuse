@@ -1,4 +1,5 @@
 import type { StepPage } from "@fuse/shared";
+import { DEFAULT_SINGLE_UPLOAD_MAX_MB } from "../config/file-limits.constants";
 
 export function validatePage(page: unknown): string[] {
   const errors: string[] = [];
@@ -67,7 +68,7 @@ export function createDefaultPage(
         title,
         hint: "",
         accept: "",
-        maxMb: 10,
+        maxMb: DEFAULT_SINGLE_UPLOAD_MAX_MB,
         buttonText: "Загрузить",
       };
     case "text":
