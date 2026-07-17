@@ -5,32 +5,52 @@ import {
 } from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
+import { randomUUID } from "crypto";
 import { EndpointStatus } from "@fuse/shared";
 import type {
   Endpoint,
+  Environment,
   ImportPreviewResult,
   PaginatedResponse,
   ReimportDiff,
   Step,
 } from "@fuse/shared";
-import { App, AppDocument } from "./app.schema";
+import { App, AppDocument, EnvironmentDoc } from "./app.schema";
 import { Scenario, ScenarioDocument } from "../scenarios/scenario.schema";
 import { OpenApiParserService } from "./openapi-parser";
 import { SsrfGuard } from "./ssrf-guard";
 import { parseSpecText } from "./spec-text-parser";
 import { ExecutionService } from "../execution/execution.service";
+import {
+  BASE_URL_VAR_KEY,
+  PROD_ENV_NAME,
+  isAbsoluteHttpUrl,
+} from "./base-url";
 import type { CreateAppDto } from "./dto/create-app.dto";
 import type { ImportPreviewDto } from "./dto/import-preview.dto";
 import type { UpdateAppDto } from "./dto/update-app.dto";
+import type {
+  CreateEnvironmentDto,
+  UpdateEnvironmentDto,
+} from "./dto/environment.dto";
 
-type EndpointSummary = Pick<Endpoint, "method" | "path" | "summary">;
+type EndpointSummary = Pick<Endpoint, "method" | "path" | "summary" | "tag">;
 
 function endpointKey(ep: { method: string; path: string }): string {
   return `${ep.method}:${ep.path}`;
 }
 
 function toSummary(ep: Endpoint): EndpointSummary {
-  return { method: ep.method, path: ep.path, summary: ep.summary };
+  return { method: ep.method, path: ep.path, summary: ep.summary, tag: ep.tag };
+}
+
+/** Окружение Prod по умолчанию: набор переменных с базовым `baseUrl`. */
+function prodEnvironment(baseUrl?: string): Environment {
+  return {
+    id: randomUUID(),
+    name: PROD_ENV_NAME,
+    variables: [{ key: BASE_URL_VAR_KEY, value: baseUrl ?? "" }],
+  };
 }
 
 @Injectable()
@@ -80,7 +100,21 @@ export class AppsService {
     if (!app) {
       throw new NotFoundException(`App #${id} not found`);
     }
+    // Приложения, созданные до появления окружений, получают Prod при первом
+    // открытии владельцем — так карточка и вкладка «Окружения» всегда видят его.
+    if (ownerId) {
+      await this.ensureProdEnvironment(app);
+    }
     return app;
+  }
+
+  /** Гарантирует наличие окружения Prod (для приложений, созданных до окружений). */
+  private async ensureProdEnvironment(app: AppDocument): Promise<void> {
+    if ((app.environments?.length ?? 0) > 0) {
+      return;
+    }
+    app.environments = [prodEnvironment(app.baseUrl)] as EnvironmentDoc[];
+    await app.save();
   }
 
   async create(ownerId: string, dto: CreateAppDto): Promise<AppDocument> {
@@ -96,6 +130,7 @@ export class AppsService {
       host: parsed.host,
       apiVersion: parsed.apiVersion,
       endpoints: parsed.endpoints,
+      environments: [prodEnvironment(parsed.baseUrl)],
       published: false,
       syncedAt: new Date(),
     }).save();
@@ -168,6 +203,7 @@ export class AppsService {
       host: parsed.host,
       apiVersion: parsed.apiVersion,
       endpoints: parsed.endpoints,
+      environments: [prodEnvironment(parsed.baseUrl)],
       published: false,
       syncedAt: new Date(),
     }).save();
@@ -301,6 +337,106 @@ export class AppsService {
       throw new NotFoundException(`App #${id} not found`);
     }
     return deleted;
+  }
+
+  async addEnvironment(
+    id: string,
+    ownerId: string,
+    dto: CreateEnvironmentDto,
+  ): Promise<AppDocument> {
+    const app = await this.findById(id, ownerId);
+    const name = dto.name?.trim();
+    if (!name) {
+      throw new BadRequestException("Название окружения обязательно");
+    }
+    if ((app.environments ?? []).some((e) => e.name.toLowerCase() === name.toLowerCase())) {
+      throw new BadRequestException(`Окружение «${name}» уже существует`);
+    }
+    if (!isAbsoluteHttpUrl(dto.baseUrl)) {
+      throw new BadRequestException(
+        "Base URL должен быть абсолютным адресом со схемой http(s)",
+      );
+    }
+
+    app.environments.push({
+      id: randomUUID(),
+      name,
+      variables: [{ key: BASE_URL_VAR_KEY, value: dto.baseUrl }],
+    } as EnvironmentDoc);
+    await app.save();
+    return app;
+  }
+
+  async updateEnvironment(
+    id: string,
+    ownerId: string,
+    envId: string,
+    dto: UpdateEnvironmentDto,
+  ): Promise<AppDocument> {
+    const app = await this.findById(id, ownerId);
+    const env = (app.environments ?? []).find((e) => e.id === envId);
+    if (!env) {
+      throw new NotFoundException("Окружение не найдено");
+    }
+
+    if (dto.name !== undefined) {
+      const name = dto.name.trim();
+      if (!name) {
+        throw new BadRequestException("Название окружения обязательно");
+      }
+      // Prod — точка опоры для резолва базового URL при исполнении; переименование
+      // сломало бы фолбэк, поэтому имя Prod фиксировано.
+      if (env.name === PROD_ENV_NAME && name !== PROD_ENV_NAME) {
+        throw new BadRequestException("Окружение Prod нельзя переименовать");
+      }
+      if (
+        (app.environments ?? []).some(
+          (e) => e.id !== envId && e.name.toLowerCase() === name.toLowerCase(),
+        )
+      ) {
+        throw new BadRequestException(`Окружение «${name}» уже существует`);
+      }
+      env.name = name;
+    }
+
+    if (dto.baseUrl !== undefined) {
+      if (!isAbsoluteHttpUrl(dto.baseUrl)) {
+        throw new BadRequestException(
+          "Base URL должен быть абсолютным адресом со схемой http(s)",
+        );
+      }
+      const variable = env.variables.find((v) => v.key === BASE_URL_VAR_KEY);
+      if (variable) {
+        variable.value = dto.baseUrl;
+      } else {
+        env.variables.push({ key: BASE_URL_VAR_KEY, value: dto.baseUrl });
+      }
+    }
+
+    app.markModified("environments");
+    await app.save();
+    return app;
+  }
+
+  async deleteEnvironment(
+    id: string,
+    ownerId: string,
+    envId: string,
+  ): Promise<AppDocument> {
+    const app = await this.findById(id, ownerId);
+    const env = (app.environments ?? []).find((e) => e.id === envId);
+    if (!env) {
+      throw new NotFoundException("Окружение не найдено");
+    }
+    if (env.name === PROD_ENV_NAME) {
+      throw new BadRequestException("Окружение Prod нельзя удалить");
+    }
+
+    app.environments = (app.environments ?? []).filter(
+      (e) => e.id !== envId,
+    ) as EnvironmentDoc[];
+    await app.save();
+    return app;
   }
 
   private requireOpenapiUrl(app: AppDocument): string {

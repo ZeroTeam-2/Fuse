@@ -84,6 +84,63 @@ export function deriveBaseUrl(
   return specOrigin.origin;
 }
 
+/** Имя окружения по умолчанию — обязательное и неудаляемое. */
+export const PROD_ENV_NAME = "Prod";
+/** Ключ базовой переменной окружения — абсолютного адреса API. */
+export const BASE_URL_VAR_KEY = "baseUrl";
+
+interface VariableLike {
+  key: string;
+  value: string;
+}
+interface EnvironmentLike {
+  id?: string;
+  name?: string;
+  variables?: VariableLike[];
+}
+interface AppLike {
+  baseUrl?: string;
+  environments?: EnvironmentLike[];
+}
+
+/** Абсолютный ли это http(s)-URL с хостом (localhost допускается). */
+export function isAbsoluteHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") && !!url.host;
+  } catch {
+    return false;
+  }
+}
+
+/** Значение переменной `baseUrl` окружения, если задано. */
+export function environmentBaseUrl(env: EnvironmentLike | undefined): string | undefined {
+  return env?.variables?.find((v) => v.key === BASE_URL_VAR_KEY)?.value || undefined;
+}
+
+/**
+ * Базовый URL приложения для исполнения: выбранное окружение → Prod → `baseUrl`
+ * приложения (обратная совместимость с приложениями без окружений).
+ */
+export function resolveAppBaseUrl(
+  app: AppLike,
+  environmentId?: string,
+): string | undefined {
+  const envs = app.environments ?? [];
+
+  if (environmentId) {
+    const chosen = envs.find((e) => e.id === environmentId);
+    const url = environmentBaseUrl(chosen);
+    if (url) return url;
+  }
+
+  const prod = envs.find((e) => e.name === PROD_ENV_NAME);
+  const prodUrl = environmentBaseUrl(prod);
+  if (prodUrl) return prodUrl;
+
+  return app.baseUrl;
+}
+
 /**
  * Присоединяет путь эндпоинта к базовому URL, сохраняя base path приложения:
  * ("https://api.com/v1", "/collections") → "https://api.com/v1/collections".

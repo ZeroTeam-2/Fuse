@@ -126,15 +126,7 @@
           {{ previewMeta }}
         </div>
 
-        <Card padding="sm">
-          <EndpointRow
-            v-for="(ep, i) in preview.endpoints"
-            :key="i"
-            :method="ep.method"
-            :path="ep.path"
-            :description="ep.summary"
-          />
-        </Card>
+        <EndpointGroupList :endpoints="preview.endpoints" default-collapsed />
 
         <p
           v-if="createError"

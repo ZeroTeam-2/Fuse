@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import type { Step } from "@fuse/shared";
+import type { EnvironmentSelection, Step } from "@fuse/shared";
 
 export const useScenarioEditorStore = defineStore("scenarioEditor", {
   state: () => ({
@@ -11,6 +11,7 @@ export const useScenarioEditorStore = defineStore("scenarioEditor", {
       subcategory?: string;
       published: boolean;
       steps: Step[];
+      environmentSelections?: EnvironmentSelection[];
       blocked?: boolean;
       blockedReason?: string;
     },
@@ -20,14 +21,22 @@ export const useScenarioEditorStore = defineStore("scenarioEditor", {
 
   getters: {
     stepCount: (state) => state.scenario?.steps.length ?? 0,
-    distinctAppCount: (state) => {
-      if (!state.scenario) return 0;
-      const appIds = new Set<string>();
-      for (const step of state.scenario.steps) {
-        if (step.type === "api" && step.appId) appIds.add(step.appId);
-        if (step.type === "periodic" && step.appId) appIds.add(step.appId);
+    // Providers used by endpoint-bearing steps, in first-appearance order.
+    distinctAppIds: (state): string[] => {
+      const ids: string[] = [];
+      for (const step of state.scenario?.steps ?? []) {
+        if (
+          (step.type === "api" || step.type === "periodic") &&
+          step.appId &&
+          !ids.includes(step.appId)
+        ) {
+          ids.push(step.appId);
+        }
       }
-      return appIds.size;
+      return ids;
+    },
+    distinctAppCount(): number {
+      return this.distinctAppIds.length;
     },
   },
 
@@ -63,6 +72,24 @@ export const useScenarioEditorStore = defineStore("scenarioEditor", {
 
     selectStep(index: number | null) {
       this.selectedStepIndex = index;
+    },
+
+    setEnvironmentSelection(appId: string, environmentId: string) {
+      if (!this.scenario) return;
+      const list = this.scenario.environmentSelections ?? [];
+      const existing = list.find((s) => s.appId === appId);
+      if (existing) existing.environmentId = environmentId;
+      else list.push({ appId, environmentId });
+      this.scenario.environmentSelections = list;
+    },
+
+    // Providers may be removed with their last step — drop their stale choices.
+    pruneEnvironmentSelections() {
+      if (!this.scenario?.environmentSelections) return;
+      const valid = this.distinctAppIds;
+      this.scenario.environmentSelections = this.scenario.environmentSelections.filter(
+        (s) => valid.includes(s.appId),
+      );
     },
   },
 });

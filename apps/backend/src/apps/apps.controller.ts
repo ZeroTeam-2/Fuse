@@ -29,6 +29,10 @@ import { ImportPreviewDto } from "./dto/import-preview.dto";
 import { UpdateAppDto } from "./dto/update-app.dto";
 import { FileImportDto, ImportPreviewFileDto } from "./dto/file-import.dto";
 import { PaginationQueryDto } from "./dto/pagination-query.dto";
+import {
+  CreateEnvironmentDto,
+  UpdateEnvironmentDto,
+} from "./dto/environment.dto";
 
 const ALLOWED_SPEC_EXTENSIONS = new Set([".json", ".yaml", ".yml"]);
 
@@ -200,6 +204,37 @@ export class AppsController {
   @ApiOperation({ summary: "Toggle app published status" })
   togglePublish(@Param("id") id: string, @Req() req: AuthenticatedRequest) {
     return this.appsService.togglePublish(id, req.user.userId);
+  }
+
+  @Post(":id/environments")
+  @ApiOperation({ summary: "Add an environment to an app" })
+  addEnvironment(
+    @Param("id") id: string,
+    @Body() dto: CreateEnvironmentDto,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.appsService.addEnvironment(id, req.user.userId, dto);
+  }
+
+  @Patch(":id/environments/:envId")
+  @ApiOperation({ summary: "Update an app environment (name / Base URL)" })
+  updateEnvironment(
+    @Param("id") id: string,
+    @Param("envId") envId: string,
+    @Body() dto: UpdateEnvironmentDto,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.appsService.updateEnvironment(id, req.user.userId, envId, dto);
+  }
+
+  @Delete(":id/environments/:envId")
+  @ApiOperation({ summary: "Delete an app environment (Prod cannot be deleted)" })
+  deleteEnvironment(
+    @Param("id") id: string,
+    @Param("envId") envId: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.appsService.deleteEnvironment(id, req.user.userId, envId);
   }
 
   @Delete(":id")

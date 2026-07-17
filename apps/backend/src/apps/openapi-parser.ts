@@ -38,6 +38,7 @@ interface OpenAPIOperation {
   summary?: string;
   description?: string;
   deprecated?: boolean;
+  tags?: string[];
   parameters?: OpenAPIParameter[];
   requestBody?: OpenAPIRequestBody;
   responses?: Record<string, OpenAPIResponse>;
@@ -131,6 +132,9 @@ export class OpenApiParserService {
           method: method.toUpperCase() as HttpMethod,
           path,
           summary: operation.summary,
+          // First tag groups the endpoint into a collapsible block; untagged
+          // operations fall into the «Прочее» block on the client.
+          tag: operation.tags?.[0],
           inputs: this.extractInputs(operation, allParameters),
           outputs,
           outputIsArray: isArray,
