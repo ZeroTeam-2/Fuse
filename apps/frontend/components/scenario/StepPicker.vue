@@ -120,7 +120,8 @@ function add() {
   } else if (props.stepType === "delay") {
     step = { id, type: "delay", title: name, seconds: delaySec.value };
   } else {
-    step = { id, type: "file", title: name, mappings: {} };
+    // Тип «Файл» удалён из палитры; сюда попадать не из чего.
+    return;
   }
 
   emit("add", step);
