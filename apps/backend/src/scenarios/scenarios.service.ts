@@ -8,6 +8,7 @@ import { Model } from "mongoose";
 import type {
   ApiStep,
   PaginatedResponse,
+  PeriodicStep,
   SchemaField,
   ScenarioStepRef,
   Step,
@@ -220,16 +221,7 @@ export class ScenariosService {
 
     const step = steps[stepIndex];
 
-    switch (step.type) {
-      case "api":
-        return this.getApiStepSchema(step);
-
-      case "scenario":
-        return this.getScenarioRefStepSchema(step);
-
-      default:
-        return EMPTY_SCHEMA;
-    }
+    return this.getStepSchemaForStep(step);
   }
 
   async getUpstreamSchemas(
@@ -290,11 +282,40 @@ export class ScenariosService {
       case "api":
         return this.getApiStepSchema(step);
 
+      case "periodic":
+        return this.getPeriodicStepSchema(step);
+
       case "scenario":
         return this.getScenarioRefStepSchema(step);
 
       default:
         return EMPTY_SCHEMA;
     }
+  }
+
+  /**
+   * Периодический запрос — тот же вызов endpoint, что и api-шаг, поэтому схема
+   * берётся из endpoint. Легаси-шаги ссылки не хранят — их endpoint ищется по
+   * методу и пути опроса. Не нашли (endpoint удалён, спека переимпортирована) —
+   * отдаём пустую схему, а не 404: сломанность шага показывает флаг `broken`,
+   * а редактор должен продолжать работать.
+   */
+  private async getPeriodicStepSchema(step: PeriodicStep): Promise<StepSchema> {
+    const app = await this.appsService.findById(step.appId);
+    const endpoint = step.endpointId
+      ? app.endpoints.find((ep) => ep.id === step.endpointId)
+      : app.endpoints.find(
+          (ep) => ep.method === step.pollMethod && ep.path === step.pollPath,
+        );
+
+    if (!endpoint) {
+      return EMPTY_SCHEMA;
+    }
+
+    return {
+      inputs: endpoint.inputs as unknown as SchemaField[],
+      outputs: endpoint.outputs as unknown as SchemaField[],
+      outputIsArray: endpoint.outputIsArray ?? false,
+    };
   }
 }

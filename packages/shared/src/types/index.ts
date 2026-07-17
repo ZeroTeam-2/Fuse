@@ -280,6 +280,8 @@ export interface FileStep extends BaseStep {
 export interface PeriodicStep extends BaseStep {
   type: "periodic";
   appId: string;
+  /** Отсутствует у шагов, созданных до появления поля, — тогда endpoint ищется по pollMethod+pollPath. */
+  endpointId?: string;
   pollMethod: HttpMethod;
   pollPath: string;
   pollIntervalSec: number;
