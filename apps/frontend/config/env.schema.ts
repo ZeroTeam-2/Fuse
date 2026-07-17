@@ -4,6 +4,7 @@ export const publicEnvSchema = z.object({
   apiBaseUrl: z.string().min(1, "NUXT_PUBLIC_API_BASE_URL is required"),
   yandexMetricaId: z.string().default(""),
   fileSingleUploadMaxMb: z.coerce.number().default(10),
+  specFileMaxMb: z.coerce.number().default(15),
 });
 
 export const serverEnvSchema = z.object({

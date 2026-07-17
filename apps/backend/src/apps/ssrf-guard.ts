@@ -1,9 +1,13 @@
 import { Injectable, BadRequestException } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { lookup as dnsLookup } from "node:dns/promises";
+import {
+  DEFAULT_SPEC_URL_FETCH_MAX_MB,
+  mbToBytes,
+} from "../config/file-limits.constants";
 import { parseSpecText } from "./spec-text-parser";
 
 const FETCH_TIMEOUT_MS = 30_000;
-const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
 
 const PRIVATE_IPV4_PATTERNS: RegExp[] = [
   /^10\./,
@@ -38,6 +42,15 @@ function isPrivateIp(ip: string): boolean {
 
 @Injectable()
 export class SsrfGuard {
+  constructor(private readonly configService: ConfigService) {}
+
+  private get maxResponseMb(): number {
+    return (
+      this.configService.get<number>("SPEC_URL_FETCH_MAX_MB") ??
+      DEFAULT_SPEC_URL_FETCH_MAX_MB
+    );
+  }
+
   validateUrl(rawUrl: string): void {
     let parsed: URL;
     try {
@@ -131,6 +144,8 @@ export class SsrfGuard {
       throw new BadRequestException("Empty response body");
     }
 
+    const maxResponseMb = this.maxResponseMb;
+    const maxResponseBytes = mbToBytes(maxResponseMb);
     const chunks: Uint8Array[] = [];
     let totalSize = 0;
 
@@ -138,9 +153,11 @@ export class SsrfGuard {
       const { done, value } = await reader.read();
       if (done) break;
       totalSize += value.byteLength;
-      if (totalSize > MAX_RESPONSE_BYTES) {
+      if (totalSize > maxResponseBytes) {
         controller.abort();
-        throw new BadRequestException("Response exceeds 10 MB size limit");
+        throw new BadRequestException(
+          `Response exceeds ${maxResponseMb} MB size limit`,
+        );
       }
       chunks.push(value);
     }

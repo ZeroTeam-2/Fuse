@@ -13,6 +13,7 @@ const publicResult = publicEnvSchema.safeParse({
   apiBaseUrl: process.env.NUXT_PUBLIC_API_BASE_URL ?? "",
   yandexMetricaId: process.env.NUXT_PUBLIC_YANDEX_METRIKA_ID ?? "",
   fileSingleUploadMaxMb: process.env.FILE_SINGLE_UPLOAD_MAX_MB ?? "10",
+  specFileMaxMb: process.env.SPEC_FILE_MAX_MB ?? "15",
 });
 if (!publicResult.success) {
   const errors = publicResult.error.issues
@@ -87,7 +88,10 @@ export default defineNuxtConfig({
     public: {
       apiBaseUrl: "",
       yandexMetricaId: "",
+      // Дефолты; NUXT_PUBLIC_* переопределяет в рантайме. Держим синхронно с
+      // бэкендом (FILE_SINGLE_UPLOAD_MAX_MB / SPEC_FILE_MAX_MB).
       fileSingleUploadMaxMb: 10,
+      specFileMaxMb: 15,
     },
   },
 

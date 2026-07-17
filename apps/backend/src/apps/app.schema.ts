@@ -88,9 +88,6 @@ export class App {
   @Prop()
   apiVersion?: string;
 
-  @Prop({ type: MongooseSchema.Types.Mixed })
-  specSnapshot?: unknown;
-
   @Prop({ type: [EndpointDocSchema], default: [] })
   endpoints: EndpointDoc[];
 
