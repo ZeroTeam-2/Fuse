@@ -89,9 +89,11 @@ export default defineNuxtConfig({
       apiBaseUrl: "",
       yandexMetricaId: "",
       // Дефолты; NUXT_PUBLIC_* переопределяет в рантайме. Держим синхронно с
-      // бэкендом (FILE_SINGLE_UPLOAD_MAX_MB / SPEC_FILE_MAX_MB).
+      // бэкендом (FILE_SINGLE_UPLOAD_MAX_MB / SPEC_FILE_MAX_MB /
+      // DEFAULT_UPLOAD_PART_SIZE_MB в file-limits.constants.ts).
       fileSingleUploadMaxMb: 10,
       specFileMaxMb: 15,
+      uploadPartSizeMb: 5,
     },
   },
 

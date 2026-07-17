@@ -9,14 +9,14 @@ import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
 import { Consumer } from "sqs-consumer";
 import { SQSClient } from "@aws-sdk/client-sqs";
-import { RunStatus } from "@fuse/shared";
+import { RunStatus, isUploadedFileRef } from "@fuse/shared";
 import type {
   Step,
   ApiStep,
   DelayStep,
   PeriodicStep,
   ScenarioStepRef,
-  FileStep,
+  UploadedFileRef,
   EnvironmentSelection,
   ManualInputDescriptor,
   RunStepResult,
@@ -29,6 +29,7 @@ import { App, AppDocument } from "../apps/app.schema";
 import { SsrfGuard } from "../apps/ssrf-guard";
 import { joinBaseUrl, resolveAppBaseUrl } from "../apps/base-url";
 import { RunGateway } from "../websocket/run.gateway";
+import { MinioService } from "../minio/minio.service";
 import { resolveMappings, groupInputsByLocation } from "./mapping-resolver";
 import type { LocatedInputs } from "./mapping-resolver";
 import { ManualInputsService } from "./manual-inputs.service";
@@ -97,6 +98,7 @@ export class WorkerService
     private readonly gateway: RunGateway,
     private readonly ssrfGuard: SsrfGuard,
     private readonly manualInputsService: ManualInputsService,
+    private readonly minioService: MinioService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -478,7 +480,11 @@ export class WorkerService
         return this.executeScenarioStep(step, ctx);
 
       case "file":
-        return this.executeFileStep(step, ctx);
+        // Тип выведен из употребления: функционал поглощён api-шагом
+        // (multipart при файловом входе) + periodic-шагом (опрос статуса).
+        throw new StepExecutionError(
+          `Шаг «${step.title}»: тип шага «Файл» устарел — используйте шаг «Endpoint API» с файловым входом (dropzone) и, при необходимости, «Периодический запрос» для опроса статуса`,
+        );
 
       default:
         return {
@@ -570,7 +576,12 @@ export class WorkerService
     path: string,
     resolved: Record<string, unknown>,
     ctx: StepContext,
-  ): Promise<{ url: string; options: RequestInit }> {
+  ): Promise<{
+    url: string;
+    options: RequestInit;
+    located: LocatedInputs;
+    inputs: SchemaField[];
+  }> {
     const app = await this.loadApp(step.appId, ctx);
     const endpoints = app.endpoints ?? [];
     const endpoint = step.endpointId
@@ -595,7 +606,7 @@ export class WorkerService
       }
     }
 
-    return { url, options };
+    return { url, options, located, inputs };
   }
 
   private async executeApiStep(
@@ -603,13 +614,29 @@ export class WorkerService
     ctx: StepContext,
   ): Promise<unknown> {
     const resolved = resolveMappings(step, ctx.stepResults, ctx.userInput, ctx.warnings);
-    const { url, options } = await this.buildEndpointRequest(
+
+    // Файловая ссылка среди входов (dropzone-привязка) переключает тело на
+    // multipart: сам файл едет частью формы, а не JSON-объектом ссылки.
+    const fileEntry = Object.entries(resolved).find(([, v]) =>
+      isUploadedFileRef(v),
+    ) as [string, UploadedFileRef] | undefined;
+    const textInputs = fileEntry
+      ? Object.fromEntries(
+          Object.entries(resolved).filter(([, v]) => !isUploadedFileRef(v)),
+        )
+      : resolved;
+
+    const { url, options, located, inputs } = await this.buildEndpointRequest(
       step,
       step.method,
       step.path,
-      resolved,
+      textInputs,
       ctx,
     );
+
+    if (fileEntry) {
+      await this.attachMultipartBody(fileEntry, located, inputs, options);
+    }
 
     let response: Response;
     try {
@@ -687,8 +714,27 @@ export class WorkerService
       resolved,
       ctx,
     );
-    const intervalMs = (step.pollIntervalSec ?? 5) * 1000;
-    const progressField = step.progressField;
+    return this.pollUntilComplete(
+      url,
+      options,
+      step.pollIntervalSec,
+      step.progressField,
+      ctx,
+    );
+  }
+
+  /**
+   * Общий цикл опроса endpoint'а до признака завершения — периодический шаг и
+   * стадия обработки файлового шага отличаются только тем, как собран запрос.
+   */
+  private async pollUntilComplete(
+    url: string,
+    options: RequestInit,
+    intervalSec: number | undefined,
+    progressField: string | undefined,
+    ctx: StepContext,
+  ): Promise<unknown> {
+    const intervalMs = (intervalSec ?? 5) * 1000;
     const startTime = Date.now();
 
     let lastResult: unknown = null;
@@ -732,6 +778,13 @@ export class WorkerService
         }
       }
 
+      // Статус ошибки терминален: ждать таймаут бессмысленно, задача уже упала.
+      if (this.isPollFailed(data)) {
+        throw new StepExecutionError(
+          `Провайдер сообщил об ошибке задачи: ${JSON.stringify(data)}`,
+        );
+      }
+
       if (this.isPollComplete(data)) {
         return data;
       }
@@ -740,6 +793,14 @@ export class WorkerService
     }
 
     return { timedOut: true, lastResult };
+  }
+
+  private isPollFailed(data: unknown): boolean {
+    if (!data || typeof data !== "object") {
+      return false;
+    }
+    const status = (data as Record<string, unknown>).status;
+    return status === "error" || status === "failed";
   }
 
   private isPollComplete(data: unknown): boolean {
@@ -813,13 +874,61 @@ export class WorkerService
     return { nestedScenario: step.refScenarioId };
   }
 
-  // Шаг «файл» пока заглушка (загрузка в MinIO — отдельная задача). Когда он
-  // появится, адрес выгрузки берётся тем же `resolveStepUrl(step.appId, step.uploadPath, ...)`.
-  private async executeFileStep(
-    _step: FileStep,
-    _ctx: StepContext,
-  ): Promise<unknown> {
-    return { placeholder: true, message: "File step not yet implemented" };
+  /**
+   * Подменяет JSON-тело собранного запроса на `multipart/form-data`: файл
+   * читается из MinIO по ссылке dropzone-блока, остальные body-входы уезжают
+   * текстовыми полями рядом. Имя файловой части: body-вход типа `file` из
+   * схемы endpoint'а → ключ привязки блока, если он совпадает с body-входом
+   * (спеки, импортированные до маппинга `format: binary`, хранят файловое поле
+   * строкой) → единственный незанятый body-вход → "file".
+   */
+  private async attachMultipartBody(
+    fileEntry: [string, UploadedFileRef],
+    located: LocatedInputs,
+    inputs: SchemaField[],
+    options: RequestInit,
+  ): Promise<void> {
+    const [boundKey, fileRef] = fileEntry;
+
+    let buffer: Buffer;
+    try {
+      buffer = await this.minioService.getObjectBuffer(fileRef.objectName);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new StepExecutionError(
+        `Не удалось прочитать файл «${fileRef.fileName}» из хранилища: ${reason}`,
+      );
+    }
+
+    const bodyInputs = inputs.filter((f) => (f.loc ?? "body") === "body");
+    const fileField =
+      bodyInputs.find((f) => f.type === "file")?.key ??
+      bodyInputs.find((f) => f.key === boundKey)?.key ??
+      (bodyInputs.length === 1 && located.body[bodyInputs[0].key] === undefined
+        ? bodyInputs[0].key
+        : "file");
+
+    const form = new FormData();
+    form.append(
+      fileField,
+      new Blob([new Uint8Array(buffer)], {
+        type: fileRef.fileType || "application/octet-stream",
+      }),
+      fileRef.fileName,
+    );
+    for (const [key, value] of Object.entries(located.body)) {
+      if (key === fileField || value === undefined || value === null) continue;
+      form.append(
+        key,
+        typeof value === "object" ? JSON.stringify(value) : String(value),
+      );
+    }
+
+    // Content-Type не выставляем руками: boundary впишет fetch.
+    const headers = { ...(options.headers as Record<string, string>) };
+    delete headers["Content-Type"];
+    options.headers = headers;
+    options.body = form;
   }
 
   /**

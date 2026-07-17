@@ -73,6 +73,16 @@ export class MinioService implements OnModuleInit {
     return objectName;
   }
 
+  /** Объект целиком в память: файлы ограничены лимитами загрузки (file-limits). */
+  async getObjectBuffer(objectName: string): Promise<Buffer> {
+    const stream = await this.client.getObject(this.bucket, objectName);
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : (chunk as Buffer));
+    }
+    return Buffer.concat(chunks);
+  }
+
   async getPresignedUrl(objectName: string): Promise<string> {
     return this.client.presignedGetObject(this.bucket, objectName, 24 * 60 * 60);
   }

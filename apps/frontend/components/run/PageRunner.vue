@@ -4,7 +4,8 @@
 // подставленные данные пройденных шагов из `resolved`. Один компонент на панель
 // запуска и playground — вместо трёх веток по типам страницы.
 import type { PageBlock, StepPage } from "@fuse/shared";
-import { blockCategory } from "@fuse/shared";
+import { blockCategory, validateFileAgainstBlock } from "@fuse/shared";
+import type { FileUploadHandle } from "../../composables/useFileUpload";
 
 const props = withDefaults(
   defineProps<{
@@ -21,7 +22,11 @@ const props = withDefaults(
 const emit = defineEmits<{ submit: [data: Record<string, unknown>] }>();
 
 const values = reactive<Record<string, unknown>>({});
-const files = reactive<Record<string, File>>({});
+// Загрузки dropzone-блоков: файл уезжает в хранилище ДО сабмита страницы,
+// в `page:submit` идёт только ссылка на объект (`state.result`).
+const uploads = reactive<Record<string, FileUploadHandle>>({});
+const fileErrors = reactive<Record<string, string>>({});
+const { upload: startUpload } = useFileUpload();
 
 function isBlank(value: unknown): boolean {
   return value === undefined || value === null || value === "";
@@ -37,8 +42,13 @@ function requiredBlocks(): PageBlock[] {
   return out;
 }
 
+function blockValue(block: PageBlock): unknown {
+  if (block.type === "dropzone") return uploads[block.id]?.state.result ?? null;
+  return values[block.id];
+}
+
 const canSubmit = computed(
-  () => !props.busy && requiredBlocks().every((b) => !isBlank(values[b.id])),
+  () => !props.busy && requiredBlocks().every((b) => !isBlank(blockValue(b))),
 );
 
 function displayValue(block: PageBlock): string {
@@ -57,11 +67,37 @@ function selectOptions(block: PageBlock): string[] {
   return block.options ?? [];
 }
 
+/** Подпись ограничений под dropzone: форматы и лимит из настроек блока. */
+function fileConstraints(block: PageBlock): string {
+  const parts: string[] = [];
+  if (block.accept?.length) parts.push(block.accept.join(", "));
+  if (block.maxFileMb) parts.push(`макс. ${block.maxFileMb} МБ`);
+  return parts.join(" · ");
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} КБ`;
+  return `${bytes} Б`;
+}
+
 function onFile(block: PageBlock, event: Event) {
-  const file = (event.target as HTMLInputElement).files?.[0];
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  // Повторный выбор того же файла должен снова сработать.
+  input.value = "";
   if (!file) return;
-  files[block.id] = file;
-  values[block.id] = { fileName: file.name, fileSize: file.size, fileType: file.type };
+
+  delete fileErrors[block.id];
+  const error = validateFileAgainstBlock(block, file);
+  if (error) {
+    fileErrors[block.id] = error;
+    return;
+  }
+
+  // Новый файл заменяет предыдущую загрузку блока.
+  void uploads[block.id]?.cancel();
+  uploads[block.id] = startUpload(file);
 }
 
 function submit() {
@@ -69,6 +105,9 @@ function submit() {
   const payload: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(values)) {
     if (!isBlank(value)) payload[key] = value;
+  }
+  for (const [key, handle] of Object.entries(uploads)) {
+    if (handle.state.result) payload[key] = handle.state.result;
   }
   emit("submit", payload);
 }
@@ -119,14 +158,84 @@ function submit() {
           <label
             class="rounded-2xl border-2 border-dashed border-zinc-300 hover:border-rose-400 hover:bg-zinc-50 p-6 text-center cursor-pointer transition-colors block"
           >
-            <span v-if="!files[block.id]" class="font-sans text-sm text-zinc-500">
+            <span v-if="!uploads[block.id]" class="font-sans text-sm text-zinc-500">
               Перетащите файл сюда или нажмите для выбора
             </span>
             <span v-else class="font-sans text-sm font-semibold text-zinc-900">
-              {{ files[block.id]?.name }}
+              {{ uploads[block.id]?.state.fileName }}
+              <span v-if="uploads[block.id]?.state.status === 'done'" class="text-emerald-600">✓</span>
             </span>
             <input type="file" class="hidden" @change="onFile(block, $event)" />
           </label>
+
+          <span v-if="fileConstraints(block)" class="font-sans text-xs text-zinc-400">
+            {{ fileConstraints(block) }}
+          </span>
+          <span v-if="fileErrors[block.id]" class="font-sans text-xs text-rose-600">
+            {{ fileErrors[block.id] }}
+          </span>
+
+          <!-- ход загрузки: проценты и байты, пауза/возобновление/отмена -->
+          <template v-if="uploads[block.id] && uploads[block.id]!.state.status !== 'done'">
+            <div
+              v-if="['uploading', 'paused', 'interrupted'].includes(uploads[block.id]!.state.status)"
+              class="flex flex-col gap-1"
+            >
+              <div class="h-1.5 rounded-full bg-zinc-200 overflow-hidden">
+                <div
+                  class="h-full bg-rose-600 transition-[width]"
+                  :style="{ width: `${uploads[block.id]!.state.percent}%` }"
+                />
+              </div>
+              <span class="font-sans text-xs text-zinc-500">
+                {{ uploads[block.id]!.state.percent }}% ·
+                {{ formatBytes(uploads[block.id]!.state.uploadedBytes) }} из
+                {{ formatBytes(uploads[block.id]!.state.totalBytes) }}
+              </span>
+            </div>
+
+            <span
+              v-if="uploads[block.id]!.state.message"
+              class="font-sans text-xs text-amber-600"
+            >
+              {{ uploads[block.id]!.state.message }}
+            </span>
+
+            <div class="flex gap-2">
+              <button
+                v-if="uploads[block.id]!.state.chunked && uploads[block.id]!.state.status === 'uploading'"
+                type="button"
+                class="font-sans text-xs font-semibold text-zinc-600 hover:text-zinc-900"
+                @click="uploads[block.id]!.pause()"
+              >
+                Пауза
+              </button>
+              <button
+                v-if="['paused', 'interrupted'].includes(uploads[block.id]!.state.status)"
+                type="button"
+                class="font-sans text-xs font-semibold text-rose-600 hover:text-rose-700"
+                @click="uploads[block.id]!.resume()"
+              >
+                {{ uploads[block.id]!.state.status === 'interrupted' ? 'Возобновить загрузку' : 'Продолжить' }}
+              </button>
+              <button
+                v-if="uploads[block.id]!.state.status === 'error'"
+                type="button"
+                class="font-sans text-xs font-semibold text-rose-600 hover:text-rose-700"
+                @click="uploads[block.id]!.retry()"
+              >
+                Повторить
+              </button>
+              <button
+                v-if="['uploading', 'paused', 'interrupted', 'error'].includes(uploads[block.id]!.state.status)"
+                type="button"
+                class="font-sans text-xs font-semibold text-zinc-500 hover:text-zinc-700"
+                @click="uploads[block.id]!.cancel()"
+              >
+                Отменить
+              </button>
+            </div>
+          </template>
         </div>
 
         <!-- выпадающий список -->
