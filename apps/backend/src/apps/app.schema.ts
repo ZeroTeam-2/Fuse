@@ -45,6 +45,10 @@ export class EndpointDoc {
   @Prop()
   summary?: string;
 
+  // First OpenAPI tag of the operation — groups endpoints into collapsible blocks.
+  @Prop()
+  tag?: string;
+
   @Prop({ type: [SchemaFieldDocSchema], default: [] })
   inputs: SchemaFieldDoc[];
 
@@ -60,6 +64,32 @@ export class EndpointDoc {
 }
 
 const EndpointDocSchema = SchemaFactory.createForClass(EndpointDoc);
+
+@Schema({ _id: false })
+export class VariableDoc {
+  @Prop({ required: true })
+  key: string;
+
+  @Prop({ required: true, default: "" })
+  value: string;
+}
+
+const VariableDocSchema = SchemaFactory.createForClass(VariableDoc);
+
+@Schema({ _id: false })
+export class EnvironmentDoc {
+  @Prop({ required: true })
+  id: string;
+
+  @Prop({ required: true })
+  name: string;
+
+  // Extensible set; today the only member is `baseUrl`.
+  @Prop({ type: [VariableDocSchema], default: [] })
+  variables: VariableDoc[];
+}
+
+const EnvironmentDocSchema = SchemaFactory.createForClass(EnvironmentDoc);
 
 @Schema({ timestamps: true, toJSON: { virtuals: true } })
 export class App {
@@ -90,6 +120,12 @@ export class App {
 
   @Prop({ type: [EndpointDocSchema], default: [] })
   endpoints: EndpointDoc[];
+
+  // Environments of the provider; the default `Prod` cannot be deleted and its
+  // `baseUrl` variable seeds from `baseUrl` above. Empty for pre-existing apps
+  // until they are opened or backfilled (execution falls back to `baseUrl`).
+  @Prop({ type: [EnvironmentDocSchema], default: [] })
+  environments: EnvironmentDoc[];
 
   @Prop({ default: false })
   published: boolean;
