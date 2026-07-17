@@ -115,7 +115,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List user's apps (paginated) */
+        /** List apps (paginated): by default the caller's own apps, or — with published=true — any published app from any owner */
         get: operations["AppsController_findByOwner"];
         put?: never;
         /** Create a new app from an OpenAPI spec */
@@ -162,6 +162,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/apps/import-preview-file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview an OpenAPI spec import from an uploaded file */
+        post: operations["AppsController_importPreviewFile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/apps/from-file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create a new app from an uploaded OpenAPI spec file */
+        post: operations["AppsController_createFromFile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/apps/{id}/reimport": {
         parameters: {
             query?: never;
@@ -173,6 +207,23 @@ export interface paths {
         put?: never;
         /** Reimport an app's spec and return a diff */
         post: operations["AppsController_reimport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/apps/{id}/reimport/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Apply a reimport: re-parse the spec and merge endpoints */
+        post: operations["AppsController_applyReimport"];
         delete?: never;
         options?: never;
         head?: never;
@@ -765,7 +816,87 @@ export interface operations {
             };
         };
     };
+    AppsController_importPreviewFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file?: string;
+                    /**
+                     * Format: url
+                     * @description Required when the spec has no absolute servers[0].url
+                     */
+                    baseUrl?: string;
+                };
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AppsController_createFromFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                    /** @example My API */
+                    name: string;
+                    description?: string;
+                    /**
+                     * Format: url
+                     * @description Required when the spec has no absolute servers[0].url
+                     */
+                    baseUrl?: string;
+                };
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     AppsController_reimport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AppsController_applyReimport: {
         parameters: {
             query?: never;
             header?: never;
