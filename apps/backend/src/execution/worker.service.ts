@@ -509,7 +509,7 @@ export class WorkerService
 
     // Базовый URL берётся из окружения, выбранного для этого поставщика в
     // сценарии (по умолчанию — Prod, крайний фолбэк — app.baseUrl).
-    const environmentId = ctx.environmentSelections.find(
+    const environmentId = ctx.environmentSelections?.find(
       (s) => s.appId === appId,
     )?.environmentId;
     const baseUrl = resolveAppBaseUrl(app, environmentId);
