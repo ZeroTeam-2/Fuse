@@ -17,6 +17,7 @@ interface OpenAPIParameter {
 
 interface OpenAPISchemaObject {
   type?: string;
+  format?: string;
   properties?: Record<string, OpenAPISchemaObject>;
   required?: string[];
   items?: OpenAPISchemaObject;
@@ -216,7 +217,7 @@ export class OpenApiParserService {
       const field: SchemaField = {
         key,
         label: key,
-        type: this.mapSchemaType(prop.type),
+        type: this.mapSchemaType(prop.type, prop.format),
         loc,
         ex: prop.example,
         required: target.required?.includes(key) ?? false,
@@ -253,7 +254,13 @@ export class OpenApiParserService {
     }
   }
 
-  private mapSchemaType(type?: string): SchemaField["type"] {
+  private mapSchemaType(type?: string, format?: string): SchemaField["type"] {
+    // OpenAPI 3.x описывает файл multipart-формы как `type: string` +
+    // `format: binary` — без учёта формата файловый вход импортировался
+    // строкой, и multipart-запрос файлового шага не знал имя поля файла.
+    if (type === "string" && (format === "binary" || format === "base64")) {
+      return "file";
+    }
     switch (type) {
       case "string":
         return "string";
