@@ -17,6 +17,7 @@ import type {
   PeriodicStep,
   ScenarioStepRef,
   FileStep,
+  EnvironmentSelection,
   ManualInputDescriptor,
   RunStepResult,
   SchemaField,
@@ -26,7 +27,7 @@ import { Run, RunDocument } from "./run.schema";
 import { Scenario, ScenarioDocument } from "../scenarios/scenario.schema";
 import { App, AppDocument } from "../apps/app.schema";
 import { SsrfGuard } from "../apps/ssrf-guard";
-import { joinBaseUrl } from "../apps/base-url";
+import { joinBaseUrl, resolveAppBaseUrl } from "../apps/base-url";
 import { RunGateway } from "../websocket/run.gateway";
 import { resolveMappings, groupInputsByLocation } from "./mapping-resolver";
 import type { LocatedInputs } from "./mapping-resolver";
@@ -64,6 +65,8 @@ interface StepContext {
   stepResults: RunStepResult[];
   /** Кэш приложений на время одного запуска: N шагов к одному API — один запрос в БД. */
   appCache: Map<string, AppDocument>;
+  /** Выбор окружения по поставщику (из сценария): по нему резолвится базовый URL. */
+  environmentSelections: EnvironmentSelection[];
   /**
    * Ввод шага по ЛОКАЛЬНЫМ ключам (`inn`, `filter:orgId`) — ровно то, что ищет
    * резолвер: срез входов запуска, адресованных этому шагу, поверх накопленного
@@ -229,6 +232,8 @@ export class WorkerService
     const steps = (scenario.steps ?? []) as Step[];
     const startStep = run.currentStep ?? 0;
     const appCache = new Map<string, AppDocument>();
+    const environmentSelections = (scenario.environmentSelections ??
+      []) as EnvironmentSelection[];
 
     // Считается один раз на запуск: этим же списком форма запуска строила поля.
     const descriptors = await this.manualInputsService.forSteps(
@@ -291,6 +296,7 @@ export class WorkerService
           stepPath: [i],
           stepResults: reloadedRun.stepResults as unknown as RunStepResult[],
           appCache,
+          environmentSelections,
           // Свой срез входов запуска важнее значения, принесённого с прошлых
           // шагов: одноимённые ключи разных шагов не должны склеиваться.
           userInput: {
@@ -515,7 +521,14 @@ export class WorkerService
   ): Promise<string> {
     const app = await this.loadApp(appId, ctx);
 
-    if (!app.baseUrl) {
+    // Базовый URL берётся из окружения, выбранного для этого поставщика в
+    // сценарии (по умолчанию — Prod, крайний фолбэк — app.baseUrl).
+    const environmentId = ctx.environmentSelections?.find(
+      (s) => s.appId === appId,
+    )?.environmentId;
+    const baseUrl = resolveAppBaseUrl(app, environmentId);
+
+    if (!baseUrl) {
       throw new StepExecutionError(
         `У приложения «${app.name}» не задан базовый URL — переимпортируйте спецификацию OpenAPI`,
       );
@@ -525,10 +538,10 @@ export class WorkerService
 
     let url: string;
     try {
-      url = joinBaseUrl(app.baseUrl, withPathParams);
+      url = joinBaseUrl(baseUrl, withPathParams);
     } catch {
       throw new StepExecutionError(
-        `Некорректный базовый URL приложения «${app.name}»: ${app.baseUrl}`,
+        `Некорректный базовый URL приложения «${app.name}»: ${baseUrl}`,
       );
     }
 
@@ -727,6 +740,10 @@ export class WorkerService
 
     const refSteps = (refScenario.steps ?? []) as Step[];
     const nestedResults: RunStepResult[] = [];
+    // Окружения вложенного сценария — его собственные: поставщики его шагов
+    // резолвятся по выбору, сделанному в этом сценарии, а не в объемлющем.
+    const nestedEnvironmentSelections = (refScenario.environmentSelections ??
+      []) as EnvironmentSelection[];
 
     for (let i = 0; i < refSteps.length; i++) {
       const refStep = refSteps[i];
@@ -739,6 +756,7 @@ export class WorkerService
         stepPath: nestedPath,
         stepResults: nestedResults,
         appCache: ctx.appCache,
+        environmentSelections: nestedEnvironmentSelections,
         userInput: {
           ...ctx.userInput,
           ...sliceInputsForStep(ctx.runInputs, nestedPath),

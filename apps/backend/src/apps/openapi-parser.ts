@@ -38,6 +38,7 @@ interface OpenAPIOperation {
   summary?: string;
   description?: string;
   deprecated?: boolean;
+  tags?: string[];
   parameters?: OpenAPIParameter[];
   requestBody?: OpenAPIRequestBody;
   responses?: Record<string, OpenAPIResponse>;
@@ -67,7 +68,6 @@ export interface ParsedSpec {
   host?: string;
   apiVersion?: string;
   endpoints: Endpoint[];
-  specSnapshot: unknown;
 }
 
 const VALID_METHODS = new Set(["get", "post", "put", "delete", "patch"]);
@@ -77,6 +77,7 @@ export class OpenApiParserService {
   async parse(
     rawSpec: Record<string, unknown>,
     openapiUrl: string,
+    options?: { baseUrlOverride?: string },
   ): Promise<ParsedSpec> {
     let spec: OpenAPIDocument;
     try {
@@ -85,14 +86,16 @@ export class OpenApiParserService {
       throw new BadRequestException("Failed to parse OpenAPI specification");
     }
 
-    const baseUrl = deriveBaseUrl(spec, openapiUrl);
+    let baseUrl = deriveBaseUrl(spec, openapiUrl);
+    if (baseUrl === undefined && options?.baseUrlOverride) {
+      baseUrl = options.baseUrlOverride;
+    }
 
     return {
       baseUrl,
       host: this.extractHost(baseUrl),
       apiVersion: spec.info?.version,
       endpoints: this.extractEndpoints(spec),
-      specSnapshot: spec,
     };
   }
 
@@ -129,6 +132,9 @@ export class OpenApiParserService {
           method: method.toUpperCase() as HttpMethod,
           path,
           summary: operation.summary,
+          // First tag groups the endpoint into a collapsible block; untagged
+          // operations fall into the «Прочее» block on the client.
+          tag: operation.tags?.[0],
           inputs: this.extractInputs(operation, allParameters),
           outputs,
           outputIsArray: isArray,
