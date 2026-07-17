@@ -111,6 +111,7 @@ function harness(run: Record<string, unknown>, steps: Step[], descriptors: Manua
     { publish: vi.fn() } as any,
     { assertSafeUrl: vi.fn().mockResolvedValue(undefined) } as any,
     { forSteps: vi.fn().mockResolvedValue(descriptors) } as any,
+    { getObjectBuffer: vi.fn().mockResolvedValue(Buffer.from("")) } as any,
   );
 
   return { worker, runModel, run, gateway: (worker as any).gateway };

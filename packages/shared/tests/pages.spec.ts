@@ -6,8 +6,40 @@ import {
   migrateStepPage,
   pageBlockCount,
   pageBlocks,
+  validateFileAgainstBlock,
 } from "../src/pages";
-import type { StepPage } from "../src/types";
+import type { PageBlock, StepPage } from "../src/types";
+
+describe("validateFileAgainstBlock", () => {
+  const block: PageBlock = {
+    id: "dz",
+    type: "dropzone",
+    span: 6,
+    accept: [".pdf", "image/png"],
+    maxFileMb: 2,
+  };
+
+  it("passes a file matching an extension or a MIME type", () => {
+    expect(validateFileAgainstBlock(block, { name: "Doc.PDF", type: "", size: 10 })).toBeNull();
+    expect(validateFileAgainstBlock(block, { name: "shot.png", type: "image/png", size: 10 })).toBeNull();
+  });
+
+  it("rejects a file outside the accept list without starting the upload path", () => {
+    const err = validateFileAgainstBlock(block, { name: "malware.exe", type: "application/x-msdownload", size: 10 });
+    expect(err).toContain("Недопустимый формат");
+    expect(err).toContain(".pdf");
+  });
+
+  it("rejects a file over maxFileMb", () => {
+    const err = validateFileAgainstBlock(block, { name: "big.pdf", type: "application/pdf", size: 3 * 1024 * 1024 });
+    expect(err).toContain("больше 2 МБ");
+  });
+
+  it("accepts anything when the block has no constraints", () => {
+    const free: PageBlock = { id: "dz", type: "dropzone", span: 6 };
+    expect(validateFileAgainstBlock(free, { name: "any.bin", type: "", size: 1e9 })).toBeNull();
+  });
+});
 
 describe("block category", () => {
   it("treats paragraph as display and the rest as input", () => {

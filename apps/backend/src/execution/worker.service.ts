@@ -9,7 +9,7 @@ import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
 import { Consumer } from "sqs-consumer";
 import { SQSClient } from "@aws-sdk/client-sqs";
-import { RunStatus } from "@fuse/shared";
+import { RunStatus, isUploadedFileRef } from "@fuse/shared";
 import type {
   Step,
   ApiStep,
@@ -17,6 +17,7 @@ import type {
   PeriodicStep,
   ScenarioStepRef,
   FileStep,
+  UploadedFileRef,
   EnvironmentSelection,
   ManualInputDescriptor,
   RunStepResult,
@@ -29,6 +30,7 @@ import { App, AppDocument } from "../apps/app.schema";
 import { SsrfGuard } from "../apps/ssrf-guard";
 import { joinBaseUrl, resolveAppBaseUrl } from "../apps/base-url";
 import { RunGateway } from "../websocket/run.gateway";
+import { MinioService } from "../minio/minio.service";
 import { resolveMappings, groupInputsByLocation } from "./mapping-resolver";
 import type { LocatedInputs } from "./mapping-resolver";
 import { ManualInputsService } from "./manual-inputs.service";
@@ -97,6 +99,7 @@ export class WorkerService
     private readonly gateway: RunGateway,
     private readonly ssrfGuard: SsrfGuard,
     private readonly manualInputsService: ManualInputsService,
+    private readonly minioService: MinioService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -570,7 +573,12 @@ export class WorkerService
     path: string,
     resolved: Record<string, unknown>,
     ctx: StepContext,
-  ): Promise<{ url: string; options: RequestInit }> {
+  ): Promise<{
+    url: string;
+    options: RequestInit;
+    located: LocatedInputs;
+    inputs: SchemaField[];
+  }> {
     const app = await this.loadApp(step.appId, ctx);
     const endpoints = app.endpoints ?? [];
     const endpoint = step.endpointId
@@ -595,7 +603,7 @@ export class WorkerService
       }
     }
 
-    return { url, options };
+    return { url, options, located, inputs };
   }
 
   private async executeApiStep(
@@ -687,8 +695,27 @@ export class WorkerService
       resolved,
       ctx,
     );
-    const intervalMs = (step.pollIntervalSec ?? 5) * 1000;
-    const progressField = step.progressField;
+    return this.pollUntilComplete(
+      url,
+      options,
+      step.pollIntervalSec,
+      step.progressField,
+      ctx,
+    );
+  }
+
+  /**
+   * Общий цикл опроса endpoint'а до признака завершения — периодический шаг и
+   * стадия обработки файлового шага отличаются только тем, как собран запрос.
+   */
+  private async pollUntilComplete(
+    url: string,
+    options: RequestInit,
+    intervalSec: number | undefined,
+    progressField: string | undefined,
+    ctx: StepContext,
+  ): Promise<unknown> {
+    const intervalMs = (intervalSec ?? 5) * 1000;
     const startTime = Date.now();
 
     let lastResult: unknown = null;
@@ -813,13 +840,144 @@ export class WorkerService
     return { nestedScenario: step.refScenarioId };
   }
 
-  // Шаг «файл» пока заглушка (загрузка в MinIO — отдельная задача). Когда он
-  // появится, адрес выгрузки берётся тем же `resolveStepUrl(step.appId, step.uploadPath, ...)`.
+  /**
+   * Файл загружен страницей шага в MinIO до сабмита; сюда приходит только
+   * ссылка `UploadedFileRef` — по ней объект читается и уезжает провайдеру
+   * multipart-запросом. Ответ провайдера (или финальный ответ опроса
+   * `statusEndpoint`) — результат шага; внутренние `objectName`/URL хранилища
+   * в результат не попадают.
+   */
   private async executeFileStep(
-    _step: FileStep,
-    _ctx: StepContext,
+    step: FileStep,
+    ctx: StepContext,
   ): Promise<unknown> {
-    return { placeholder: true, message: "File step not yet implemented" };
+    if (!step.appId || !step.uploadPath) {
+      throw new StepExecutionError(
+        `Шаг «${step.title}» не настроен: не выбраны приложение или endpoint загрузки`,
+      );
+    }
+
+    // Значение dropzone-блока страницы — единственный источник файла. Ключ —
+    // привязка блока (`binding`), по ней ниже выбирается multipart-поле.
+    const fileEntry = Object.entries(ctx.userInput ?? {}).find(([, v]) =>
+      isUploadedFileRef(v),
+    );
+    const fileRef = fileEntry?.[1] as UploadedFileRef | undefined;
+    if (!fileRef) {
+      throw new StepExecutionError(
+        `Шаг «${step.title}»: файл не был загружен — отправьте файл со страницы шага`,
+      );
+    }
+
+    const resolved = resolveMappings(step, ctx.stepResults, ctx.userInput, ctx.warnings);
+    // Файловая ссылка не должна уехать в body текстовым полем — файл поедет multipart-частью.
+    const textInputs = Object.fromEntries(
+      Object.entries(resolved).filter(([, v]) => !isUploadedFileRef(v)),
+    );
+
+    const method = step.uploadMethod ?? "POST";
+    const { url, options, located, inputs } = await this.buildEndpointRequest(
+      { appId: step.appId },
+      method,
+      step.uploadPath,
+      textInputs,
+      ctx,
+    );
+
+    let buffer: Buffer;
+    try {
+      buffer = await this.minioService.getObjectBuffer(fileRef.objectName);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new StepExecutionError(
+        `Не удалось прочитать файл «${fileRef.fileName}» из хранилища: ${reason}`,
+      );
+    }
+
+    // Multipart-поле файла: body-вход бинарного типа из схемы endpoint'а;
+    // иначе — привязка dropzone-блока, если она указывает на body-вход (спеки,
+    // импортированные до маппинга `format: binary` → `file`, помечают файловое
+    // поле строкой); без схемы (легаси) — "file".
+    const bodyInputs = inputs.filter((f) => (f.loc ?? "body") === "body");
+    const boundField = bodyInputs.find((f) => f.key === fileEntry?.[0])?.key;
+    const fileField =
+      bodyInputs.find((f) => f.type === "file")?.key ??
+      boundField ??
+      (bodyInputs.length === 1 && located.body[bodyInputs[0].key] === undefined
+        ? bodyInputs[0].key
+        : "file");
+
+    const form = new FormData();
+    const contentType =
+      fileRef.fileType || step.contentType || "application/octet-stream";
+    form.append(
+      fileField,
+      new Blob([new Uint8Array(buffer)], { type: contentType }),
+      fileRef.fileName,
+    );
+    for (const [key, value] of Object.entries(located.body)) {
+      if (key === fileField || value === undefined || value === null) continue;
+      form.append(
+        key,
+        typeof value === "object" ? JSON.stringify(value) : String(value),
+      );
+    }
+
+    // Content-Type не выставляем руками: boundary впишет fetch.
+    const headers = { ...(options.headers as Record<string, string>) };
+    delete headers["Content-Type"];
+
+    let response: Response;
+    try {
+      response = await fetch(url, { method, headers, body: form });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new StepExecutionError(`Не удалось вызвать ${url}: ${reason}`);
+    }
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new StepExecutionError(
+        `Загрузка файла провайдеру не удалась: ${response.status} ${response.statusText}${text ? ` — ${text}` : ""}`,
+      );
+    }
+
+    const respContentType = response.headers.get("content-type") ?? "";
+    const uploadResult: unknown = respContentType.includes("application/json")
+      ? await response.json()
+      : await response.text();
+
+    if (!step.statusEndpoint) {
+      return uploadResult;
+    }
+
+    // Входы опроса: маппинги шага + выходы ответа загрузки, чтобы идентификатор
+    // задачи провайдера подставился в путь статуса ("{id}").
+    const pollInputs: Record<string, unknown> = { ...textInputs };
+    if (
+      uploadResult &&
+      typeof uploadResult === "object" &&
+      !Array.isArray(uploadResult)
+    ) {
+      Object.assign(pollInputs, uploadResult as Record<string, unknown>);
+    }
+
+    const { url: pollUrl, options: pollOptions } =
+      await this.buildEndpointRequest(
+        { appId: step.appId },
+        step.statusEndpoint.method,
+        step.statusEndpoint.path,
+        pollInputs,
+        ctx,
+      );
+
+    return this.pollUntilComplete(
+      pollUrl,
+      pollOptions,
+      step.statusEndpoint.intervalSec,
+      step.statusEndpoint.progressField,
+      ctx,
+    );
   }
 
   /**
