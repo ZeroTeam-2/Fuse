@@ -56,14 +56,17 @@ const FILE_REF = {
   fileType: "application/pdf",
 };
 
-function fileStep(extra: Record<string, unknown> = {}): Step {
+/** Api-шаг загрузки: dropzone страницы привязан к файловому входу `document`. */
+function uploadApiStep(extra: Record<string, unknown> = {}): Step {
   return {
-    id: "f1",
+    id: "s-up",
     title: "Загрузка документа",
-    type: "file",
+    type: "api",
     appId: "a1",
-    uploadMethod: "POST",
-    uploadPath: "/upload",
+    endpointId: "up1",
+    method: "POST",
+    path: "/upload",
+    mappings: { document: "user" },
     page: {
       title: "Файл",
       rows: [
@@ -150,13 +153,21 @@ function submittedRun(): Record<string, unknown> {
   };
 }
 
-describe("WorkerService — file step", () => {
-  it("delivers the uploaded file to the provider as multipart with text fields alongside", async () => {
+function stepResult(run: Record<string, unknown>, index: number): unknown {
+  const results = run.stepResults as any;
+  return results.length ? results[index]?.result : results[String(index)]?.result;
+}
+
+describe("WorkerService — api step with a file input", () => {
+  it("sends multipart with the file and text fields in one request", async () => {
     fetchMock.mockResolvedValue(jsonResponse({ received: true }));
 
     const run = submittedRun();
     const { worker, minio } = harness(run, [
-      fileStep({ mappings: { comment: "const" }, consts: { comment: "скан договора" } }),
+      uploadApiStep({
+        mappings: { document: "user", comment: "const" },
+        consts: { comment: "скан договора" },
+      }),
     ]);
 
     await (worker as any).executeRun("run-1");
@@ -180,47 +191,31 @@ describe("WorkerService — file step", () => {
     expect(form.get("comment")).toBe("скан договора");
 
     // Результат шага — ответ провайдера, без ссылок хранилища.
-    const result = (run.stepResults as any).length
-      ? (run.stepResults as any)[0].result
-      : (run.stepResults as any)["0"]?.result;
-    expect(result).toEqual({ received: true });
+    expect(stepResult(run, 0)).toEqual({ received: true });
   });
 
-  it("polls statusEndpoint with the task id from the upload response and publishes progress", async () => {
-    fetchMock
-      .mockResolvedValueOnce(jsonResponse({ taskId: "t-42" }))
-      .mockResolvedValueOnce(jsonResponse({ status: "processing", percent: 50 }))
-      .mockResolvedValueOnce(jsonResponse({ status: "done", percent: 100, text: "распознано" }));
+  it("keeps the plain JSON body when the step has no file input", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ ok: true }));
 
     const run = submittedRun();
+    run.pendingInput = { stepIndex: 0, data: {} };
     const { worker } = harness(run, [
-      fileStep({
-        statusEndpoint: { method: "GET", path: "/status/{taskId}", intervalSec: 1, progressField: "percent" },
+      uploadApiStep({
+        page: undefined,
+        mappings: { comment: "const" },
+        consts: { comment: "без файла" },
       }),
     ]);
-    const publish = vi.fn();
-    (worker as any).gateway = { publish };
 
     await (worker as any).executeRun("run-1");
 
-    // id задачи из ответа загрузки подставлен в путь статуса.
-    expect(String(fetchMock.mock.calls[1][0])).toBe("https://api.example.com/status/t-42");
-
-    const progressEvents = publish.mock.calls
-      .filter((call) => call[1].type === "progress")
-      .map((call) => call[1].payload.progress);
-    expect(progressEvents).toEqual([50, 100]);
-
-    // Результат шага — финальный ответ опроса.
-    const results = run.stepResults as any;
-    const result = results.length ? results[0].result : results["0"]?.result;
-    expect(result).toEqual({ status: "done", percent: 100, text: "распознано" });
-    expect(run.status).toBe(RunStatus.COMPLETED);
+    const options = fetchMock.mock.calls[0][1];
+    expect(options.headers["Content-Type"]).toBe("application/json");
+    expect(JSON.parse(options.body)).toEqual({ comment: "без файла" });
   });
 
   it("falls back to the dropzone binding for the multipart field when the schema types the file input as string", async () => {
-    // Спека, импортированная до маппинга `format: binary` → `file`: файловый
-    // body-вход `document` помечен строкой, рядом второй строковый вход.
+    // Спека, импортированная до маппинга `format: binary` → `file`.
     const legacyApp = {
       ...APP,
       endpoints: [
@@ -238,7 +233,7 @@ describe("WorkerService — file step", () => {
     fetchMock.mockResolvedValue(jsonResponse({ received: true }));
 
     const run = submittedRun();
-    const { worker } = harness(run, [fileStep()], legacyApp);
+    const { worker } = harness(run, [uploadApiStep()], legacyApp);
 
     await (worker as any).executeRun("run-1");
 
@@ -249,17 +244,85 @@ describe("WorkerService — file step", () => {
     expect(form.get("file")).toBeNull();
   });
 
-  it("fails the run with a domain error when no file reference was submitted", async () => {
-    const run = submittedRun();
-    // Сабмит страницы прошёл, но файловой ссылки в данных нет (обход клиента).
-    run.pendingInput = { stepIndex: 0, data: { dz1: { fileName: "doc.pdf" } } };
+  it("composes upload and status polling as api + periodic steps", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ taskId: "t-42" }))
+      .mockResolvedValueOnce(jsonResponse({ status: "processing", percent: 50 }))
+      .mockResolvedValueOnce(jsonResponse({ status: "done", percent: 100, text: "распознано" }));
 
-    const { worker } = harness(run, [fileStep()]);
+    const run = submittedRun();
+    const { worker } = harness(run, [
+      uploadApiStep(),
+      {
+        id: "s-poll",
+        title: "Статус распознавания",
+        type: "periodic",
+        appId: "a1",
+        endpointId: "st1",
+        pollMethod: "GET",
+        pollPath: "/status/{taskId}",
+        pollIntervalSec: 1,
+        progressField: "percent",
+        mappings: { taskId: "s0:taskId" },
+      } as Step,
+    ]);
+    const publish = vi.fn();
+    (worker as any).gateway = { publish };
+
+    await (worker as any).executeRun("run-1");
+
+    // id задачи из ответа загрузки подставлен в путь статуса periodic-шага.
+    expect(String(fetchMock.mock.calls[1][0])).toBe("https://api.example.com/status/t-42");
+
+    const progressEvents = publish.mock.calls
+      .filter((call) => call[1].type === "progress")
+      .map((call) => call[1].payload.progress);
+    expect(progressEvents).toEqual([50, 100]);
+
+    expect(stepResult(run, 1)).toEqual({ status: "done", percent: 100, text: "распознано" });
+    expect(run.status).toBe(RunStatus.COMPLETED);
+  });
+
+  it("fails a periodic poll immediately on a terminal error status", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ taskId: "t-42" }))
+      .mockResolvedValueOnce(jsonResponse({ status: "error", error: "Failed to open stream" }));
+
+    const run = submittedRun();
+    const { worker } = harness(run, [
+      uploadApiStep(),
+      {
+        id: "s-poll",
+        title: "Статус распознавания",
+        type: "periodic",
+        appId: "a1",
+        endpointId: "st1",
+        pollMethod: "GET",
+        pollPath: "/status/{taskId}",
+        pollIntervalSec: 1,
+        mappings: { taskId: "s0:taskId" },
+      } as Step,
+    ]);
 
     await (worker as any).executeRun("run-1");
 
     expect(run.status).toBe(RunStatus.FAILED);
-    expect(String(run.error)).toContain("файл не был загружен");
+    expect(String(run.error)).toContain("Провайдер сообщил об ошибке задачи");
+    // Опрос не продолжался после статуса ошибки.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails a legacy file step with a hint to use an api step", async () => {
+    const run = submittedRun();
+    const { worker } = harness(run, [
+      { id: "s-file", title: "Старый файловый шаг", type: "file", mappings: {} } as Step,
+    ]);
+
+    await (worker as any).executeRun("run-1");
+
+    expect(run.status).toBe(RunStatus.FAILED);
+    expect(String(run.error)).toContain("устарел");
+    expect(String(run.error)).toContain("Endpoint API");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

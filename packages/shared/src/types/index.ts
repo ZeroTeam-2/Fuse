@@ -290,6 +290,13 @@ export interface DelayStep extends BaseStep {
   seconds: number;
 }
 
+/**
+ * @deprecated Тип выведен из употребления: загрузка файла — свойство api-шага
+ * (dropzone-привязка к файловому body-входу endpoint'а даёт multipart), опрос
+ * статуса обработки — следующий periodic-шаг. Остаётся в union только для
+ * чтения старых документов сценариев; worker завершает такой шаг доменной
+ * ошибкой с подсказкой.
+ */
 export interface FileStep extends BaseStep {
   type: "file";
   appId?: string;

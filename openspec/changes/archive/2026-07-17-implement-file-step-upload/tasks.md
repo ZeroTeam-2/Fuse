@@ -28,8 +28,8 @@
 - [x] 5.1 `worker.service.ts`: имя multipart-поля — фолбэк на привязку dropzone-блока, когда схема не пометила body-вход файловым (спеки, импортированные до 5.2, хранят `doc` строкой); юнит-тест
 - [x] 5.2 `openapi-parser.ts`: `type: string, format: binary|base64` → `SchemaField.type: "file"`; юнит-тест
 - [x] 5.3 E2e против реального `http://[адрес-скрыт]/llm-doc-recognizer`: сценарий «Распознать документ» (шаг сконвертирован в `file` прямо в БД — в билдере пока нет конфигуратора файлового шага), single-загрузка PDF → multipart в поле `doc` + `data`-константа → опрос `/task/{task_id}` до `completed` → результат шага = распознанный текст
-- [ ] 5.4 (follow-up, отдельный change) Конфигуратор файлового шага в билдере: `StepPicker` создаёт `{type: "file"}` без `appId`/`uploadPath`/`statusEndpoint` — настроить шаг из UI сейчас невозможно
-- [ ] 5.5 (follow-up) Терминальные статусы опроса: `{"status": "error"}` от провайдера не завершает `pollUntilComplete` — цикл крутится до 5-минутного таймаута
+- [x] 5.4 ~~Конфигуратор файлового шага в билдере~~ — закрыт change'ем `merge-file-step-into-api-step` упразднением: тип «Файл» удалён из палитры, файловый endpoint настраивается штатной панелью api-шага (multipart включается по `UploadedFileRef` во входах)
+- [x] 5.5 Терминальные статусы опроса — закрыт change'ем `merge-file-step-into-api-step` (задача 1.3): `isPollFailed` роняет опрос доменной ошибкой на `status: "error" | "failed"`, не дожидаясь 5-минутного таймаута
 
 - [x] 4.1 Мок-API провайдера на localhost:8091 (в `SSRF_ALLOWED_HOSTS`): multipart-приём с разбором частей + endpoint статуса (processing/50 → done/100) + журнал `/calls`
 - [x] 4.2 Headless-прогон (JWT в куке `access_token`): single-загрузка → сабмит → worker доставил файл моку (поле `document` из схемы, текстовый body- и header-входы рядом, байты целиком) → опрос статуса с подстановкой `taskId`, ≥2 итераций → результат шага = финальный ответ, без `objectName`/URL хранилища

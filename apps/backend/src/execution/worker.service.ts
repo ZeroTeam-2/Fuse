@@ -16,7 +16,6 @@ import type {
   DelayStep,
   PeriodicStep,
   ScenarioStepRef,
-  FileStep,
   UploadedFileRef,
   EnvironmentSelection,
   ManualInputDescriptor,
@@ -481,7 +480,11 @@ export class WorkerService
         return this.executeScenarioStep(step, ctx);
 
       case "file":
-        return this.executeFileStep(step, ctx);
+        // Тип выведен из употребления: функционал поглощён api-шагом
+        // (multipart при файловом входе) + periodic-шагом (опрос статуса).
+        throw new StepExecutionError(
+          `Шаг «${step.title}»: тип шага «Файл» устарел — используйте шаг «Endpoint API» с файловым входом (dropzone) и, при необходимости, «Периодический запрос» для опроса статуса`,
+        );
 
       default:
         return {
@@ -611,13 +614,29 @@ export class WorkerService
     ctx: StepContext,
   ): Promise<unknown> {
     const resolved = resolveMappings(step, ctx.stepResults, ctx.userInput, ctx.warnings);
-    const { url, options } = await this.buildEndpointRequest(
+
+    // Файловая ссылка среди входов (dropzone-привязка) переключает тело на
+    // multipart: сам файл едет частью формы, а не JSON-объектом ссылки.
+    const fileEntry = Object.entries(resolved).find(([, v]) =>
+      isUploadedFileRef(v),
+    ) as [string, UploadedFileRef] | undefined;
+    const textInputs = fileEntry
+      ? Object.fromEntries(
+          Object.entries(resolved).filter(([, v]) => !isUploadedFileRef(v)),
+        )
+      : resolved;
+
+    const { url, options, located, inputs } = await this.buildEndpointRequest(
       step,
       step.method,
       step.path,
-      resolved,
+      textInputs,
       ctx,
     );
+
+    if (fileEntry) {
+      await this.attachMultipartBody(fileEntry, located, inputs, options);
+    }
 
     let response: Response;
     try {
@@ -759,6 +778,13 @@ export class WorkerService
         }
       }
 
+      // Статус ошибки терминален: ждать таймаут бессмысленно, задача уже упала.
+      if (this.isPollFailed(data)) {
+        throw new StepExecutionError(
+          `Провайдер сообщил об ошибке задачи: ${JSON.stringify(data)}`,
+        );
+      }
+
       if (this.isPollComplete(data)) {
         return data;
       }
@@ -767,6 +793,14 @@ export class WorkerService
     }
 
     return { timedOut: true, lastResult };
+  }
+
+  private isPollFailed(data: unknown): boolean {
+    if (!data || typeof data !== "object") {
+      return false;
+    }
+    const status = (data as Record<string, unknown>).status;
+    return status === "error" || status === "failed";
   }
 
   private isPollComplete(data: unknown): boolean {
@@ -841,48 +875,20 @@ export class WorkerService
   }
 
   /**
-   * Файл загружен страницей шага в MinIO до сабмита; сюда приходит только
-   * ссылка `UploadedFileRef` — по ней объект читается и уезжает провайдеру
-   * multipart-запросом. Ответ провайдера (или финальный ответ опроса
-   * `statusEndpoint`) — результат шага; внутренние `objectName`/URL хранилища
-   * в результат не попадают.
+   * Подменяет JSON-тело собранного запроса на `multipart/form-data`: файл
+   * читается из MinIO по ссылке dropzone-блока, остальные body-входы уезжают
+   * текстовыми полями рядом. Имя файловой части: body-вход типа `file` из
+   * схемы endpoint'а → ключ привязки блока, если он совпадает с body-входом
+   * (спеки, импортированные до маппинга `format: binary`, хранят файловое поле
+   * строкой) → единственный незанятый body-вход → "file".
    */
-  private async executeFileStep(
-    step: FileStep,
-    ctx: StepContext,
-  ): Promise<unknown> {
-    if (!step.appId || !step.uploadPath) {
-      throw new StepExecutionError(
-        `Шаг «${step.title}» не настроен: не выбраны приложение или endpoint загрузки`,
-      );
-    }
-
-    // Значение dropzone-блока страницы — единственный источник файла. Ключ —
-    // привязка блока (`binding`), по ней ниже выбирается multipart-поле.
-    const fileEntry = Object.entries(ctx.userInput ?? {}).find(([, v]) =>
-      isUploadedFileRef(v),
-    );
-    const fileRef = fileEntry?.[1] as UploadedFileRef | undefined;
-    if (!fileRef) {
-      throw new StepExecutionError(
-        `Шаг «${step.title}»: файл не был загружен — отправьте файл со страницы шага`,
-      );
-    }
-
-    const resolved = resolveMappings(step, ctx.stepResults, ctx.userInput, ctx.warnings);
-    // Файловая ссылка не должна уехать в body текстовым полем — файл поедет multipart-частью.
-    const textInputs = Object.fromEntries(
-      Object.entries(resolved).filter(([, v]) => !isUploadedFileRef(v)),
-    );
-
-    const method = step.uploadMethod ?? "POST";
-    const { url, options, located, inputs } = await this.buildEndpointRequest(
-      { appId: step.appId },
-      method,
-      step.uploadPath,
-      textInputs,
-      ctx,
-    );
+  private async attachMultipartBody(
+    fileEntry: [string, UploadedFileRef],
+    located: LocatedInputs,
+    inputs: SchemaField[],
+    options: RequestInit,
+  ): Promise<void> {
+    const [boundKey, fileRef] = fileEntry;
 
     let buffer: Buffer;
     try {
@@ -894,25 +900,20 @@ export class WorkerService
       );
     }
 
-    // Multipart-поле файла: body-вход бинарного типа из схемы endpoint'а;
-    // иначе — привязка dropzone-блока, если она указывает на body-вход (спеки,
-    // импортированные до маппинга `format: binary` → `file`, помечают файловое
-    // поле строкой); без схемы (легаси) — "file".
     const bodyInputs = inputs.filter((f) => (f.loc ?? "body") === "body");
-    const boundField = bodyInputs.find((f) => f.key === fileEntry?.[0])?.key;
     const fileField =
       bodyInputs.find((f) => f.type === "file")?.key ??
-      boundField ??
+      bodyInputs.find((f) => f.key === boundKey)?.key ??
       (bodyInputs.length === 1 && located.body[bodyInputs[0].key] === undefined
         ? bodyInputs[0].key
         : "file");
 
     const form = new FormData();
-    const contentType =
-      fileRef.fileType || step.contentType || "application/octet-stream";
     form.append(
       fileField,
-      new Blob([new Uint8Array(buffer)], { type: contentType }),
+      new Blob([new Uint8Array(buffer)], {
+        type: fileRef.fileType || "application/octet-stream",
+      }),
       fileRef.fileName,
     );
     for (const [key, value] of Object.entries(located.body)) {
@@ -926,58 +927,8 @@ export class WorkerService
     // Content-Type не выставляем руками: boundary впишет fetch.
     const headers = { ...(options.headers as Record<string, string>) };
     delete headers["Content-Type"];
-
-    let response: Response;
-    try {
-      response = await fetch(url, { method, headers, body: form });
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      throw new StepExecutionError(`Не удалось вызвать ${url}: ${reason}`);
-    }
-
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      throw new StepExecutionError(
-        `Загрузка файла провайдеру не удалась: ${response.status} ${response.statusText}${text ? ` — ${text}` : ""}`,
-      );
-    }
-
-    const respContentType = response.headers.get("content-type") ?? "";
-    const uploadResult: unknown = respContentType.includes("application/json")
-      ? await response.json()
-      : await response.text();
-
-    if (!step.statusEndpoint) {
-      return uploadResult;
-    }
-
-    // Входы опроса: маппинги шага + выходы ответа загрузки, чтобы идентификатор
-    // задачи провайдера подставился в путь статуса ("{id}").
-    const pollInputs: Record<string, unknown> = { ...textInputs };
-    if (
-      uploadResult &&
-      typeof uploadResult === "object" &&
-      !Array.isArray(uploadResult)
-    ) {
-      Object.assign(pollInputs, uploadResult as Record<string, unknown>);
-    }
-
-    const { url: pollUrl, options: pollOptions } =
-      await this.buildEndpointRequest(
-        { appId: step.appId },
-        step.statusEndpoint.method,
-        step.statusEndpoint.path,
-        pollInputs,
-        ctx,
-      );
-
-    return this.pollUntilComplete(
-      pollUrl,
-      pollOptions,
-      step.statusEndpoint.intervalSec,
-      step.statusEndpoint.progressField,
-      ctx,
-    );
+    options.headers = headers;
+    options.body = form;
   }
 
   /**
