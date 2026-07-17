@@ -93,15 +93,25 @@ export class ExecutionService {
       inputs: inputs ?? {},
     }).save();
 
-    await this.sqsClient.send(
-      new SendMessageCommand({
-        QueueUrl: this.queueUrl,
-        MessageBody: JSON.stringify({ runId: run._id.toString() }),
-      }),
-    );
+    await this.enqueueRun(run._id.toString());
 
     this.logger.log(`Created run ${run._id} for scenario ${scenarioId}`);
     return run;
+  }
+
+  /**
+   * Кладёт сообщение о запуске в очередь. Используется и для старта, и для
+   * ПРОДОЛЖЕНИЯ после ввода пользователя: воркер не держит обработчик, пока ждёт
+   * страницу/добор, а поднимает исполнение заново с текущего шага по этому
+   * сообщению (пришедший ввод лежит в `Run.pendingInput`/`Run.inputs`).
+   */
+  private async enqueueRun(runId: string): Promise<void> {
+    await this.sqsClient.send(
+      new SendMessageCommand({
+        QueueUrl: this.queueUrl,
+        MessageBody: JSON.stringify({ runId }),
+      }),
+    );
   }
 
   /**
@@ -216,6 +226,10 @@ export class ExecutionService {
       )
       .exec();
 
+    // Воркер отпустил обработчик, уйдя в ожидание, — поднимаем продолжение
+    // отдельным сообщением.
+    await this.enqueueRun(runId);
+
     return updated!;
   }
 
@@ -244,6 +258,9 @@ export class ExecutionService {
         { new: true },
       )
       .exec();
+
+    // Продолжение исполнения — отдельным сообщением (воркер не ждёт в обработчике).
+    await this.enqueueRun(runId);
 
     return updated!;
   }

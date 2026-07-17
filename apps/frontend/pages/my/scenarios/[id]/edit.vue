@@ -261,7 +261,9 @@
     <ScenarioPageEditor
       v-if="pageIndex !== null && steps[pageIndex]"
       :step="steps[pageIndex]"
-      :step-schema="schemas[pageIndex]"
+      :step-index="pageIndex"
+      :steps="steps"
+      :schemas="schemas"
       @save="savePage"
       @close="pageIndex = null"
     />
@@ -269,8 +271,8 @@
 </template>
 
 <script setup lang="ts">
-import { CATEGORIES } from "@fuse/shared";
-import type { Environment, Step, StepFilter, StepPage, StepSchema, StepType } from "@fuse/shared";
+import { CATEGORIES, blockCategory } from "@fuse/shared";
+import type { Environment, MappingValue, Step, StepFilter, StepPage, StepSchema, StepType } from "@fuse/shared";
 
 const { $api } = useNuxtApp() as any;
 const route = useRoute();
@@ -510,10 +512,39 @@ function openStep(index: number) {
   configIndex.value = index;
 }
 
+/**
+ * Привязка блока ввода к параметру шага И ЕСТЬ объявление «этот вход заполняет
+ * пользователь»: на сохранении переносим её в источник значения шага
+ * (`mappings[key] = "user"` либо операнд условия `filters[key].value.mode`),
+ * переопределяя прежнюю константу/ссылку. Снятие привязки источник не
+ * откатывает — вернуть константу/ref можно во вкладке параметров шага.
+ */
+function reconcileSources(step: Step, page: StepPage): Step {
+  const mappings: Record<string, MappingValue> = { ...step.mappings };
+  const filters: Record<string, StepFilter> = { ...step.filters };
+
+  for (const row of page.rows) {
+    for (const block of row.items) {
+      if (blockCategory(block.type) !== "input" || !block.binding) continue;
+      const filterKey = block.binding.match(/^filter:(.+)$/);
+      if (filterKey) {
+        const key = filterKey[1];
+        if (filters[key]) {
+          filters[key] = { ...filters[key], value: { ...filters[key].value, mode: "user" } };
+        }
+      } else {
+        mappings[block.binding] = "user";
+      }
+    }
+  }
+
+  return { ...step, page, mappings, filters } as Step;
+}
+
 async function savePage(page: StepPage) {
   if (pageIndex.value === null) return;
   const step = steps.value[pageIndex.value];
-  if (step) await updateStep(pageIndex.value, { ...step, page } as Step);
+  if (step) await updateStep(pageIndex.value, reconcileSources(step, page));
   pageIndex.value = null;
 }
 

@@ -8,14 +8,6 @@ export const StepType = {
 
 export type StepType = (typeof StepType)[keyof typeof StepType];
 
-export const PageType = {
-  FIELDS: "fields",
-  FILE: "file",
-  TEXT: "text",
-} as const;
-
-export type PageType = (typeof PageType)[keyof typeof PageType];
-
 export const RunStatus = {
   PENDING: "pending",
   RUNNING: "running",

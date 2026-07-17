@@ -135,13 +135,16 @@ describe("enumerateManualInputs", () => {
     expect(result.map((d) => d.key)).toEqual(["s0.s0:id"]);
   });
 
-  it("marks a value bound by a page field as asked by the page", async () => {
+  it("marks a value bound by a page input block as asked by the page", async () => {
     const page: StepPage = {
-      type: "fields",
       title: "Данные",
-      buttonText: "Продолжить",
-      fields: [
-        { key: "инн_организации", label: "ИНН организации", required: true, target: "inn" },
+      rows: [
+        {
+          id: "r1",
+          items: [
+            { id: "b1", type: "input", span: 4, label: "ИНН организации", binding: "inn" },
+          ],
+        },
       ],
     };
 
@@ -161,19 +164,18 @@ describe("enumerateManualInputs", () => {
     expect(result.find((d) => d.paramKey === "region")?.source).toBe("form");
   });
 
-  it("keeps the legacy key-match rule for page fields without a binding", async () => {
+  it("does not cover a value when the input block has no binding", async () => {
     const page: StepPage = {
-      type: "fields",
       title: "Данные",
-      buttonText: "Продолжить",
-      fields: [{ key: "inn", label: "inn", required: true }],
+      rows: [{ id: "r1", items: [{ id: "b1", type: "input", span: 4, label: "ИНН" }] }],
     };
 
     const steps = [apiStep("Организация", { mappings: { inn: "user" }, page })];
 
     const result = await enumerateManualInputs(steps, deps());
 
-    expect(result[0].source).toBe("page");
+    // Без привязки блок ничего не закрывает — значение спросит общая форма.
+    expect(result[0].source).toBe("form");
   });
 
   it("skips a broken step instead of failing the whole enumeration", async () => {
@@ -208,16 +210,19 @@ describe("input scoping", () => {
 });
 
 describe("mapPageDataToLocalKeys", () => {
-  it("translates page field keys into the step values they are bound to", () => {
+  it("translates page block ids into the step values they are bound to", () => {
     const step = apiStep("Организация", {
       page: {
-        type: "fields",
         title: "Данные",
-        buttonText: "Продолжить",
-        fields: [
-          { key: "инн_организации", label: "ИНН организации", required: true, target: "inn" },
-          { key: "статус", label: "Статус", required: false, target: "filter:orgId" },
-          { key: "comment", label: "Комментарий", required: false },
+        rows: [
+          {
+            id: "r1",
+            items: [
+              { id: "инн_организации", type: "input", span: 2, binding: "inn" },
+              { id: "статус", type: "select", span: 2, binding: "filter:orgId" },
+              { id: "comment", type: "input", span: 4 },
+            ],
+          },
         ],
       },
     });

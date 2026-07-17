@@ -36,13 +36,16 @@ import {
   isBlank,
   localKeyOf,
   mapPageDataToLocalKeys,
+  resolvePageBindings,
   sliceInputsForStep,
 } from "./manual-inputs";
-import { StepExecutionError, RunCancelledError } from "./execution-errors";
+import {
+  StepExecutionError,
+  RunCancelledError,
+  RunPausedError,
+} from "./execution-errors";
 
 const POLL_TIMEOUT_MS = 5 * 60 * 1000;
-/** Общий таймаут ожидания пользователя: и страница шага, и добор ручных значений. */
-const PAGE_INPUT_TIMEOUT_MS = 30 * 60 * 1000;
 
 const TERMINAL_STATUSES: RunStatus[] = [
   RunStatus.COMPLETED,
@@ -335,6 +338,13 @@ export class WorkerService
           timestamp: new Date().toISOString(),
         });
       } catch (err) {
+        if (err instanceof RunPausedError) {
+          // Шаг ждёт ввода: обработчик освобождаем, сообщение подтверждается.
+          // Продолжение придёт отдельным сообщением при submit'е.
+          this.logger.log(`Run ${runId} paused for input at step ${i}`);
+          return;
+        }
+
         if (err instanceof RunCancelledError) {
           this.logger.log(`Run ${runId} cancelled during step ${i}`);
           return;
@@ -423,7 +433,7 @@ export class WorkerService
       // То, что пользователь ввёл на странице, — это и есть входные данные шага:
       // раньше результат ожидания отбрасывался, и ветка «Ручной ввод» в маппингах
       // (а с ней и ручное значение условия фильтра) была мертва.
-      const { data } = await this.waitForUserInput(
+      const { data } = await this.requestUserInput(
         ctx.runId,
         ctx.stepIndex,
         step.title,
@@ -434,6 +444,10 @@ export class WorkerService
             stepIndex: ctx.stepIndex,
             stepTitle: step.title,
             page: step.page,
+            // Блоки отображения и динамические варианты select берут данные
+            // пройденных шагов: клиент их сам не видит, поэтому значения
+            // разрешаются здесь и едут в payload.
+            resolved: resolvePageBindings(step.page, ctx.stepResults),
           },
           timestamp: new Date().toISOString(),
         },
@@ -796,7 +810,7 @@ export class WorkerService
       return;
     }
 
-    const { inputs } = await this.waitForUserInput(
+    const { inputs } = await this.requestUserInput(
       ctx.runId,
       ctx.stepIndex,
       step.title,
@@ -834,64 +848,58 @@ export class WorkerService
   }
 
   /**
-   * Одно ожидание пользователя на два случая: страница шага и добор ручных
-   * значений. Различается только вопрос — событие; механика (перевод запуска в
-   * `waiting_input`, опрос ящика, отмена, таймаут) общая.
+   * Один запрос ввода на два случая: страница шага и добор ручных значений.
+   * НЕ блокирует обработчик: если ввод уже пришёл (submit положил `pendingInput`
+   * и до-ставил сообщение-продолжение) — возвращает его; иначе переводит запуск
+   * в `waiting_input`, публикует запрос и бросает `RunPausedError`, по которому
+   * `executeRun` штатно завершается и подтверждает сообщение SQS. Так ожидание
+   * не держит слот консьюмера — одна непросабмиченная страница больше не морозит
+   * весь воркер.
    */
-  private async waitForUserInput(
+  private async requestUserInput(
     runId: string,
     stepIndex: number,
-    stepTitle: string,
+    _stepTitle: string,
     request: ServerWsEvent,
   ): Promise<{ data: Record<string, unknown>; inputs: Record<string, unknown> }> {
+    const run = await this.runModel.findById(runId).exec();
+    if (!run) {
+      throw new StepExecutionError("Run disappeared while waiting for input");
+    }
+    if (run.status === RunStatus.CANCELLED) {
+      throw new RunCancelledError("Run was cancelled while waiting for input");
+    }
+
+    // Ввод для ЭТОГО шага уже пришёл? `pageData` — ящик запусков, созданных до
+    // появления `pendingInput` (легаси), читаем его как запасной вариант.
+    const pending =
+      run.pendingInput?.stepIndex === stepIndex
+        ? run.pendingInput?.data
+        : (run.pageData as Record<string, unknown> | undefined);
+
+    if (pending) {
+      await this.runModel
+        .updateOne({ _id: runId }, { $unset: { pendingInput: "", pageData: "" } })
+        .exec();
+
+      return {
+        data: pending,
+        inputs: (run.inputs ?? {}) as Record<string, unknown>,
+      };
+    }
+
+    // Ввода ещё нет — спрашиваем и ОСВОБОЖДАЕМ обработчик. Продолжение придёт
+    // отдельным сообщением, когда `ExecutionService` обработает submit.
     await this.runModel
       .updateOne(
         { _id: runId },
-        {
-          $set: {
-            status: RunStatus.WAITING_INPUT,
-            currentStep: stepIndex,
-          },
-        },
+        { $set: { status: RunStatus.WAITING_INPUT, currentStep: stepIndex } },
       )
       .exec();
 
     await this.publish(runId, request);
 
-    const deadline = Date.now() + PAGE_INPUT_TIMEOUT_MS;
-
-    while (Date.now() < deadline) {
-      const run = await this.runModel.findById(runId).exec();
-      if (!run) {
-        throw new StepExecutionError("Run disappeared while waiting for input");
-      }
-      if (run.status === RunStatus.CANCELLED) {
-        throw new RunCancelledError("Run was cancelled while waiting for input");
-      }
-
-      // `pageData` — ящик запусков, созданных до появления `pendingInput`:
-      // читаем его, пока такие запуски есть в полёте.
-      const pending =
-        run.pendingInput?.data ??
-        (run.pageData as Record<string, unknown> | undefined);
-
-      if (run.status === RunStatus.RUNNING && pending) {
-        await this.runModel
-          .updateOne({ _id: runId }, { $unset: { pendingInput: "", pageData: "" } })
-          .exec();
-
-        return {
-          data: pending,
-          inputs: (run.inputs ?? {}) as Record<string, unknown>,
-        };
-      }
-
-      await this.sleep(1000);
-    }
-
-    throw new StepExecutionError(
-      `Шаг «${stepTitle}»: пользователь не ввёл данные за отведённое время`,
-    );
+    throw new RunPausedError(`Шаг «${_stepTitle}» ждёт ввода пользователя`);
   }
 
   private async failRun(runId: string, error: string): Promise<void> {

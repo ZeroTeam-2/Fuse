@@ -157,6 +157,12 @@ describe("ExecutionService — mid-run input submit", () => {
       data: { "s2:subject": "Привет" },
     });
     expect(update.status).toBe(RunStatus.RUNNING);
+
+    // Продолжение исполнения до-ставляется отдельным сообщением: воркер не ждёт
+    // в обработчике, а поднимается заново по нему.
+    expect(JSON.parse(sqsSend.mock.calls.at(-1)![0].input.MessageBody)).toEqual({
+      runId: "run-1",
+    });
   });
 
   it("refuses input for a run that is not waiting", async () => {
@@ -192,6 +198,11 @@ describe("ExecutionService — mid-run input submit", () => {
     expect(runModel.findByIdAndUpdate.mock.calls[0][1].$set.pendingInput).toEqual({
       stepIndex: 1,
       data: { инн: "77" },
+    });
+
+    // submit кладёт сообщение-продолжение в очередь.
+    expect(JSON.parse(sqsSend.mock.calls.at(-1)![0].input.MessageBody)).toEqual({
+      runId: "run-1",
     });
   });
 });
