@@ -557,32 +557,59 @@ export class WorkerService
     return url;
   }
 
-  private async executeApiStep(
-    step: ApiStep,
+  /**
+   * Общая для api- и periodic-шага сборка вызова endpoint'а: входы раскладываются
+   * по местам согласно схеме endpoint (path/query/header/body), из них собираются
+   * абсолютный URL и опции запроса. Без `endpointId` (легаси periodic-шаги)
+   * endpoint ищется по методу и пути; не нашёлся — работаем без схемы: путь
+   * спасают плейсхолдеры, остальные входы уезжают в тело.
+   */
+  private async buildEndpointRequest(
+    step: { appId: string; endpointId?: string },
+    method: string,
+    path: string,
+    resolved: Record<string, unknown>,
     ctx: StepContext,
-  ): Promise<unknown> {
-    const resolved = resolveMappings(step, ctx.stepResults, ctx.userInput, ctx.warnings);
-
+  ): Promise<{ url: string; options: RequestInit }> {
     const app = await this.loadApp(step.appId, ctx);
-    const endpoint = (app.endpoints ?? []).find((ep) => ep.id === step.endpointId);
+    const endpoints = app.endpoints ?? [];
+    const endpoint = step.endpointId
+      ? endpoints.find((ep) => ep.id === step.endpointId)
+      : endpoints.find((ep) => ep.method === method && ep.path === path);
     const inputs = (endpoint?.inputs ?? []) as unknown as SchemaField[];
-    const located = groupInputsByLocation(resolved, inputs, step.path);
+    const located = groupInputsByLocation(resolved, inputs, path);
 
-    const url = await this.resolveStepUrl(step.appId, step.path, located, ctx);
+    const url = await this.resolveStepUrl(step.appId, path, located, ctx);
 
     const options: RequestInit = {
-      method: step.method,
+      method,
       headers: {
         "Content-Type": "application/json",
         ...this.toStringRecord(located.header),
       },
     };
 
-    if (step.method !== "GET" && step.method !== "DELETE") {
+    if (method !== "GET" && method !== "DELETE") {
       if (Object.keys(located.body).length > 0) {
         options.body = JSON.stringify(located.body);
       }
     }
+
+    return { url, options };
+  }
+
+  private async executeApiStep(
+    step: ApiStep,
+    ctx: StepContext,
+  ): Promise<unknown> {
+    const resolved = resolveMappings(step, ctx.stepResults, ctx.userInput, ctx.warnings);
+    const { url, options } = await this.buildEndpointRequest(
+      step,
+      step.method,
+      step.path,
+      resolved,
+      ctx,
+    );
 
     let response: Response;
     try {
@@ -652,10 +679,14 @@ export class WorkerService
     ctx: StepContext,
   ): Promise<unknown> {
     const resolved = resolveMappings(step, ctx.stepResults, ctx.userInput, ctx.warnings);
-    // У периодического шага нет ссылки на эндпоинт, значит и схемы входов нет —
-    // раскладку спасают плейсхолдеры пути.
-    const located = groupInputsByLocation(resolved, [], step.pollPath);
-    const url = await this.resolveStepUrl(step.appId, step.pollPath, located, ctx);
+    // Входы между итерациями не меняются — URL и опции собираются один раз до цикла.
+    const { url, options } = await this.buildEndpointRequest(
+      step,
+      step.pollMethod,
+      step.pollPath,
+      resolved,
+      ctx,
+    );
     const intervalMs = (step.pollIntervalSec ?? 5) * 1000;
     const progressField = step.progressField;
     const startTime = Date.now();
@@ -670,7 +701,7 @@ export class WorkerService
 
       let response: Response;
       try {
-        response = await fetch(url, { method: step.pollMethod });
+        response = await fetch(url, options);
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         throw new StepExecutionError(`Не удалось опросить ${url}: ${reason}`);

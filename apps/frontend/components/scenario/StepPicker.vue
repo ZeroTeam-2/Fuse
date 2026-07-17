@@ -109,6 +109,7 @@ function add() {
       type: "periodic",
       title: name,
       appId: appId.value,
+      endpointId: ep.id,
       pollMethod: ep.method,
       pollPath: ep.path,
       pollIntervalSec: pollIntervalSec.value,
