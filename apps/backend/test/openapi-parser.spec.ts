@@ -30,6 +30,47 @@ const ORG_ITEM = {
   },
 };
 
+describe("OpenAPI parser: multipart file inputs", () => {
+  it("maps `type: string, format: binary` body fields to the file type", async () => {
+    const parser = new OpenApiParserService();
+
+    const parsed = await parser.parse(
+      {
+        openapi: "3.0.0",
+        info: { title: "Demo", version: "1.0.0" },
+        servers: [{ url: "https://api.example.com" }],
+        paths: {
+          "/pdf/process": {
+            post: {
+              summary: "Process a document",
+              requestBody: {
+                content: {
+                  "multipart/form-data": {
+                    schema: {
+                      type: "object",
+                      required: ["doc", "data"],
+                      properties: {
+                        doc: { type: "string", format: "binary" },
+                        data: { type: "string" },
+                      },
+                    },
+                  },
+                },
+              },
+              responses: { "200": { description: "OK" } },
+            },
+          },
+        },
+      } as Record<string, unknown>,
+      SPEC_URL,
+    );
+
+    const inputs = parsed.endpoints[0].inputs;
+    expect(inputs.find((f) => f.key === "doc")?.type).toBe("file");
+    expect(inputs.find((f) => f.key === "data")?.type).toBe("string");
+  });
+});
+
 describe("OpenAPI parser: array-aware output schema", () => {
   it("keeps the collection flag when the response is an array of objects", async () => {
     const parser = new OpenApiParserService();

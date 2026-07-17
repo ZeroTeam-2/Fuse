@@ -178,6 +178,10 @@ export interface PageBlock {
   binding?: string;
   /** Ввод: пустое значение блокирует продолжение шага. Для отображения не имеет смысла. */
   required?: boolean;
+  /** Только `dropzone`: допустимые форматы файла — расширения (".pdf") и/или MIME-типы ("application/pdf"). */
+  accept?: string[];
+  /** Только `dropzone`: максимальный размер файла в МБ. */
+  maxFileMb?: number;
   /** Статические варианты блока `select` (текст варианта — и подпись, и значение). */
   options?: string[];
   /**
@@ -187,6 +191,30 @@ export interface PageBlock {
    * разворачиваются в список опций на рантайме. Задан — перекрывает `options`.
    */
   optionsSource?: string;
+}
+
+/**
+ * Ссылка на файл, загруженный со страницы шага в хранилище платформы.
+ * Значение dropzone-блока в `page:submit`; worker находит её во входах
+ * файлового шага и по `objectName` читает объект из MinIO.
+ */
+export interface UploadedFileRef {
+  objectName: string;
+  fileName: string;
+  fileSize: number;
+  fileType: string;
+}
+
+export function isUploadedFileRef(value: unknown): value is UploadedFileRef {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.objectName === "string" &&
+    v.objectName.length > 0 &&
+    typeof v.fileName === "string" &&
+    typeof v.fileSize === "number" &&
+    typeof v.fileType === "string"
+  );
 }
 
 /** Строка страницы — набор блоков на сетке из 6 колонок. */

@@ -249,6 +249,30 @@ function onOptionsSourceChange(value: string) {
   patchSelected({ optionsSource: value || undefined });
 }
 
+// ---- Ограничения файла dropzone ------------------------------------------
+// Сырая строка форматов живёт отдельно от модели: join/split на каждом вводе
+// съедал бы запятые и пробелы прямо под курсором.
+const acceptRaw = ref("");
+watch(
+  () => selected.value?.block.id,
+  () => {
+    acceptRaw.value = (selected.value?.block.accept ?? []).join(", ");
+  },
+  { immediate: true },
+);
+function onAcceptChange(value: string) {
+  acceptRaw.value = value;
+  const accept = value
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  patchSelected({ accept: accept.length ? accept : undefined });
+}
+function onMaxFileMbChange(value: string) {
+  const num = Number(value);
+  patchSelected({ maxFileMb: Number.isFinite(num) && num > 0 ? num : undefined });
+}
+
 // ---- Drag lifecycle ------------------------------------------------------
 function dragStartNew(type: PageBlockType, e: DragEvent) {
   e.dataTransfer!.effectAllowed = "copy";
@@ -864,6 +888,26 @@ function save() {
                 </button>
               </div>
             </template>
+          </div>
+
+          <!-- ограничения файла dropzone -->
+          <div v-if="selected.block.type === 'dropzone'" class="flex flex-col gap-2.5">
+            <span class="text-[0.8125rem] font-sans font-semibold text-zinc-900">Ограничения файла</span>
+            <Input
+              :model-value="acceptRaw"
+              label="Допустимые форматы"
+              placeholder=".pdf, image/png"
+              @update:model-value="onAcceptChange(String($event))"
+            />
+            <p class="font-sans text-[0.75rem] text-zinc-400">
+              Расширения или MIME-типы через запятую. Пусто — любой формат.
+            </p>
+            <Input
+              :model-value="selected.block.maxFileMb != null ? String(selected.block.maxFileMb) : ''"
+              label="Макс. размер (МБ)"
+              placeholder="Без лимита"
+              @update:model-value="onMaxFileMbChange(String($event))"
+            />
           </div>
 
           <label

@@ -42,6 +42,30 @@ export function pageBlockCount(page: StepPage | undefined): number {
 }
 
 /**
+ * Проверка файла по настройкам dropzone-блока (`accept`, `maxFileMb`) — до
+ * старта загрузки. `accept` принимает расширения (".pdf") и MIME-типы
+ * ("application/pdf"). Возвращает текст ошибки либо null.
+ */
+export function validateFileAgainstBlock(
+  block: PageBlock,
+  file: { name: string; type: string; size: number },
+): string | null {
+  const accept = (block.accept ?? [])
+    .map((a) => a.trim().toLowerCase())
+    .filter(Boolean);
+  if (accept.length > 0) {
+    const ext = `.${(file.name.split(".").pop() ?? "").toLowerCase()}`;
+    const type = (file.type || "").toLowerCase();
+    const ok = accept.some((a) => (a.startsWith(".") ? ext === a : type === a));
+    if (!ok) return `Недопустимый формат. Допустимые: ${accept.join(", ")}`;
+  }
+  if (block.maxFileMb && file.size > block.maxFileMb * 1024 * 1024) {
+    return `Файл больше ${block.maxFileMb} МБ`;
+  }
+  return null;
+}
+
+/**
  * id для блоков/строк миграции. `crypto.randomUUID` есть и в браузере, и в
  * Node 16+; счётчик — страховка на случай его отсутствия (детерминизм тестам
  * миграции не нужен: они проверяют форму, а не значения id).

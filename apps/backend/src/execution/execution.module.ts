@@ -8,6 +8,7 @@ import { ExecutionService } from "./execution.service";
 import { ManualInputsService } from "./manual-inputs.service";
 import { WorkerService } from "./worker.service";
 import { WebSocketModule } from "../websocket/websocket.module";
+import { MinioModule } from "../minio/minio.module";
 import { SsrfGuard } from "../apps/ssrf-guard";
 
 @Module({
@@ -19,6 +20,8 @@ import { SsrfGuard } from "../apps/ssrf-guard";
       { name: App.name, schema: AppSchema },
     ]),
     WebSocketModule,
+    // Воркер читает загруженный файл файлового шага из MinIO.
+    MinioModule,
   ],
   controllers: [ExecutionController],
   providers: [ExecutionService, ManualInputsService, WorkerService, SsrfGuard],
