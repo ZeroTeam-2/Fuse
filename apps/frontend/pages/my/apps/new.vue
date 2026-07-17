@@ -1,5 +1,7 @@
 <template>
-  <div class="max-w-[720px] mx-auto px-5 lg:px-8 pt-8 pb-20 flex flex-col gap-6">
+  <div
+    class="max-w-[720px] mx-auto px-5 lg:px-8 pt-8 pb-20 flex flex-col gap-6"
+  >
     <NuxtLink
       to="/my/apps"
       class="font-sans text-sm text-zinc-500 inline-flex items-center gap-1.5 hover:text-zinc-700"
@@ -10,7 +12,9 @@
     <!-- Step 1 — spec source -->
     <Card v-if="step === 1" padding="xl" class="flex flex-col gap-6">
       <div>
-        <h1 class="font-sans font-extrabold text-[1.875rem] tracking-tight text-zinc-900">
+        <h1
+          class="font-sans font-extrabold text-[1.875rem] tracking-tight text-zinc-900"
+        >
           Новое приложение
         </h1>
         <p class="font-sans text-[0.9375rem] text-zinc-500 mt-1.5">
@@ -43,7 +47,10 @@
           </span>
           <SegmentedControl
             v-model="mode"
-            :options="[{ value: 'url', label: 'URL' }, { value: 'file', label: 'Файл' }]"
+            :options="[
+              { value: 'url', label: 'URL' },
+              { value: 'file', label: 'Файл' },
+            ]"
           />
         </div>
 
@@ -58,11 +65,14 @@
 
         <template v-else>
           <div class="flex flex-col gap-2">
-            <label class="text-[0.8125rem] font-sans font-semibold text-zinc-900">
+            <label
+              class="text-[0.8125rem] font-sans font-semibold text-zinc-900"
+            >
               Файл спецификации
             </label>
             <Dropzone
               ref="dropzoneRef"
+              :max-size="specMaxSizeBytes"
               @select="onFileSelect"
               @error="onFileError"
             />
@@ -98,15 +108,21 @@
     <template v-else-if="preview">
       <Card padding="xl" class="flex flex-col gap-5">
         <div>
-          <h1 class="font-sans font-extrabold text-[1.875rem] tracking-tight text-zinc-900">
+          <h1
+            class="font-sans font-extrabold text-[1.875rem] tracking-tight text-zinc-900"
+          >
             Предпросмотр спецификации
           </h1>
           <p class="font-sans text-[0.9375rem] text-zinc-500 mt-1.5">
-            Спецификация разобрана — найдено {{ preview.endpointCount }} endpoints
+            Спецификация разобрана — найдено
+            {{ preview.endpointCount }} endpoints
           </p>
         </div>
 
-        <div v-if="previewMeta" class="font-mono text-[0.8125rem] text-zinc-400">
+        <div
+          v-if="previewMeta"
+          class="font-mono text-[0.8125rem] text-zinc-400"
+        >
           {{ previewMeta }}
         </div>
 
@@ -131,7 +147,9 @@
           <Button variant="primary" :disabled="creating" @click="createApp">
             {{ creating ? "Создание…" : "Создать приложение" }}
           </Button>
-          <Button variant="secondary" :disabled="creating" @click="goBack">Назад</Button>
+          <Button variant="secondary" :disabled="creating" @click="goBack"
+            >Назад</Button
+          >
         </div>
       </Card>
     </template>
@@ -142,6 +160,12 @@
 import type { ImportPreviewResult } from "@fuse/shared";
 
 const { $api } = useNuxtApp() as any;
+
+// Лимит размера файла спеки — из публичного конфига (specFileMaxMb), не хардкод.
+const runtimeConfig = useRuntimeConfig();
+const specMaxSizeBytes = computed(
+  () => (runtimeConfig.public.specFileMaxMb as number) * 1024 * 1024,
+);
 
 const step = ref(1);
 const mode = ref<"url" | "file">("url");
@@ -164,7 +188,9 @@ const form = reactive({
 const previewMeta = computed(() => {
   const p = preview.value;
   if (!p) return "";
-  return [p.host, p.apiVersion && `v${p.apiVersion}`].filter(Boolean).join(" · ");
+  return [p.host, p.apiVersion && `v${p.apiVersion}`]
+    .filter(Boolean)
+    .join(" · ");
 });
 
 watch(mode, () => {
@@ -294,7 +320,8 @@ async function createAppFromFile() {
     fd.append("file", selectedFile.value);
     fd.append("name", form.name);
     if (form.description) fd.append("description", form.description);
-    if (fileBaseUrl.value.trim()) fd.append("baseUrl", fileBaseUrl.value.trim());
+    if (fileBaseUrl.value.trim())
+      fd.append("baseUrl", fileBaseUrl.value.trim());
     const { data, error } = await $api.POST("/api/apps/from-file", {
       body: fd,
     });

@@ -10,7 +10,10 @@ const props = withDefaults(
   {
     accept:
       ".json,.yaml,.yml,application/json,application/yaml,application/x-yaml,text/yaml",
-    maxSize: 10 * 1024 * 1024,
+    // Дефолт — из публичного конфига (specFileMaxMb), а не магическое число.
+    // Родитель может передать свой лимит явно.
+    maxSize: () =>
+      (useRuntimeConfig().public.specFileMaxMb as number) * 1024 * 1024,
     disabled: false,
   },
 );
@@ -97,7 +100,9 @@ defineExpose({ clear });
   >
     <span v-if="!selectedFile" class="font-sans text-sm text-zinc-500">
       Перетащите файл сюда или нажмите для выбора
-      <span class="text-zinc-400">(макс. 10 МБ)</span>
+      <span class="text-zinc-400"
+        >(макс. {{ maxSize / (1024 * 1024) }} МБ)</span
+      >
     </span>
     <span v-else class="font-sans text-sm font-semibold text-zinc-900">
       {{ selectedFile.name }}

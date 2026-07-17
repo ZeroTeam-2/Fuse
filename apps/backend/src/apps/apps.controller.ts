@@ -30,8 +30,6 @@ import { UpdateAppDto } from "./dto/update-app.dto";
 import { FileImportDto, ImportPreviewFileDto } from "./dto/file-import.dto";
 import { PaginationQueryDto } from "./dto/pagination-query.dto";
 
-const SPEC_FILE_SIZE_LIMIT = 10 * 1024 * 1024;
-
 const ALLOWED_SPEC_EXTENSIONS = new Set([".json", ".yaml", ".yml"]);
 
 function getExtension(filename: string): string {
@@ -45,9 +43,7 @@ function validateSpecFile(file: Express.Multer.File): void {
   }
   const ext = getExtension(file.originalname);
   if (!ALLOWED_SPEC_EXTENSIONS.has(ext)) {
-    throw new BadRequestException(
-      "Допустимы только файлы .json, .yaml, .yml",
-    );
+    throw new BadRequestException("Допустимы только файлы .json, .yaml, .yml");
   }
 }
 
@@ -88,7 +84,9 @@ export class AppsController {
   }
 
   @Post("import-preview-file")
-  @ApiOperation({ summary: "Preview an OpenAPI spec import from an uploaded file" })
+  @ApiOperation({
+    summary: "Preview an OpenAPI spec import from an uploaded file",
+  })
   @ApiConsumes("multipart/form-data")
   @ApiBody({
     schema: {
@@ -106,9 +104,9 @@ export class AppsController {
       },
     },
   })
-  @UseInterceptors(
-    FileInterceptor("file", { limits: { fileSize: SPEC_FILE_SIZE_LIMIT } }),
-  )
+  // Лимит размера (SPEC_FILE_MAX_MB) задаётся через MulterModule.registerAsync
+  // в AppsModule — конфиг-driven, без магического числа в декораторе.
+  @UseInterceptors(FileInterceptor("file"))
   async importPreviewFile(
     @UploadedFile() file: Express.Multer.File,
     @Body() dto: ImportPreviewFileDto,
@@ -122,7 +120,9 @@ export class AppsController {
   }
 
   @Post("from-file")
-  @ApiOperation({ summary: "Create a new app from an uploaded OpenAPI spec file" })
+  @ApiOperation({
+    summary: "Create a new app from an uploaded OpenAPI spec file",
+  })
   @ApiConsumes("multipart/form-data")
   @ApiBody({
     schema: {
@@ -148,9 +148,9 @@ export class AppsController {
       required: ["file", "name"],
     },
   })
-  @UseInterceptors(
-    FileInterceptor("file", { limits: { fileSize: SPEC_FILE_SIZE_LIMIT } }),
-  )
+  // Лимит размера (SPEC_FILE_MAX_MB) задаётся через MulterModule.registerAsync
+  // в AppsModule — конфиг-driven, без магического числа в декораторе.
+  @UseInterceptors(FileInterceptor("file"))
   async createFromFile(
     @UploadedFile() file: Express.Multer.File,
     @Body() dto: FileImportDto,
@@ -168,10 +168,7 @@ export class AppsController {
 
   @Post()
   @ApiOperation({ summary: "Create a new app from an OpenAPI spec" })
-  create(
-    @Req() req: AuthenticatedRequest,
-    @Body() dto: CreateAppDto,
-  ) {
+  create(@Req() req: AuthenticatedRequest, @Body() dto: CreateAppDto) {
     return this.appsService.create(req.user.userId, dto);
   }
 
@@ -182,7 +179,9 @@ export class AppsController {
   }
 
   @Post(":id/reimport/apply")
-  @ApiOperation({ summary: "Apply a reimport: re-parse the spec and merge endpoints" })
+  @ApiOperation({
+    summary: "Apply a reimport: re-parse the spec and merge endpoints",
+  })
   applyReimport(@Param("id") id: string, @Req() req: AuthenticatedRequest) {
     return this.appsService.applyReimport(id, req.user.userId);
   }

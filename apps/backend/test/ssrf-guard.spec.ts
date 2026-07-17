@@ -7,7 +7,12 @@ vi.mock("node:dns/promises", () => ({
 }));
 
 describe("SsrfGuard", () => {
-  const guard = new SsrfGuard();
+  const mockConfigService = {
+    get: vi.fn((key: string) =>
+      key === "SPEC_URL_FETCH_MAX_MB" ? 10 : undefined,
+    ),
+  };
+  const guard = new SsrfGuard(mockConfigService as never);
 
   describe("validateUrl", () => {
     it("accepts valid HTTPS URLs", () => {
