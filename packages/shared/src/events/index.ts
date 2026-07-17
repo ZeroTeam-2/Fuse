@@ -25,6 +25,12 @@ export interface PageRequiredPayload {
   stepIndex: number;
   stepTitle: string;
   page: unknown;
+  /**
+   * Значения блоков отображения, разрешённые из результатов пройденных шагов,
+   * по `blockId`. Клиент показывает их в блоках, не имея доступа к результатам
+   * шагов сам. Аддитивно: старый клиент поле игнорирует.
+   */
+  resolved?: Record<string, unknown>;
 }
 
 /**

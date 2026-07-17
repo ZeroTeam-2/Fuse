@@ -13,6 +13,11 @@ export const envSchema = z.object({
 
   MONGODB_URL: z.string().min(1, "MONGODB_URL is required"),
 
+  // Хосты в обход SSRF-блок-листа (localhost/приватные IP), через запятую.
+  // ДОЛЖЕН быть в схеме: @nestjs/config кладёт в process.env только прошедшие
+  // валидацию ключи, а SsrfGuard читает его из process.env. В проде — пусто.
+  SSRF_ALLOWED_HOSTS: z.string().default(""),
+
   AWS_REGION: z.string().default("us-east-1"),
   AWS_SQS_QUEUE_URL: z.string().min(1, "AWS_SQS_QUEUE_URL is required"),
   AWS_ACCESS_KEY_ID: z.string().default("test"),

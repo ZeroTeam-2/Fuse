@@ -1,11 +1,13 @@
 import type {
   ManualInputDescriptor,
-  PageField,
+  PageBlock,
+  RunStepResult,
   SchemaField,
   Step,
   StepPage,
   StepSchema,
 } from "@fuse/shared";
+import { isDisplayBlock, isInputBlock, pageBlocks } from "@fuse/shared";
 
 /**
  * Перечисление значений сценария, помеченных ручным вводом, — параметров
@@ -61,41 +63,119 @@ export function sliceInputsForStep(
   return slice;
 }
 
-function pageFields(page: StepPage | undefined): PageField[] {
-  return page?.type === "fields" ? page.fields : [];
+/** Блоки ввода страницы — только они собирают значения шага. */
+function pageInputBlocks(page: StepPage | undefined): PageBlock[] {
+  return pageBlocks(page).filter(isInputBlock);
 }
 
 /**
- * Поле страницы закрывает значение шага, если привязано к нему через `target`.
- * Поля без `target` (страницы, настроенные до появления привязок) закрывают
- * параметр по совпадению ключа — так они работали до сих пор.
+ * Блок ввода закрывает значение шага, если привязан к нему через `binding`.
+ * Блоки без привязки ничего не закрывают: их значение уйдёт во входы шага под
+ * собственным `id`, не подменяя ручной параметр.
  */
 export function pageCovers(step: Step, localKey: string): boolean {
-  return pageFields(step.page).some((field) =>
-    field.target ? field.target === localKey : field.key === localKey,
-  );
+  return pageInputBlocks(step.page).some((block) => block.binding === localKey);
 }
 
 /**
- * Данные страницы — из ключей полей в локальные ключи значений шага.
- * Поле без привязки кладётся по собственному ключу, как раньше.
+ * Данные страницы — из id блоков в локальные ключи значений шага. Значение
+ * привязанного блока кладётся под его `binding`, непривязанного — под `id`.
  */
 export function mapPageDataToLocalKeys(
   step: Step,
   data: Record<string, unknown>,
 ): Record<string, unknown> {
-  const targets = new Map(
-    pageFields(step.page)
-      .filter((field) => field.target)
-      .map((field) => [field.key, field.target as string]),
+  const bindings = new Map(
+    pageInputBlocks(step.page)
+      .filter((block) => block.binding)
+      .map((block) => [block.id, block.binding as string]),
   );
 
   const mapped: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data)) {
-    mapped[targets.get(key) ?? key] = value;
+    mapped[bindings.get(key) ?? key] = value;
   }
 
   return mapped;
+}
+
+/** Поле результата шага; массивный выход сводится к первому элементу. */
+function readResultField(result: unknown, key: string): unknown {
+  const source = Array.isArray(result) ? result[0] : result;
+  if (!source || typeof source !== "object") return undefined;
+  return (source as Record<string, unknown>)[key];
+}
+
+function isPrimitive(value: unknown): value is string | number | boolean {
+  return (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  );
+}
+
+/** Разбор `s{idx}:{outKey}` в индекс шага и ключ поля. */
+function parseStepRef(ref: string): { index: number; key: string } | null {
+  const match = ref.match(/^s(\d+):(.+)$/);
+  return match ? { index: Number(match[1]), key: match[2] } : null;
+}
+
+/**
+ * Разворот результата шага-источника в список вариантов `select`. Покрывает обе
+ * формы массива, как и резолвер условий: результат-объект с массивным полем
+ * (`{ cars: [...] }` → берём `cars`) и результат-массив объектов (собираем поле
+ * `key` каждого элемента). Оставляем только примитивы, приводим к строке.
+ */
+function collectOptionValues(result: unknown, key: string): string[] {
+  let list: unknown[] = [];
+
+  if (Array.isArray(result)) {
+    // Массив объектов — поле `key` каждого; массив примитивов — сами элементы.
+    list = result.map((el) =>
+      el && typeof el === "object" ? (el as Record<string, unknown>)[key] : el,
+    );
+  } else if (result && typeof result === "object") {
+    const field = (result as Record<string, unknown>)[key];
+    if (Array.isArray(field)) list = field;
+  }
+
+  return list.filter(isPrimitive).map((v) => String(v));
+}
+
+/**
+ * Данные блоков страницы, разрешённые из результатов пройденных шагов, по
+ * `blockId`:
+ * - блок отображения (`paragraph`) с `binding = s{idx}:{outKey}` → скалярное
+ *   значение поля результата шага-источника;
+ * - блок `select` с `optionsSource = s{idx}:{outKey}` → массив строк-вариантов,
+ *   развёрнутый из массивного поля/результата шага-источника.
+ * Недоступный источник (нет шага/поля/результата) блок не роняет: отображение
+ * покажется пустым, у select останутся статические `options`.
+ */
+export function resolvePageBindings(
+  page: StepPage | undefined,
+  stepResults: RunStepResult[],
+): Record<string, unknown> {
+  const resolved: Record<string, unknown> = {};
+
+  for (const block of pageBlocks(page)) {
+    if (isDisplayBlock(block) && block.binding) {
+      const ref = parseStepRef(block.binding);
+      if (!ref) continue;
+      const value = readResultField(stepResults[ref.index]?.result, ref.key);
+      if (value !== undefined) resolved[block.id] = value;
+      continue;
+    }
+
+    if (block.type === "select" && block.optionsSource) {
+      const ref = parseStepRef(block.optionsSource);
+      if (!ref) continue;
+      const options = collectOptionValues(stepResults[ref.index]?.result, ref.key);
+      if (options.length) resolved[block.id] = options;
+    }
+  }
+
+  return resolved;
 }
 
 export interface ManualInputDeps {

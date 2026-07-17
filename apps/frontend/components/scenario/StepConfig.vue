@@ -2,6 +2,7 @@
 // Right-side drawer: configure where each input of a step comes from, review the
 // outputs it hands to later steps, and attach an input page.
 import type { FilterOperator, SchemaField, Step, StepFilter, StepSchema } from "@fuse/shared";
+import { blockCategory, pageBlockCount, pageBlocks } from "@fuse/shared";
 
 const props = defineProps<{
   step: Step;
@@ -32,11 +33,6 @@ const GROUPS = [
   { loc: "body", title: "Тело запроса · Body", dot: "bg-emerald-500" },
 ] as const;
 
-const PAGE_LABELS: Record<string, string> = {
-  fields: "Ввод полей",
-  file: "Загрузка файла",
-  text: "Отображение текста",
-};
 
 const OPERATORS: { value: FilterOperator; label: string }[] = [
   { value: "eq", label: "=" },
@@ -99,9 +95,10 @@ const delaySeconds = computed(() => (props.step.type === "delay" ? props.step.se
 const pollInterval = computed(() =>
   props.step.type === "periodic" ? props.step.pollIntervalSec : 0,
 );
-const pageTypeLabel = computed(() =>
-  props.step.page ? (PAGE_LABELS[props.step.page.type] ?? "") : "",
-);
+const pageSummary = computed(() => {
+  const count = pageBlockCount(props.step.page);
+  return count ? `${count} элем. на странице` : "Пустая страница";
+});
 
 /**
  * Откуда придёт значение ручного ввода: со страницы этого шага (если её поле
@@ -110,11 +107,8 @@ const pageTypeLabel = computed(() =>
  * а собрать значение у шага без страницы было вообще некому.
  */
 function manualSourceHint(localKey: string): string {
-  const page = props.step.page;
-  const fields = page?.type === "fields" ? page.fields : [];
-
-  const boundByPage = fields.some((field) =>
-    field.target ? field.target === localKey : field.key === localKey,
+  const boundByPage = pageBlocks(props.step.page).some(
+    (block) => blockCategory(block.type) === "input" && block.binding === localKey,
   );
 
   return boundByPage
@@ -747,7 +741,7 @@ watch(hydrateKey, hydrate, { immediate: true });
                 {{ step.page.title }}
               </div>
               <div class="font-sans text-[0.8125rem] text-zinc-500 mt-0.5">
-                {{ pageTypeLabel }}
+                {{ pageSummary }}
               </div>
             </div>
             <Button variant="secondary" size="sm" @click="emit('edit-page')">Изменить</Button>

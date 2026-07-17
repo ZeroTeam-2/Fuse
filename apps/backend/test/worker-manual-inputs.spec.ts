@@ -253,40 +253,141 @@ describe("WorkerService — manual inputs", () => {
     expect(calledUrls()[1]).toContain("orgId=org-2");
   });
 
-  it("routes page data to the param it is bound to, despite a different field key", async () => {
+  it("routes page data to the param it is bound to, despite a different block id", async () => {
     const steps = [
       apiStep("Организации", "e1", {
         mappings: { inn: "user" },
         page: {
-          type: "fields",
           title: "Данные",
-          buttonText: "Продолжить",
-          fields: [
-            { key: "инн_организации", label: "ИНН организации", required: true, target: "inn" },
+          rows: [
+            {
+              id: "r1",
+              items: [
+                { id: "инн_организации", type: "input", span: 4, label: "ИНН организации", binding: "inn" },
+              ],
+            },
           ],
         },
       }),
     ];
 
-    const { worker, runModel, run } = harness(
-      {
-        _id: "run-1",
-        scenarioId: "sc1",
-        status: RunStatus.PENDING,
-        currentStep: 0,
-        stepResults: [],
-        inputs: {},
-      },
-      steps,
-      [descriptor({ source: "page" })],
-    );
+    const run: Record<string, unknown> = {
+      _id: "run-1",
+      scenarioId: "sc1",
+      status: RunStatus.PENDING,
+      currentStep: 0,
+      stepResults: [],
+      inputs: {},
+    };
+    const { worker } = harness(run, steps, [descriptor({ source: "page" })]);
 
-    // Пользователь заполняет страницу: ключ поля — `инн_организации`, а параметр — `inn`.
-    respondWhileWaiting(runModel, run, { инн_организации: "7707083893" });
+    // Фаза 1: воркер доходит до страницы, публикует запрос и ПАУЗИТ (обработчик
+    // освобождается, API ещё не вызван).
+    await (worker as any).executeRun("run-1");
+    expect(run.status).toBe(RunStatus.WAITING_INPUT);
+    expect(calledUrls()).toHaveLength(0);
+
+    // submit: пользователь заполнил страницу (ключ поля — `инн_организации`,
+    // параметр — `inn`). Это делает ExecutionService.submitPageData + до-ставка
+    // сообщения-продолжения.
+    run.pendingInput = { stepIndex: 0, data: { инн_организации: "7707083893" } };
+    run.status = RunStatus.RUNNING;
+
+    // Фаза 2: продолжение отдельным сообщением — данные страницы уходят в `inn`.
+    await (worker as any).executeRun("run-1");
+    expect(calledUrls()[0]).toContain("inn=7707083893");
+  });
+
+  it("resolves a display block from a previous step's result into the page payload", async () => {
+    const steps = [
+      apiStep("Организации", "e2"),
+      apiStep("Заказы", "e2", {
+        page: {
+          title: "Проверьте",
+          rows: [
+            {
+              id: "r1",
+              items: [
+                { id: "out1", type: "paragraph", span: 4, binding: "s0:id" },
+              ],
+            },
+          ],
+        },
+      }),
+    ];
+
+    const run: Record<string, unknown> = {
+      _id: "run-1",
+      scenarioId: "sc1",
+      status: RunStatus.PENDING,
+      currentStep: 0,
+      stepResults: [],
+      inputs: {},
+    };
+
+    const { worker, runModel } = harness(run, steps, []);
+    const publish = vi.fn();
+    (worker as any).gateway = { publish };
+
+    // Страница шага 2 требует ответа — отвечаем, пока воркер ждёт.
+    respondWhileWaiting(runModel, run, {});
 
     await (worker as any).executeRun("run-1");
 
-    expect(calledUrls()[0]).toContain("inn=7707083893");
+    const page = publish.mock.calls.find((call) => call[1].type === "page:required");
+    expect(page).toBeTruthy();
+    // Шаг 0 вернул { id: "org-1" } — блок отображения показывает это значение.
+    expect(page![1].payload.resolved).toEqual({ out1: "org-1" });
+  });
+
+  it("resolves dynamic select options from a previous step's array field", async () => {
+    const steps = [
+      apiStep("Организации", "e2"),
+      apiStep("Заказы", "e2", {
+        page: {
+          title: "Выбор",
+          rows: [
+            {
+              id: "r1",
+              items: [
+                { id: "sel1", type: "select", span: 6, label: "Машина", optionsSource: "s0:cars" },
+              ],
+            },
+          ],
+        },
+      }),
+    ];
+
+    // Шаг 0 отвечает объектом с вложенным массивом `cars`.
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      headers: { get: () => "application/json" },
+      json: async () => ({ cars: ["Toyota", "BMW", "Lada"] }),
+      text: async () => "{}",
+    });
+
+    const run: Record<string, unknown> = {
+      _id: "run-1",
+      scenarioId: "sc1",
+      status: RunStatus.PENDING,
+      currentStep: 0,
+      stepResults: [],
+      inputs: {},
+    };
+
+    const { worker, runModel } = harness(run, steps, []);
+    const publish = vi.fn();
+    (worker as any).gateway = { publish };
+
+    respondWhileWaiting(runModel, run, {});
+
+    await (worker as any).executeRun("run-1");
+
+    const page = publish.mock.calls.find((call) => call[1].type === "page:required");
+    expect(page).toBeTruthy();
+    // Массив `cars` развёрнут в варианты списка.
+    expect(page![1].payload.resolved).toEqual({ sel1: ["Toyota", "BMW", "Lada"] });
   });
 
   it("asks for a missing required value instead of failing the step", async () => {
@@ -301,24 +402,28 @@ describe("WorkerService — manual inputs", () => {
       inputs: {},
     };
 
-    const { worker, runModel } = harness(run, steps, [descriptor({})]);
+    const { worker } = harness(run, steps, [descriptor({})]);
     const publish = vi.fn();
     (worker as any).gateway = { publish };
 
-    // Ответ приходит, пока воркер ждёт: `input-submit` дописал значение в
-    // `Run.inputs` и положил сигнал в ящик.
-    respondWhileWaiting(
-      runModel,
-      run,
-      { "s0:inn": "7707083893" },
-      { "s0:inn": "7707083893" },
-    );
-
+    // Фаза 1: обязательного значения нет во входах — воркер публикует
+    // input:required и ПАУЗИТ (API не вызывается).
     await (worker as any).executeRun("run-1");
 
     const asked = publish.mock.calls.find((call) => call[1].type === "input:required");
     expect(asked).toBeTruthy();
     expect(asked![1].payload.fields[0].key).toBe("s0:inn");
+    expect(run.status).toBe(RunStatus.WAITING_INPUT);
+    expect(calledUrls()).toHaveLength(0);
+
+    // submit добора: значение уходит в `Run.inputs` (переживает продолжение),
+    // `pendingInput` — сигнал; ExecutionService до-ставляет сообщение.
+    run.inputs = { "s0:inn": "7707083893" };
+    run.pendingInput = { stepIndex: 0, data: { "s0:inn": "7707083893" } };
+    run.status = RunStatus.RUNNING;
+
+    // Фаза 2: продолжение — значение уже во входах, шаг исполняется.
+    await (worker as any).executeRun("run-1");
     expect(calledUrls()[0]).toContain("inn=7707083893");
     expect(run.status).toBe(RunStatus.COMPLETED);
   });

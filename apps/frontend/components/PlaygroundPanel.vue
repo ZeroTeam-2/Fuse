@@ -27,10 +27,10 @@
         <Button variant="secondary" size="sm" @click="reset">Сбросить</Button>
       </div>
 
-      <!-- Ручные значения всех шагов — те же поля, что и в простом режиме. -->
+      <!-- Ручные значения без страницы — те же поля, что и в простом режиме. -->
       <div v-if="showInputsForm" class="px-6 py-5 border-b border-zinc-200">
         <RunManualInputsForm
-          :fields="manualInputs"
+          :fields="formFields"
           submit-text="Выполнить все"
           :busy="running || scenario.blocked"
           @submit="runAll"
@@ -109,77 +109,14 @@
           <!-- inline page: awaiting user input on this step -->
           <div
             v-else-if="waitingForStep === i && step.page"
-            class="rounded-2xl border border-zinc-200 bg-zinc-50 p-5 flex flex-col gap-4"
+            class="rounded-2xl border border-zinc-200 bg-zinc-50 p-5"
           >
-            <template v-if="step.page.type === 'fields'">
-              <form class="flex flex-col gap-4" @submit.prevent="submitPageForm(i)">
-                <Input
-                  v-for="field in step.page.fields"
-                  :key="field.key"
-                  v-model="pageFormData[field.key]"
-                  :label="field.required ? `${field.label} *` : field.label"
-                  :placeholder="field.placeholder || ''"
-                />
-                <div>
-                  <Button variant="primary" size="sm" type="submit">
-                    {{ step.page.buttonText }}
-                  </Button>
-                </div>
-              </form>
-            </template>
-
-            <template v-else-if="step.page.type === 'text'">
-              <div
-                class="font-sans text-[0.9375rem] text-zinc-700 leading-relaxed whitespace-pre-wrap"
-              >
-                {{ step.page.body }}
-              </div>
-              <div>
-                <Button variant="primary" size="sm" @click="submitPageForm(i, {})">
-                  Продолжить
-                </Button>
-              </div>
-            </template>
-
-            <template v-else-if="step.page.type === 'file'">
-              <div
-                :class="[
-                  'rounded-2xl border-2 border-dashed p-6 text-center cursor-pointer transition-colors',
-                  isDragOver
-                    ? 'border-rose-600 bg-rose-50'
-                    : 'border-zinc-300 hover:border-rose-400 hover:bg-white',
-                ]"
-                @click="triggerFileInput(i)"
-                @dragover.prevent="isDragOver = true"
-                @dragleave.prevent="isDragOver = false"
-                @drop.prevent="onFileDrop($event, i)"
-              >
-                <span v-if="!pgFiles[i]" class="font-sans text-sm text-zinc-500">
-                  Перетащите файл сюда или нажмите для выбора
-                  <span v-if="step.page.maxMb">(макс. {{ step.page.maxMb }} МБ)</span>
-                </span>
-                <span v-else class="font-sans text-sm font-semibold text-zinc-900">
-                  {{ pgFiles[i]?.name }}
-                </span>
-              </div>
-              <input
-                :ref="(el) => setFileInput(el, i)"
-                type="file"
-                class="hidden"
-                :accept="step.page.accept || undefined"
-                @change="onFileSelect($event, i)"
-              />
-              <div>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  :disabled="!pgFiles[i]"
-                  @click="submitFileForm(i)"
-                >
-                  {{ step.page.buttonText }}
-                </Button>
-              </div>
-            </template>
+            <RunPageRunner
+              :page="step.page"
+              :resolved="pageResolved"
+              size="sm"
+              @submit="submitPage(i, $event)"
+            />
           </div>
         </div>
 
@@ -227,7 +164,7 @@ const stepTimings = ref<Record<number, number>>({});
 const stepErrors = ref<Record<number, string>>({});
 const totalDurationMs = ref(0);
 const waitingForStep = ref<number | null>(null);
-/** Ручные значения сценария (форма перед запуском) и добор посреди выполнения. */
+/** Ручные значения сценария — включая собираемые страницами шагов. */
 const manualInputs = ref<ManualInputDescriptor[]>([]);
 const pendingInputs = ref<{
   stepIndex: number;
@@ -235,13 +172,20 @@ const pendingInputs = ref<{
   fields: ManualInputDescriptor[];
 } | null>(null);
 
-const showInputsForm = computed(
-  () => phase.value === "idle" && manualInputs.value.length > 0,
+/**
+ * Форма перед запуском спрашивает только значения без страницы (`source: "form"`);
+ * покрытые страницей (`source: "page"`) собирает сама страница шага по ходу.
+ */
+const formFields = computed(() =>
+  manualInputs.value.filter((field) => field.source === "form"),
 );
-const pageFormData = ref<Record<string, string>>({});
-const pgFiles = ref<Record<number, File | null>>({});
-const isDragOver = ref(false);
-const fileInputs = ref<Record<number, HTMLInputElement | null>>({});
+
+const showInputsForm = computed(
+  () => phase.value === "idle" && formFields.value.length > 0,
+);
+// Значения блоков отображения текущей ожидающей страницы, из результатов
+// пройденных шагов (payload события `page:required`).
+const pageResolved = ref<Record<string, unknown>>({});
 
 const runId = ref("");
 const socketApi = shallowRef<ReturnType<typeof useRunSocket> | null>(null);
@@ -367,7 +311,7 @@ async function runAll(inputs: Record<string, unknown> = {}) {
 
 function advanceStep() {
   if (waitingForStep.value == null) return;
-  submitPageForm(waitingForStep.value, {});
+  submitPage(waitingForStep.value, {});
 }
 
 function handleWsEvent(event: ServerWsEvent) {
@@ -387,7 +331,7 @@ function handleWsEvent(event: ServerWsEvent) {
       running.value = false;
       pendingInputs.value = null;
       waitingForStep.value = event.payload.stepIndex;
-      pageFormData.value = {};
+      pageResolved.value = event.payload.resolved ?? {};
       break;
     }
     case "input:required": {
@@ -474,6 +418,35 @@ function applyRunSnapshot(snapshot: RunSnapshot) {
     running.value = false;
     waitingForStep.value = null;
     pendingInputs.value = null;
+    return;
+  }
+
+  // Запуск ждёт ввода, а живое событие (`page:required`/`input:required`) до
+  // клиента не дошло: сокет входит в комнату ПОСЛЕ POST /api/runs, и для
+  // мгновенного шага воркер успевает дойти до страницы раньше — тогда состояние
+  // приезжает только снапшотом. Без этой ветки playground навсегда застревал в
+  // «Выполнение…»: страница ввода не показывалась.
+  if (snapshot.status === "waiting_input") {
+    const stepIndex = snapshot.currentStep ?? 0;
+    const step = scenario.value?.steps?.[stepIndex];
+    running.value = false;
+    phase.value = "waiting";
+    if (step?.page) {
+      // Данные блоков отображения/динамических вариантов при восстановлении
+      // взять неоткуда (событие уже прошло) — блоки покажутся пустыми, а select
+      // сохранит статические варианты; ввод по-прежнему собирается.
+      pendingInputs.value = null;
+      waitingForStep.value = stepIndex;
+    } else {
+      // Шаг без страницы ждёт добора обязательного значения — спрашиваем его.
+      waitingForStep.value = null;
+      const fields = formFields.value.filter(
+        (field) => field.required && field.stepPath[0] === stepIndex,
+      );
+      pendingInputs.value = fields.length
+        ? { stepIndex, stepTitle: step?.title ?? "", fields }
+        : null;
+    }
   }
 }
 
@@ -493,9 +466,8 @@ async function resyncRun() {
   }
 }
 
-function submitPageForm(stepIndex: number, overrideData?: Record<string, unknown>) {
+function submitPage(stepIndex: number, data: Record<string, unknown>) {
   if (!socketApi.value) return;
-  const data = overrideData ?? { ...pageFormData.value };
   socketApi.value.submitPage(stepIndex, data);
   waitingForStep.value = null;
   phase.value = "running";
@@ -510,42 +482,6 @@ function submitPendingInputs(values: Record<string, unknown>) {
   running.value = true;
 }
 
-function triggerFileInput(stepIndex: number) {
-  fileInputs.value[stepIndex]?.click();
-}
-
-function setFileInput(el: unknown, stepIndex: number) {
-  fileInputs.value[stepIndex] = el as HTMLInputElement | null;
-}
-
-function onFileSelect(e: Event, stepIndex: number) {
-  const target = e.target as HTMLInputElement;
-  if (target.files && target.files.length > 0) {
-    pgFiles.value[stepIndex] = target.files[0];
-  }
-}
-
-function onFileDrop(e: DragEvent, stepIndex: number) {
-  isDragOver.value = false;
-  const files = e.dataTransfer?.files;
-  if (files && files.length > 0) {
-    pgFiles.value[stepIndex] = files[0];
-  }
-}
-
-function submitFileForm(stepIndex: number) {
-  const file = pgFiles.value[stepIndex];
-  if (!file || !socketApi.value) return;
-  socketApi.value.submitPage(stepIndex, {
-    fileName: file.name,
-    fileSize: file.size,
-    fileType: file.type,
-  });
-  waitingForStep.value = null;
-  phase.value = "running";
-  running.value = true;
-}
-
 function resetStepData() {
   stepStatuses.value = {};
   stepResultsData.value = {};
@@ -553,8 +489,7 @@ function resetStepData() {
   stepErrors.value = {};
   totalDurationMs.value = 0;
   waitingForStep.value = null;
-  pageFormData.value = {};
-  pgFiles.value = {};
+  pageResolved.value = {};
 }
 
 function reset() {

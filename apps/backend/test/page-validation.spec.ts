@@ -1,126 +1,81 @@
 import { describe, it, expect } from "vitest";
 import type { StepPage } from "@fuse/shared";
-import { validatePage, isValidPage, createDefaultPage } from "../src/scenarios/page-validator";
+import {
+  validatePage,
+  isValidPage,
+  createDefaultPage,
+} from "../src/scenarios/page-validator";
 
 describe("StepPage Validation", () => {
-  describe("fields page", () => {
-    it("passes with title and buttonText", () => {
-      const page: StepPage = {
-        type: "fields",
-        title: "Введите данные",
-        fields: [],
-        buttonText: "Продолжить",
-      };
-      expect(isValidPage(page)).toBe(true);
+  it("passes for a layout with title and valid blocks", () => {
+    const page: StepPage = {
+      title: "Введите данные",
+      rows: [
+        {
+          id: "r1",
+          items: [
+            { id: "b1", type: "input", span: 2, label: "ИНН" },
+            { id: "b2", type: "select", span: 2, label: "Регион" },
+          ],
+        },
+        {
+          id: "r2",
+          items: [{ id: "b3", type: "paragraph", span: 4, text: "Пояснение" }],
+        },
+      ],
+    };
+    expect(isValidPage(page)).toBe(true);
+  });
+
+  it("passes for an empty layout (no rows)", () => {
+    expect(isValidPage({ title: "Пусто", rows: [] })).toBe(true);
+  });
+
+  describe("title", () => {
+    it("fails without a title", () => {
+      const page = { rows: [] };
+      expect(validatePage(page)).toContain("page must have a title");
     });
 
-    it("fails without title", () => {
-      const page = {
-        type: "fields",
-        fields: [],
-        buttonText: "Продолжить",
-      };
-      expect(validatePage(page)).toContain("fields page must have a title");
-    });
-
-    it("fails without buttonText", () => {
-      const page = {
-        type: "fields",
-        title: "Введите данные",
-        fields: [],
-      };
-      expect(validatePage(page)).toContain("fields page must have buttonText");
+    it("fails with a whitespace-only title", () => {
+      const page = { title: "   ", rows: [] };
+      expect(validatePage(page)).toContain("page must have a title");
     });
   });
 
-  describe("file page", () => {
-    it("passes with title and maxMb > 0", () => {
-      const page: StepPage = {
-        type: "file",
-        title: "Загрузите документ",
-        maxMb: 10,
-        buttonText: "Загрузить",
-      };
-      expect(isValidPage(page)).toBe(true);
+  describe("rows and blocks", () => {
+    it("fails when rows is missing", () => {
+      const page = { title: "Заголовок" };
+      expect(validatePage(page)).toContain("page must have rows");
     });
 
-    it("fails without title", () => {
+    it("fails for a row without blocks", () => {
+      const page = { title: "Заголовок", rows: [{ id: "r1", items: [] }] };
+      expect(validatePage(page)).toContain("row 0 must have at least one block");
+    });
+
+    it("fails for an unknown block type", () => {
       const page = {
-        type: "file",
-        maxMb: 10,
-        buttonText: "Загрузить",
+        title: "Заголовок",
+        rows: [{ id: "r1", items: [{ id: "b1", type: "widget", span: 2 }] }],
       };
-      expect(validatePage(page)).toContain("file page must have a title");
+      expect(validatePage(page)).toContain("row 0 block 0 has unknown type");
     });
 
-    it("fails with maxMb = 0", () => {
+    it("fails for span out of 1..6", () => {
       const page = {
-        type: "file",
-        title: "Загрузите документ",
-        maxMb: 0,
-        buttonText: "Загрузить",
+        title: "Заголовок",
+        rows: [{ id: "r1", items: [{ id: "b1", type: "input", span: 7 }] }],
       };
-      expect(validatePage(page)).toContain("file page must have maxMb > 0");
+      expect(validatePage(page)).toContain("row 0 block 0 span must be 1..6");
     });
 
-    it("fails with negative maxMb", () => {
+    it("fails for a non-integer span", () => {
       const page = {
-        type: "file",
-        title: "Загрузите документ",
-        maxMb: -5,
-        buttonText: "Загрузить",
+        title: "Заголовок",
+        rows: [{ id: "r1", items: [{ id: "b1", type: "input", span: 1.5 }] }],
       };
-      expect(validatePage(page)).toContain("file page must have maxMb > 0");
-    });
-
-    it("fails without maxMb", () => {
-      const page = {
-        type: "file",
-        title: "Загрузите документ",
-        buttonText: "Загрузить",
-      };
-      expect(validatePage(page)).toContain("file page must have maxMb > 0");
-    });
-  });
-
-  describe("text page", () => {
-    it("passes with title and non-empty body", () => {
-      const page: StepPage = {
-        type: "text",
-        title: "Результат",
-        body: "Операция завершена успешно",
-      };
-      expect(isValidPage(page)).toBe(true);
-    });
-
-    it("fails without title", () => {
-      const page = {
-        type: "text",
-        body: "Какой-то текст",
-      };
-      expect(validatePage(page)).toContain("text page must have a title");
-    });
-
-    it("fails with empty body", () => {
-      const page = {
-        type: "text",
-        title: "Результат",
-        body: "",
-      };
-      expect(validatePage(page)).toContain(
-        "text page must have a non-empty body",
-      );
-    });
-
-    it("fails with whitespace-only body", () => {
-      const page = {
-        type: "text",
-        title: "Результат",
-        body: "   ",
-      };
-      expect(validatePage(page)).toContain(
-        "text page must have a non-empty body",
-      );
+      expect(validatePage(page)).toContain("row 0 block 0 span must be 1..6");
     });
   });
 
@@ -128,35 +83,14 @@ describe("StepPage Validation", () => {
     it("fails for null", () => {
       expect(validatePage(null)).toContain("page must be an object");
     });
-
-    it("fails for unknown type", () => {
-      const page = { type: "unknown" };
-      expect(validatePage(page)).toContain("unknown page type");
-    });
   });
 
   describe("createDefaultPage", () => {
-    it("creates valid fields page", () => {
-      const page = createDefaultPage("fields", "Тест");
+    it("creates a valid empty page with the given title", () => {
+      const page = createDefaultPage("Тест");
       expect(isValidPage(page)).toBe(true);
-      expect(page.type).toBe("fields");
-    });
-
-    it("creates valid file page with default maxMb 10", () => {
-      const page = createDefaultPage("file", "Тест");
-      expect(isValidPage(page)).toBe(true);
-      expect(page.type).toBe("file");
-      if (page.type === "file") {
-        expect(page.maxMb).toBe(10);
-      }
-    });
-
-    it("creates valid text page", () => {
-      const page = createDefaultPage("text", "Тест");
-      expect(page.type).toBe("text");
-      if (page.type === "text") {
-        expect(page.title).toBe("Тест");
-      }
+      expect(page.title).toBe("Тест");
+      expect(page.rows).toEqual([]);
     });
   });
 });

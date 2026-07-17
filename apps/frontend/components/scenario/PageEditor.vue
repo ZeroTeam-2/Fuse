@@ -1,283 +1,930 @@
 <script setup lang="ts">
-// Page editor: the screen a user sees before a step runs — a field form, a file
-// dropzone, or a text block. Form on the left, live preview on the right.
-import type { PageField, Step, StepPage, StepSchema } from "@fuse/shared";
+// Полноэкранный конструктор страницы шага: слева палитра UIKit-элементов,
+// в центре «лист страницы» с drag & drop на сетку из 6 колонок и ресайзом,
+// справа инспектор свойств выделенного блока с привязкой к данным.
+import type {
+  PageBlock,
+  PageBlockType,
+  PageRow,
+  Step,
+  StepPage,
+  StepSchema,
+} from "@fuse/shared";
+import { blockCategory } from "@fuse/shared";
 
-const props = defineProps<{ step: Step; stepSchema?: StepSchema }>();
+const props = defineProps<{
+  step: Step;
+  stepIndex: number;
+  steps: Step[];
+  schemas: StepSchema[];
+}>();
 
 const emit = defineEmits<{ save: [page: StepPage]; close: [] }>();
 
-/**
- * К чему поле страницы может быть привязано: ручные значения ЭТОГО шага —
- * сами параметры и операнды условий фильтрации. Раньше связь держалась на
- * совпадении ключа поля с ключом параметра, а ключ выводился из подписи, так
- * что связать «ИНН организации» с `inn` было нельзя вообще.
- */
-const targetOptions = computed(() => {
-  const inputs = props.stepSchema?.inputs ?? [];
-  const options = [{ value: "", label: "Не привязано" }];
+// ---- id ------------------------------------------------------------------
+let seq = 0;
+function uid(prefix = "b"): string {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  return uuid ?? `${prefix}_${++seq}`;
+}
 
-  for (const [key, source] of Object.entries(props.step.mappings ?? {})) {
-    if (source !== "user") continue;
-    const field = inputs.find((f) => f.key === key);
-    options.push({ value: key, label: field?.label || key });
-  }
-
-  for (const [key, filter] of Object.entries(props.step.filters ?? {})) {
-    if (filter.value?.mode !== "user") continue;
-    options.push({
-      value: `filter:${key}`,
-      label: `Условие отбора: ${filter.field}`,
-    });
-  }
-
-  return options;
-});
-
-const PAGE_TYPES = [
-  { value: "fields", label: "Ввод полей" },
-  { value: "file", label: "Загрузка файла" },
-  { value: "text", label: "Отображение текста" },
+// ---- Палитра -------------------------------------------------------------
+interface PaletteItem {
+  type: PageBlockType;
+  name: string;
+  icon: string;
+  desc: string;
+  span: PageBlock["span"];
+}
+const PALETTE: PaletteItem[] = [
+  { type: "input", name: "Поле ввода", icon: "text-cursor-input", desc: "Однострочный ввод", span: 3 },
+  { type: "select", name: "Выпадающий список", icon: "chevrons-up-down", desc: "Выбор из вариантов", span: 3 },
+  { type: "dropzone", name: "Загрузка файла", icon: "upload", desc: "Drag & drop файла", span: 6 },
+  { type: "richtext", name: "Форматируемый текст", icon: "pilcrow", desc: "Редактор с разметкой", span: 6 },
+  { type: "paragraph", name: "Абзац", icon: "align-left", desc: "Текст / вывод данных", span: 6 },
 ];
+const META: Record<PageBlockType, PaletteItem> = Object.fromEntries(
+  PALETTE.map((p) => [p.type, p]),
+) as Record<PageBlockType, PaletteItem>;
+const CATS = [
+  { key: "input" as const, title: "Ввод", hint: "заполняет пользователь", dot: "bg-indigo-500" },
+  { key: "display" as const, title: "Отображение", hint: "показывает результат", dot: "bg-violet-500" },
+];
+function paletteFor(cat: "input" | "display"): PaletteItem[] {
+  return PALETTE.filter((p) => blockCategory(p.type) === cat);
+}
 
-const page = reactive<StepPage>(
-  props.step.page
-    ? (JSON.parse(JSON.stringify(props.step.page)) as StepPage)
-    : { type: "fields", title: props.step.title, hint: "", fields: [], buttonText: "Продолжить" },
+function newBlock(type: PageBlockType): PageBlock {
+  const base: PageBlock = { id: uid(), type, span: META[type].span };
+  if (type === "input") return { ...base, label: "Новое поле", placeholder: "Введите значение" };
+  if (type === "select") return { ...base, label: "Список", placeholder: "Выберите вариант" };
+  if (type === "dropzone") return { ...base, label: "Загрузка файла" };
+  if (type === "richtext") return { ...base, label: "Текст с форматированием" };
+  if (type === "paragraph") return { ...base, text: "Поясняющий текст для пользователя. Отредактируйте в свойствах справа." };
+  return base;
+}
+
+function starterRows(): PageRow[] {
+  return [
+    { id: uid("r"), items: [{ id: uid(), type: "paragraph", span: 6, text: "Заполните поля ниже, чтобы запустить шаг." }] },
+  ];
+}
+
+// ---- Состояние -----------------------------------------------------------
+const title = ref(props.step.page?.title || props.step.title || "Страница шага");
+const rows = ref<PageRow[]>(
+  props.step.page?.rows?.length
+    ? (JSON.parse(JSON.stringify(props.step.page.rows)) as PageRow[])
+    : starterRows(),
 );
 
-const pageType = computed({
-  get: () => page.type as string,
-  set: (type: string) => switchType(type as StepPage["type"]),
+const dragging = ref(false);
+type DropTarget =
+  | { kind: "gap"; beforeRowId: string | null }
+  | { kind: "row"; rowId: string; beforeItemId: string | null }
+  | null;
+const dropTarget = ref<DropTarget>(null);
+const selectedId = ref<string | null>(null);
+// { kind:'new', type } либо { kind:'move', id }
+let dragInfo: { kind: "new"; type: PageBlockType } | { kind: "move"; id: string } | null = null;
+
+const GAP = 14;
+
+const totalItems = computed(() => rows.value.reduce((n, r) => n + r.items.length, 0));
+
+const selected = computed<{ rowId: string; block: PageBlock } | null>(() => {
+  for (const r of rows.value) {
+    for (const b of r.items) if (b.id === selectedId.value) return { rowId: r.id, block: b };
+  }
+  return null;
 });
 
-function switchType(type: StepPage["type"]) {
-  if (page.type === type) return;
-  const title = page.title;
-  const next: StepPage =
-    type === "fields"
-      ? { type: "fields", title, hint: "", fields: [], buttonText: "Продолжить" }
-      : type === "file"
-        ? { type: "file", title, hint: "", accept: "", maxMb: 10, buttonText: "Загрузить" }
-        : { type: "text", title, body: "" };
-  Object.assign(page, next);
+// ---- Привязки ------------------------------------------------------------
+interface BindOption {
+  value: string;
+  label: string;
+  description?: string;
 }
-
-function addField() {
-  if (page.type !== "fields") return;
-  page.fields.push({
-    key: `field_${page.fields.length + 1}`,
-    label: "",
-    placeholder: "",
-    required: false,
-    target: "",
-  });
+/**
+ * Ввод: ЛЮБОЙ входной параметр этого шага, а не только заранее помеченный
+ * «Ручной ввод». Сама привязка объявляет параметр заполняемым пользователем —
+ * источник проставится на сохранении. Плюс уже настроенные операнды условий
+ * фильтрации, чтобы их привязку не потерять.
+ */
+const inputBindings = computed<BindOption[]>(() => {
+  const inputs = props.schemas[props.stepIndex]?.inputs ?? [];
+  // Показываем оригинальный ключ параметра (query), а не русскую подпись —
+  // редактор мыслит техническими именами входов шага. Подпись уходит в описание.
+  const opts: BindOption[] = inputs.map((f) => ({
+    value: f.key,
+    label: f.key,
+    description: f.label && f.label !== f.key ? `${f.label} · ${f.type}` : f.type,
+  }));
+  for (const [key, filter] of Object.entries(props.step.filters ?? {})) {
+    opts.push({ value: `filter:${key}`, label: `filter:${filter.field}` });
+  }
+  return opts;
+});
+/** Отображение: выходы только предыдущих шагов, у которых есть выходы. */
+const displayBindings = computed<BindOption[]>(() => {
+  const opts: BindOption[] = [];
+  for (let i = 0; i < props.stepIndex; i++) {
+    const outputs = props.schemas[i]?.outputs ?? [];
+    if (!outputs.length) continue;
+    const stepTitle = props.steps[i]?.title || `Шаг ${i + 1}`;
+    for (const o of outputs) {
+      opts.push({ value: `s${i}:${o.key}`, label: o.label || o.key, description: `Шаг ${i + 1} · ${stepTitle}` });
+    }
+  }
+  return opts;
+});
+/**
+ * Источник вариантов select — выходы предыдущих шагов техническими ключами
+ * (`cars`). Массивное поле развернётся в список опций на рантайме; тип поля
+ * подсказан в описании, чтобы было видно, где массив.
+ */
+const optionSourceBindings = computed<BindOption[]>(() => {
+  const opts: BindOption[] = [];
+  for (let i = 0; i < props.stepIndex; i++) {
+    const outputs = props.schemas[i]?.outputs ?? [];
+    if (!outputs.length) continue;
+    const stepTitle = props.steps[i]?.title || `Шаг ${i + 1}`;
+    for (const o of outputs) {
+      opts.push({ value: `s${i}:${o.key}`, label: o.key, description: `${o.type} · Шаг ${i + 1} · ${stepTitle}` });
+    }
+  }
+  return opts;
+});
+const optionSourceSelectOptions = computed(() => [
+  { value: "", label: "Не выбрано" },
+  ...optionSourceBindings.value,
+]);
+function bindingsFor(block: PageBlock): BindOption[] {
+  return blockCategory(block.type) === "input" ? inputBindings.value : displayBindings.value;
 }
-
-function removeField(idx: number) {
-  if (page.type !== "fields") return;
-  page.fields.splice(idx, 1);
-}
-
-function syncFieldKey(field: PageField, idx: number) {
-  field.key = field.label
-    ? field.label
-        .toLowerCase()
-        .replace(/[^a-zа-я0-9]+/gi, "_")
-        .replace(/^_|_$/g, "") || `field_${idx + 1}`
-    : `field_${idx + 1}`;
-}
-
-const canSave = computed(() => {
-  if (!page.title?.trim()) return false;
-  if (page.type === "fields") return !!page.buttonText?.trim();
-  if (page.type === "file") return !!page.maxMb && page.maxMb > 0;
-  if (page.type === "text") return !!page.body?.trim();
-  return true;
+const bindingSelectOptions = computed(() => {
+  if (!selected.value) return [];
+  return [{ value: "", label: "Не привязано" }, ...bindingsFor(selected.value.block)];
 });
 
+/** Человекочитаемое имя привязки для чипа на блоке (label, а не сырой ключ). */
+function bindingLabel(block: PageBlock): string {
+  if (!block.binding) return "";
+  const opt = bindingsFor(block).find((o) => o.value === block.binding);
+  return opt?.label ?? block.binding;
+}
+
+// ---- Мутации -------------------------------------------------------------
+function select(id: string) {
+  selectedId.value = id;
+}
+function clearSelection() {
+  selectedId.value = null;
+}
+function pruneEmpty(list: PageRow[]): PageRow[] {
+  return list.filter((r) => r.items.length);
+}
+function remove(rowId: string, itemId: string) {
+  rows.value = pruneEmpty(
+    rows.value.map((r) => (r.id === rowId ? { ...r, items: r.items.filter((b) => b.id !== itemId) } : r)),
+  );
+  if (selectedId.value === itemId) selectedId.value = null;
+}
+function resize(rowId: string, itemId: string, span: PageBlock["span"]) {
+  rows.value = rows.value.map((r) =>
+    r.id === rowId ? { ...r, items: r.items.map((b) => (b.id === itemId ? { ...b, span } : b)) } : r,
+  );
+}
+function patch(rowId: string, itemId: string, p: Partial<PageBlock>) {
+  rows.value = rows.value.map((r) =>
+    r.id === rowId ? { ...r, items: r.items.map((b) => (b.id === itemId ? { ...b, ...p } : b)) } : r,
+  );
+}
+function patchSelected(p: Partial<PageBlock>) {
+  if (selected.value) patch(selected.value.rowId, selected.value.block.id, p);
+}
+function onBindingChange(value: string) {
+  patchSelected({ binding: value || undefined });
+}
+
+// ---- Варианты select -----------------------------------------------------
+function selectOptions(block: PageBlock): string[] {
+  return block.options ?? [];
+}
+function addOption() {
+  if (!selected.value) return;
+  patchSelected({ options: [...selectOptions(selected.value.block), ""] });
+}
+function updateOption(index: number, value: string) {
+  if (!selected.value) return;
+  const next = [...selectOptions(selected.value.block)];
+  next[index] = value;
+  patchSelected({ options: next });
+}
+function removeOption(index: number) {
+  if (!selected.value) return;
+  const next = selectOptions(selected.value.block).filter((_, i) => i !== index);
+  patchSelected({ options: next });
+}
+
+// Источник вариантов select: «Вручную» (статический список) либо «Из шага»
+// (`optionsSource` из выхода пройденного шага). Режим следует за выбранным
+// блоком и переключается сегментами инспектора.
+const optionsMode = ref<"manual" | "dynamic">("manual");
+watch(
+  () => selected.value?.block.id,
+  () => {
+    optionsMode.value = selected.value?.block.optionsSource ? "dynamic" : "manual";
+  },
+  { immediate: true },
+);
+function setOptionsMode(mode: "manual" | "dynamic") {
+  optionsMode.value = mode;
+  // Активной остаётся одна модель вариантов: ручной режим снимает источник,
+  // динамический — расчищает статический список, чтобы он не подменял его.
+  if (mode === "manual") patchSelected({ optionsSource: undefined });
+  else patchSelected({ options: [] });
+}
+function onOptionsSourceChange(value: string) {
+  patchSelected({ optionsSource: value || undefined });
+}
+
+// ---- Drag lifecycle ------------------------------------------------------
+function dragStartNew(type: PageBlockType, e: DragEvent) {
+  e.dataTransfer!.effectAllowed = "copy";
+  e.dataTransfer!.setData("text/plain", type);
+  dragInfo = { kind: "new", type };
+  dragging.value = true;
+  selectedId.value = null;
+}
+function dragStartMove(id: string, e: DragEvent) {
+  e.stopPropagation();
+  e.dataTransfer!.effectAllowed = "move";
+  e.dataTransfer!.setData("text/plain", id);
+  dragInfo = { kind: "move", id };
+  dragging.value = true;
+}
+function dragEnd() {
+  dragInfo = null;
+  dragging.value = false;
+  dropTarget.value = null;
+}
+
+// Какой блок (по id) сидит перед курсором в строке; null — в конец.
+function computeBeforeItem(gridEl: HTMLElement, clientX: number): string | null {
+  const items = [...gridEl.querySelectorAll("[data-item]")];
+  for (const el of items) {
+    const r = el.getBoundingClientRect();
+    if (clientX < r.left + r.width / 2) return el.getAttribute("data-item");
+  }
+  return null;
+}
+function setGap(beforeRowId: string | null) {
+  dropTarget.value = { kind: "gap", beforeRowId };
+}
+function setRow(e: DragEvent, rowId: string) {
+  dropTarget.value = { kind: "row", rowId, beforeItemId: computeBeforeItem(e.currentTarget as HTMLElement, e.clientX) };
+}
+
+function takeDragged(draft: PageRow[]): PageBlock | null {
+  if (!dragInfo) return null;
+  if (dragInfo.kind === "new") return newBlock(dragInfo.type);
+  for (const r of draft) {
+    const i = r.items.findIndex((b) => b.id === (dragInfo as { id: string }).id);
+    if (i >= 0) return r.items.splice(i, 1)[0];
+  }
+  return null;
+}
+
+// Дроп применяется по ЯВНО переданному таргету, а не по dropTarget.value:
+// состояние dragover может не успеть закоммититься к моменту drop.
+function applyDrop(target: Exclude<DropTarget, null>) {
+  if (!dragInfo) return dragEnd();
+  const draft = rows.value.map((r) => ({ ...r, items: [...r.items] }));
+  const block = takeDragged(draft);
+  if (!block) {
+    dragEnd();
+    return;
+  }
+  if (target.kind === "gap") {
+    const row: PageRow = { id: uid("r"), items: [block] };
+    const idx = target.beforeRowId ? draft.findIndex((r) => r.id === target.beforeRowId) : draft.length;
+    draft.splice(idx < 0 ? draft.length : idx, 0, row);
+  } else {
+    const row = draft.find((r) => r.id === target.rowId);
+    if (!row) {
+      draft.push({ id: uid("r"), items: [block] });
+    } else {
+      const idx = target.beforeItemId ? row.items.findIndex((b) => b.id === target.beforeItemId) : row.items.length;
+      row.items.splice(idx < 0 ? row.items.length : idx, 0, block);
+    }
+  }
+  rows.value = pruneEmpty(draft);
+  dragEnd();
+}
+
+// ---- Ресайз ручкой -------------------------------------------------------
+let rz: { itemLeft: number; step: number; rowId: string; itemId: string } | null = null;
+function onHandleDown(e: PointerEvent, rowId: string, itemId: string) {
+  e.preventDefault();
+  e.stopPropagation();
+  const handle = e.currentTarget as HTMLElement;
+  const grid = handle.closest("[data-row-grid]") as HTMLElement;
+  const item = handle.closest("[data-item]") as HTMLElement;
+  if (!grid || !item) return;
+  const gridRect = grid.getBoundingClientRect();
+  const itemRect = item.getBoundingClientRect();
+  rz = { itemLeft: itemRect.left, step: (gridRect.width + GAP) / 6, rowId, itemId };
+  handle.setPointerCapture(e.pointerId);
+}
+function onHandleMove(e: PointerEvent, currentSpan: number) {
+  if (!rz) return;
+  const raw = (e.clientX - rz.itemLeft) / rz.step;
+  const span = Math.max(1, Math.min(6, Math.round(raw))) as PageBlock["span"];
+  if (span !== currentSpan) resize(rz.rowId, rz.itemId, span);
+}
+function onHandleUp(e: PointerEvent) {
+  if (!rz) return;
+  const target = rz;
+  rz = null;
+  try {
+    (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+  } catch {
+    /* pointer уже отпущен */
+  }
+  void target;
+}
+
+// ---- Inline-редактирование абзаца ----------------------------------------
+const editingId = ref<string | null>(null);
+function setEditing(id: string, value: boolean) {
+  editingId.value = value ? id : editingId.value === id ? null : editingId.value;
+}
+
+// ---- Клавиатура ----------------------------------------------------------
+function onKey(e: KeyboardEvent) {
+  if (e.key === "Escape") {
+    if (selectedId.value) selectedId.value = null;
+    else emit("close");
+    return;
+  }
+  if ((e.key === "Delete" || e.key === "Backspace") && selected.value) {
+    const tag = document.activeElement?.tagName ?? "";
+    if (!/INPUT|TEXTAREA/.test(tag) && !editingId.value) {
+      e.preventDefault();
+      remove(selected.value.rowId, selected.value.block.id);
+    }
+  }
+}
+onMounted(() => document.addEventListener("keydown", onKey));
+onBeforeUnmount(() => document.removeEventListener("keydown", onKey));
+
+// ---- Сохранение ----------------------------------------------------------
 function save() {
-  if (!canSave.value) return;
-  emit("save", JSON.parse(JSON.stringify(page)) as StepPage);
+  const page: StepPage = { title: title.value, rows: JSON.parse(JSON.stringify(rows.value)) };
+  emit("save", page);
+  emit("close");
 }
 </script>
 
 <template>
-  <Modal
-    title="Страница шага"
-    subtitle="Экран, который пользователь увидит перед этим шагом"
-    :width="960"
-    @close="emit('close')"
+  <div
+    class="fixed inset-0 z-[1100] bg-white flex flex-col [animation:fuse-fade-up_200ms_cubic-bezier(0.16,1,0.3,1)]"
   >
-    <div class="grid grid-cols-1 md:grid-cols-[1fr_340px] gap-6 pb-2">
-      <!-- Форма -->
-      <div class="flex flex-col gap-5">
-        <SegmentedControl v-model="pageType" :options="PAGE_TYPES" />
-
-        <Input v-model="page.title" label="Заголовок" placeholder="Заголовок страницы" />
-
-        <template v-if="page.type === 'fields'">
-          <Input v-model="page.hint" label="Подсказка" placeholder="Дополнительная подсказка" />
-
-          <div class="flex flex-col gap-2.5">
-            <div class="flex items-center justify-between">
-              <span class="text-[0.8125rem] font-sans font-semibold text-zinc-900">Поля формы</span>
-              <Button variant="tint" size="sm" @click="addField">
-                <template #left><Icon name="plus" :size="15" /></template>
-                Добавить поле
-              </Button>
-            </div>
-
-            <div
-              v-if="!page.fields.length"
-              class="font-sans text-[0.8125rem] text-zinc-400 border border-dashed border-zinc-200 rounded-xl px-4 py-5 text-center"
-            >
-              Нет полей — добавьте хотя бы одно.
-            </div>
-
-            <div
-              v-for="(field, idx) in page.fields"
-              :key="idx"
-              class="border border-zinc-200 rounded-xl p-3.5 flex flex-col gap-3"
-            >
-              <div class="flex items-center gap-2.5">
-                <div class="flex-1 min-w-0">
-                  <Input
-                    v-model="field.label"
-                    placeholder="Название поля"
-                    @update:model-value="syncFieldKey(field, idx)"
-                  />
-                </div>
-                <IconButton variant="outline" label="Удалить поле" :size="34" @click="removeField(idx)">
-                  <Icon name="x" :size="15" />
-                </IconButton>
-              </div>
-              <Input v-model="field.placeholder" placeholder="Плейсхолдер" />
-
-              <Select
-                v-model="field.target"
-                label="Заполняет"
-                :options="targetOptions"
-                placeholder="Не привязано"
-              />
-              <p v-if="targetOptions.length === 1" class="font-sans text-[0.75rem] text-zinc-400">
-                У шага нет значений с источником «Ручной ввод» — привязывать поле не к чему.
-              </p>
-
-              <div class="flex items-center justify-end">
-                <label
-                  class="inline-flex items-center gap-2 font-sans text-[0.8125rem] text-zinc-600 cursor-pointer"
-                >
-                  <input
-                    v-model="field.required"
-                    type="checkbox"
-                    class="w-4 h-4 accent-rose-600 cursor-pointer"
-                  />
-                  Обязательное
-                </label>
-              </div>
-            </div>
-          </div>
-
-          <Input v-model="page.buttonText" label="Текст кнопки" placeholder="Продолжить" />
-        </template>
-
-        <template v-else-if="page.type === 'file'">
-          <Input v-model="page.hint" label="Подсказка" placeholder="Дополнительная подсказка" />
-          <Input v-model="page.accept" label="Допустимые форматы" placeholder=".pdf,.jpg,.png" mono />
-          <Input v-model.number="page.maxMb" label="Максимальный размер, МБ" type="number" />
-          <Input v-model="page.buttonText" label="Текст кнопки" placeholder="Загрузить" />
-        </template>
-
-        <template v-else>
-          <div class="flex flex-col gap-2">
-            <label for="page-body" class="text-[0.8125rem] font-sans font-semibold text-zinc-900">
-              Содержимое
-            </label>
-            <textarea
-              id="page-body"
-              v-model="page.body"
-              rows="10"
-              placeholder="Текст, который увидит пользователь"
-              class="w-full px-3.5 py-3 font-sans text-[0.9375rem] text-zinc-900 bg-white border border-zinc-200 rounded-xl outline-none transition resize-y placeholder:text-zinc-400 focus:border-rose-600 focus:ring-4 focus:ring-rose-600/20"
-            />
-          </div>
-        </template>
-      </div>
-
-      <!-- Превью -->
-      <div class="flex flex-col gap-2.5">
-        <div
-          class="font-sans text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-zinc-400"
-        >
-          Как увидит пользователь
+    <!-- header -->
+    <div class="h-16 shrink-0 flex items-center gap-4 px-5 border-b border-zinc-200 bg-white">
+      <button
+        type="button"
+        class="w-9 h-9 rounded-lg inline-flex items-center justify-center text-zinc-500 border border-zinc-200 hover:bg-zinc-100 cursor-pointer shrink-0"
+        @click="emit('close')"
+      >
+        <Icon name="arrow-left" :size="17" />
+      </button>
+      <div class="flex-1 min-w-0">
+        <div class="font-sans text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-zinc-400">
+          Редактор страницы
         </div>
-        <div class="bg-zinc-50 border border-zinc-200 rounded-2xl p-4">
-          <Card padding="lg" class="flex flex-col gap-4">
-            <div>
-              <div class="font-sans text-[1.0625rem] font-bold text-zinc-900">
-                {{ page.title || "Заголовок" }}
-              </div>
-              <p
-                v-if="page.type !== 'text' && page.hint"
-                class="font-sans text-[0.8125rem] text-zinc-500 mt-1"
-              >
-                {{ page.hint }}
-              </p>
-            </div>
-
-            <template v-if="page.type === 'fields'">
-              <div v-if="page.fields.length" class="flex flex-col gap-3">
-                <div v-for="(field, idx) in page.fields" :key="idx" class="flex flex-col gap-1.5">
-                  <span class="font-sans text-[0.8125rem] font-semibold text-zinc-900">
-                    {{ field.label || "Поле" }}
-                    <span v-if="field.required" class="text-rose-600">*</span>
-                  </span>
-                  <div
-                    class="px-3.5 py-2.5 border border-zinc-200 rounded-xl font-sans text-[0.875rem] text-zinc-400 truncate"
-                  >
-                    {{ field.placeholder || "Введите значение" }}
-                  </div>
-                </div>
-              </div>
-              <Button variant="primary" size="sm" disabled>
-                {{ page.buttonText || "Продолжить" }}
-              </Button>
-            </template>
-
-            <template v-else-if="page.type === 'file'">
-              <div
-                class="flex flex-col items-center gap-2 border-2 border-dashed border-zinc-300 rounded-xl px-4 py-8 bg-zinc-50"
-              >
-                <span class="inline-flex text-zinc-400"><Icon name="upload-cloud" :size="24" /></span>
-                <span class="font-sans text-[0.8125rem] text-zinc-600">Перетащите файл сюда</span>
-                <span v-if="page.accept" class="font-mono text-[0.6875rem] text-zinc-400">
-                  {{ page.accept }}
-                </span>
-                <span v-if="page.maxMb" class="font-sans text-[0.75rem] text-zinc-400">
-                  до {{ page.maxMb }} МБ
-                </span>
-              </div>
-              <Button variant="primary" size="sm" disabled>
-                {{ page.buttonText || "Загрузить" }}
-              </Button>
-            </template>
-
-            <template v-else>
-              <p class="font-sans text-[0.875rem] text-zinc-600 leading-relaxed whitespace-pre-wrap">
-                {{ page.body || "Текст страницы…" }}
-              </p>
-            </template>
-          </Card>
+        <div class="font-sans text-[1.0625rem] font-bold text-zinc-900 truncate leading-tight">
+          {{ title }}
         </div>
       </div>
+      <span class="font-sans text-[0.8125rem] text-zinc-400">{{ totalItems }} элем.</span>
+      <Button variant="secondary" @click="emit('close')">Отмена</Button>
+      <Button variant="dark" @click="save">
+        <template #left><Icon name="check" :size="16" /></template>
+        Готово
+      </Button>
     </div>
 
-    <template #footer>
-      <Button variant="ghost" @click="emit('close')">Отмена</Button>
-      <Button :variant="canSave ? 'dark' : 'primary'" :disabled="!canSave" @click="save">
-        Сохранить
-      </Button>
-    </template>
-  </Modal>
+    <!-- body -->
+    <div class="flex-1 flex min-h-0">
+      <!-- палитра -->
+      <aside class="w-[268px] shrink-0 border-r border-zinc-200 bg-white overflow-y-auto">
+        <div class="px-5 pt-5 pb-2">
+          <div class="font-sans text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-zinc-400">
+            Элементы UIKit
+          </div>
+          <div class="font-sans text-[0.8125rem] text-zinc-500 mt-1.5">Перетащите на страницу</div>
+        </div>
+        <div v-for="c in CATS" :key="c.key" class="px-3.5 pt-3.5 pb-0.5">
+          <div class="flex items-center gap-2 px-1.5 mb-2">
+            <span :class="['w-1.5 h-1.5 rounded-full shrink-0', c.dot]" />
+            <span class="font-sans text-[0.75rem] font-bold text-zinc-900">{{ c.title }}</span>
+            <span class="font-sans text-[0.6875rem] text-zinc-400 truncate">· {{ c.hint }}</span>
+          </div>
+          <div class="flex flex-col gap-2">
+            <div
+              v-for="p in paletteFor(c.key)"
+              :key="p.type"
+              draggable="true"
+              class="group flex gap-3 items-center px-3 py-2.5 rounded-xl border border-zinc-200 bg-white cursor-grab active:cursor-grabbing transition-all hover:border-zinc-300 hover:shadow-[0_2px_8px_rgba(24,24,27,0.06)] hover:-translate-y-px"
+              @dragstart="dragStartNew(p.type, $event)"
+              @dragend="dragEnd"
+            >
+              <span
+                class="w-9 h-9 rounded-lg shrink-0 inline-flex items-center justify-center bg-zinc-100 text-zinc-500 group-hover:bg-rose-50 group-hover:text-rose-600 transition-colors"
+              >
+                <Icon :name="p.icon" :size="17" />
+              </span>
+              <span class="min-w-0 flex-1">
+                <div class="font-sans text-[0.875rem] font-bold text-zinc-900">{{ p.name }}</div>
+                <div class="font-sans text-[0.75rem] text-zinc-500 truncate">{{ p.desc }}</div>
+              </span>
+              <Icon name="grip-vertical" :size="15" class="text-zinc-300 shrink-0" />
+            </div>
+          </div>
+        </div>
+        <div
+          class="px-5 py-4 mt-2 border-t border-zinc-100 font-sans text-[0.75rem] text-zinc-400 leading-relaxed"
+        >
+          Каждый элемент можно растянуть на 1–6 колонок. Тяните за правый край.
+        </div>
+      </aside>
+
+      <!-- канвас -->
+      <div class="flex-1 overflow-y-auto bg-zinc-100" @click="clearSelection">
+        <div class="min-h-full flex justify-center py-10 px-6">
+          <div
+            class="w-full max-w-[760px] bg-white rounded-2xl border border-zinc-200 shadow-[0_1px_2px_rgba(24,24,27,0.06),0_12px_32px_rgba(24,24,27,0.06)] px-8 py-9 self-start"
+          >
+            <div class="mb-6">
+              <div
+                class="font-sans text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-zinc-400 mb-1.5"
+              >
+                Страница шага
+              </div>
+              <h2 class="font-sans font-extrabold text-[1.5rem] tracking-tight text-zinc-900">
+                {{ title }}
+              </h2>
+            </div>
+
+            <!-- пустая страница -->
+            <div
+              v-if="!rows.length"
+              :class="[
+                'rounded-2xl border-2 border-dashed flex flex-col items-center justify-center text-center gap-3 px-6 py-16 transition-colors',
+                dropTarget ? 'border-rose-500 bg-rose-50' : 'border-zinc-300 bg-zinc-50',
+              ]"
+              @dragover="dragging && ($event.preventDefault(), setGap(null))"
+              @drop.prevent="applyDrop({ kind: 'gap', beforeRowId: null })"
+            >
+              <span
+                class="w-12 h-12 rounded-2xl bg-white border border-zinc-200 inline-flex items-center justify-center text-zinc-400"
+              >
+                <Icon name="layout-template" :size="22" />
+              </span>
+              <div class="font-sans text-[0.9375rem] font-bold text-zinc-700">
+                Перетащите элементы сюда
+              </div>
+              <div class="font-sans text-[0.8125rem] text-zinc-500 max-w-[300px]">
+                Выберите элемент UIKit в панели слева и перенесите его на страницу.
+              </div>
+            </div>
+
+            <!-- строки -->
+            <div v-else class="relative">
+              <!-- направляющие колонок -->
+              <div
+                :class="[
+                  'pointer-events-none absolute inset-0 grid grid-cols-6 transition-opacity',
+                  dragging ? 'opacity-100' : 'opacity-0',
+                ]"
+                :style="{ gap: GAP + 'px' }"
+              >
+                <div v-for="i in 6" :key="i" class="rounded-lg border border-dashed border-rose-200" />
+              </div>
+
+              <template v-for="(row, ri) in rows" :key="row.id">
+                <!-- зона перед строкой -->
+                <div
+                  :class="['transition-all', dragging ? 'h-9 my-0.5' : 'h-2']"
+                  @dragover="dragging && ($event.preventDefault(), setGap(ri === 0 ? row.id : rows[ri].id))"
+                  @drop.prevent="applyDrop({ kind: 'gap', beforeRowId: row.id })"
+                >
+                  <div
+                    v-if="dragging"
+                    :class="[
+                      'h-full rounded-lg border-2 border-dashed flex items-center justify-center transition-colors',
+                      dropTarget && dropTarget.kind === 'gap' && dropTarget.beforeRowId === row.id
+                        ? 'border-rose-500 bg-rose-50'
+                        : 'border-transparent',
+                    ]"
+                  >
+                    <span
+                      v-if="dropTarget && dropTarget.kind === 'gap' && dropTarget.beforeRowId === row.id"
+                      class="font-sans text-[0.6875rem] font-semibold text-rose-600 uppercase tracking-wide"
+                    >
+                      Новая строка
+                    </span>
+                  </div>
+                </div>
+
+                <!-- строка -->
+                <div
+                  data-row-grid
+                  :class="[
+                    'relative grid grid-cols-6 rounded-xl transition-colors',
+                    dropTarget && dropTarget.kind === 'row' && dropTarget.rowId === row.id ? 'bg-rose-50/60' : '',
+                  ]"
+                  :style="{ gap: GAP + 'px' }"
+                  @dragover="dragging && ($event.preventDefault(), setRow($event, row.id))"
+                  @drop.prevent.stop="
+                    applyDrop({
+                      kind: 'row',
+                      rowId: row.id,
+                      beforeItemId: computeBeforeItem($event.currentTarget as HTMLElement, $event.clientX),
+                    })
+                  "
+                >
+                  <template v-for="block in row.items" :key="block.id">
+                    <div
+                      v-if="
+                        dropTarget &&
+                        dropTarget.kind === 'row' &&
+                        dropTarget.rowId === row.id &&
+                        dropTarget.beforeItemId === block.id
+                      "
+                      class="w-0.5 self-stretch bg-rose-500 rounded-full -mx-1 justify-self-start"
+                      style="grid-column: span 1"
+                    />
+                    <!-- блок -->
+                    <div
+                      :data-item="block.id"
+                      :draggable="editingId !== block.id"
+                      :style="{ gridColumn: `span ${block.span}` }"
+                      :class="[
+                        'group relative rounded-xl transition-shadow',
+                        editingId === block.id ? 'cursor-text' : 'cursor-grab active:cursor-grabbing',
+                        selectedId === block.id
+                          ? 'ring-2 ring-rose-500 ring-offset-2 ring-offset-white'
+                          : 'ring-1 ring-transparent hover:ring-zinc-200',
+                      ]"
+                      @dragstart="dragStartMove(block.id, $event)"
+                      @dragend="dragEnd"
+                      @click.stop="select(block.id)"
+                    >
+                      <!-- чип привязки -->
+                      <div
+                        v-if="block.binding"
+                        :class="[
+                          'absolute -top-2.5 left-3 z-20 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border bg-white shadow-sm font-sans text-[0.625rem] font-semibold max-w-[70%]',
+                          blockCategory(block.type) === 'input'
+                            ? 'border-indigo-200 text-indigo-600'
+                            : 'border-violet-200 text-violet-600',
+                        ]"
+                      >
+                        <Icon
+                          :name="blockCategory(block.type) === 'input' ? 'arrow-down-to-line' : 'arrow-up-from-line'"
+                          :size="11"
+                          class="shrink-0"
+                        />
+                        <span class="truncate">{{ bindingLabel(block) }}</span>
+                      </div>
+
+                      <!-- ручки -->
+                      <div
+                        :class="[
+                          'absolute -top-3 right-3 z-20 flex items-center gap-1 px-1 py-0.5 rounded-full bg-zinc-900 text-white transition-opacity',
+                          selectedId === block.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+                        ]"
+                      >
+                        <span class="inline-flex items-center px-1 text-zinc-400"><Icon name="grip-horizontal" :size="14" /></span>
+                        <span class="font-mono text-[0.6875rem] font-semibold px-1">{{ block.span }}/6</span>
+                        <button
+                          type="button"
+                          aria-label="Удалить"
+                          class="inline-flex items-center justify-center w-5 h-5 rounded-full hover:bg-white/20 cursor-pointer"
+                          @click.stop="remove(row.id, block.id)"
+                        >
+                          <Icon name="x" :size="13" />
+                        </button>
+                      </div>
+
+                      <!-- превью -->
+                      <div :class="['p-3 select-none', block.type === 'paragraph' ? '' : '[&_*]:pointer-events-none']">
+                        <ScenarioPageParagraph
+                          v-if="block.type === 'paragraph'"
+                          :text="block.text"
+                          @patch="patch(row.id, block.id, { text: $event })"
+                          @editing="setEditing(block.id, $event)"
+                        />
+                        <div v-else-if="block.type === 'input'">
+                          <div class="font-sans text-[0.8125rem] font-semibold text-zinc-900 mb-2">{{ block.label }}</div>
+                          <div class="w-full px-3.5 py-3 bg-white border border-zinc-200 rounded-xl font-sans text-[0.9375rem] text-zinc-400 truncate">
+                            {{ block.placeholder }}
+                          </div>
+                        </div>
+                        <div v-else-if="block.type === 'select'">
+                          <div class="font-sans text-[0.8125rem] font-semibold text-zinc-900 mb-2">{{ block.label }}</div>
+                          <div class="w-full flex items-center gap-2 px-3.5 py-3 bg-white border border-zinc-200 rounded-xl font-sans text-[0.9375rem] text-zinc-400">
+                            <span class="flex-1 truncate">{{ block.placeholder }}</span>
+                            <Icon name="chevron-down" :size="16" />
+                          </div>
+                        </div>
+                        <div v-else-if="block.type === 'dropzone'">
+                          <div class="font-sans text-[0.8125rem] font-semibold text-zinc-900 mb-2">{{ block.label }}</div>
+                          <div class="flex flex-col items-center justify-center text-center gap-2 rounded-xl border-2 border-dashed border-zinc-300 bg-zinc-50 px-5 py-7">
+                            <span class="w-10 h-10 rounded-2xl bg-white border border-zinc-200 inline-flex items-center justify-center text-zinc-500"><Icon name="upload" :size="18" /></span>
+                            <div class="font-sans text-[0.8125rem] font-semibold text-zinc-700">Перетащите файл сюда</div>
+                            <div class="font-sans text-[0.75rem] text-zinc-400">или нажмите, чтобы выбрать</div>
+                          </div>
+                        </div>
+                        <div v-else-if="block.type === 'richtext'">
+                          <div class="font-sans text-[0.8125rem] font-semibold text-zinc-900 mb-2">{{ block.label }}</div>
+                          <div class="border border-zinc-200 rounded-xl overflow-hidden bg-white">
+                            <div class="flex gap-0.5 items-center px-2.5 py-1.5 border-b border-zinc-200 bg-zinc-50 text-zinc-400">
+                              <Icon name="bold" :size="15" /><Icon name="italic" :size="15" /><Icon name="underline" :size="15" />
+                              <span class="w-px h-[16px] bg-zinc-200 mx-1" /><Icon name="list" :size="15" /><Icon name="list-ordered" :size="15" />
+                            </div>
+                            <div class="px-4 py-3 min-h-[84px] font-sans text-[0.875rem] text-zinc-400">Начните печатать…</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <!-- ручка ресайза -->
+                      <div
+                        :class="[
+                          'absolute top-1/2 -translate-y-1/2 -right-1.5 w-3 h-12 rounded-full cursor-col-resize z-20 flex items-center justify-center transition-opacity',
+                          selectedId === block.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+                        ]"
+                        @pointerdown="onHandleDown($event, row.id, block.id)"
+                        @pointermove="onHandleMove($event, block.span)"
+                        @pointerup="onHandleUp($event)"
+                        @click.stop
+                      >
+                        <span class="w-1.5 h-10 rounded-full bg-rose-500 shadow-[0_0_0_3px_rgba(225,29,72,0.15)]" />
+                      </div>
+                    </div>
+                  </template>
+                </div>
+
+                <!-- зона после последней строки -->
+                <div
+                  v-if="ri === rows.length - 1"
+                  :class="['transition-all', dragging ? 'h-9 my-0.5' : 'h-2']"
+                  @dragover="dragging && ($event.preventDefault(), setGap(null))"
+                  @drop.prevent="applyDrop({ kind: 'gap', beforeRowId: null })"
+                >
+                  <div
+                    v-if="dragging"
+                    :class="[
+                      'h-full rounded-lg border-2 border-dashed flex items-center justify-center transition-colors',
+                      dropTarget && dropTarget.kind === 'gap' && dropTarget.beforeRowId === null
+                        ? 'border-rose-500 bg-rose-50'
+                        : 'border-transparent',
+                    ]"
+                  >
+                    <span
+                      v-if="dropTarget && dropTarget.kind === 'gap' && dropTarget.beforeRowId === null"
+                      class="font-sans text-[0.6875rem] font-semibold text-rose-600 uppercase tracking-wide"
+                    >
+                      Новая строка
+                    </span>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- инспектор -->
+      <aside
+        v-if="selected"
+        class="w-[304px] shrink-0 border-l border-zinc-200 bg-white overflow-y-auto flex flex-col"
+      >
+        <div class="flex items-center gap-2.5 px-5 pt-5 pb-4 border-b border-zinc-100">
+          <span class="w-9 h-9 rounded-lg shrink-0 inline-flex items-center justify-center bg-rose-50 text-rose-600">
+            <Icon :name="META[selected.block.type].icon" :size="17" />
+          </span>
+          <div class="flex-1 min-w-0">
+            <div class="font-sans text-[0.875rem] font-bold text-zinc-900 truncate">
+              {{ META[selected.block.type].name }}
+            </div>
+            <div class="font-sans text-[0.75rem] text-zinc-400">Свойства элемента</div>
+          </div>
+          <button
+            type="button"
+            aria-label="Снять выделение"
+            class="w-8 h-8 rounded-lg inline-flex items-center justify-center text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 cursor-pointer"
+            @click="clearSelection"
+          >
+            <Icon name="x" :size="16" />
+          </button>
+        </div>
+
+        <div class="px-5 py-5 flex flex-col gap-4">
+          <!-- привязка -->
+          <div>
+            <div class="flex items-center gap-2 mb-2.5">
+              <span
+                :class="[
+                  'w-1.5 h-1.5 rounded-full shrink-0',
+                  blockCategory(selected.block.type) === 'input' ? 'bg-indigo-500' : 'bg-violet-500',
+                ]"
+              />
+              <span class="font-sans text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-zinc-500">
+                Привязка к данным
+              </span>
+            </div>
+            <Select
+              :label="blockCategory(selected.block.type) === 'input' ? 'Входной параметр шага' : 'Поле результата пройденного шага'"
+              :model-value="selected.block.binding || ''"
+              :options="bindingSelectOptions"
+              placeholder="Не привязано"
+              @change="onBindingChange"
+            />
+            <p
+              v-if="!bindingsFor(selected.block).length"
+              class="font-sans text-[0.75rem] text-amber-600 mt-2"
+            >
+              {{
+                blockCategory(selected.block.type) === "input"
+                  ? "У шага нет входных параметров для привязки."
+                  : "У предыдущих шагов нет выходов для привязки."
+              }}
+            </p>
+          </div>
+
+          <div class="h-px bg-zinc-100 -mx-1" />
+
+          <!-- свойства по типу -->
+          <Input
+            v-if="selected.block.type !== 'paragraph'"
+            :model-value="selected.block.label || ''"
+            label="Подпись"
+            @update:model-value="patchSelected({ label: String($event) })"
+          />
+          <Input
+            v-if="selected.block.type === 'input' || selected.block.type === 'select'"
+            :model-value="selected.block.placeholder || ''"
+            label="Плейсхолдер"
+            @update:model-value="patchSelected({ placeholder: String($event) })"
+          />
+
+          <!-- Варианты выпадающего списка -->
+          <div v-if="selected.block.type === 'select'" class="flex flex-col gap-2.5">
+            <span class="text-[0.8125rem] font-sans font-semibold text-zinc-900">Варианты</span>
+            <!-- источник: вручную или из выхода пройденного шага -->
+            <div class="grid grid-cols-2 gap-1.5 p-1 rounded-xl bg-zinc-100">
+              <button
+                v-for="m in [
+                  { key: 'manual', label: 'Вручную' },
+                  { key: 'dynamic', label: 'Из шага' },
+                ]"
+                :key="m.key"
+                type="button"
+                :class="[
+                  'h-8 rounded-lg font-sans text-[0.8125rem] font-semibold transition-colors cursor-pointer',
+                  optionsMode === m.key
+                    ? 'bg-white text-zinc-900 shadow-sm'
+                    : 'text-zinc-500 hover:text-zinc-800',
+                ]"
+                @click="setOptionsMode(m.key as 'manual' | 'dynamic')"
+              >
+                {{ m.label }}
+              </button>
+            </div>
+
+            <!-- динамический источник -->
+            <template v-if="optionsMode === 'dynamic'">
+              <Select
+                label="Поле-массив пройденного шага"
+                :model-value="selected.block.optionsSource || ''"
+                :options="optionSourceSelectOptions"
+                placeholder="Не выбрано"
+                @change="onOptionsSourceChange"
+              />
+              <p
+                v-if="!optionSourceBindings.length"
+                class="font-sans text-[0.75rem] text-amber-600"
+              >
+                У предыдущих шагов нет выходов, из которых можно взять варианты.
+              </p>
+              <p v-else class="font-sans text-[0.75rem] text-zinc-400">
+                Значения массива этого поля станут вариантами списка при запуске.
+              </p>
+            </template>
+
+            <!-- ручной список -->
+            <template v-else>
+              <div class="flex items-center justify-end">
+                <button
+                  type="button"
+                  class="inline-flex items-center gap-1 font-sans text-[0.75rem] font-semibold text-rose-600 hover:text-rose-700 cursor-pointer"
+                  @click="addOption"
+                >
+                  <Icon name="plus" :size="14" />Добавить
+                </button>
+              </div>
+              <p
+                v-if="!selectOptions(selected.block).length"
+                class="font-sans text-[0.75rem] text-zinc-400"
+              >
+                Пока нет вариантов — добавьте те, из которых будет выбирать пользователь.
+              </p>
+              <div
+                v-for="(opt, i) in selectOptions(selected.block)"
+                :key="i"
+                class="flex items-center gap-2"
+              >
+                <input
+                  :value="opt"
+                  :placeholder="`Вариант ${i + 1}`"
+                  class="flex-1 min-w-0 px-3 py-2 bg-white border border-zinc-200 rounded-lg outline-none transition font-sans text-[0.875rem] text-zinc-900 focus:border-rose-600 focus:ring-4 focus:ring-rose-600/20"
+                  @input="updateOption(i, ($event.target as HTMLInputElement).value)"
+                />
+                <button
+                  type="button"
+                  aria-label="Удалить вариант"
+                  class="w-8 h-8 shrink-0 rounded-lg inline-flex items-center justify-center text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 cursor-pointer"
+                  @click="removeOption(i)"
+                >
+                  <Icon name="x" :size="15" />
+                </button>
+              </div>
+            </template>
+          </div>
+
+          <label
+            v-if="blockCategory(selected.block.type) === 'input'"
+            class="inline-flex items-center gap-2 font-sans text-[0.8125rem] text-zinc-700 cursor-pointer"
+          >
+            <input
+              type="checkbox"
+              class="w-4 h-4 accent-rose-600 cursor-pointer"
+              :checked="!!selected.block.required"
+              @change="patchSelected({ required: ($event.target as HTMLInputElement).checked })"
+            />
+            Обязательное поле
+          </label>
+
+          <div v-if="selected.block.type === 'paragraph'" class="flex flex-col gap-2">
+            <label class="text-[0.8125rem] font-sans font-semibold text-zinc-900">Текст</label>
+            <textarea
+              :value="selected.block.text || ''"
+              rows="5"
+              class="w-full px-3.5 py-2.5 bg-white border border-zinc-200 rounded-xl outline-none transition focus:border-rose-600 focus:ring-4 focus:ring-rose-600/20 font-sans text-[0.9375rem] text-zinc-900 resize-none leading-relaxed"
+              @input="patchSelected({ text: ($event.target as HTMLTextAreaElement).value })"
+            />
+          </div>
+
+          <!-- ширина -->
+          <div>
+            <div class="flex items-center justify-between mb-2">
+              <div class="font-sans text-[0.8125rem] font-semibold text-zinc-900">Ширина</div>
+              <span class="font-mono text-[0.75rem] font-semibold text-rose-600">{{ selected.block.span }}/6</span>
+            </div>
+            <div class="grid grid-cols-6 gap-1.5">
+              <button
+                v-for="n in 6"
+                :key="n"
+                type="button"
+                :class="[
+                  'h-9 rounded-lg font-sans text-[0.8125rem] font-semibold border transition-colors cursor-pointer',
+                  selected.block.span === n
+                    ? 'bg-zinc-900 border-zinc-900 text-white'
+                    : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-100',
+                ]"
+                @click="patchSelected({ span: n as PageBlock['span'] })"
+              >
+                {{ n }}
+              </button>
+            </div>
+            <div class="font-sans text-[0.75rem] text-zinc-400 mt-2">Колонки, которые занимает элемент.</div>
+          </div>
+        </div>
+
+        <div class="mt-auto px-5 py-4 border-t border-zinc-100">
+          <button
+            type="button"
+            class="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl font-sans text-[0.875rem] font-semibold text-rose-600 bg-rose-50 hover:bg-rose-100 transition-colors cursor-pointer"
+            @click="remove(selected.rowId, selected.block.id)"
+          >
+            <Icon name="trash-2" :size="16" />Удалить элемент
+          </button>
+        </div>
+      </aside>
+    </div>
+  </div>
 </template>
