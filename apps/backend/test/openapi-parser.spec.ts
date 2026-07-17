@@ -93,3 +93,35 @@ describe("OpenAPI parser: array-aware output schema", () => {
   });
 
 });
+
+describe("OpenAPI parser: endpoint tags", () => {
+  const taggedSpec = {
+    openapi: "3.0.0",
+    info: { title: "Demo", version: "1.0.0" },
+    servers: [{ url: "https://api.example.com" }],
+    paths: {
+      "/users": {
+        get: { summary: "List users", tags: ["Users", "Admin"], responses: {} },
+      },
+      "/health": {
+        get: { summary: "Health check", responses: {} },
+      },
+    },
+  } as Record<string, unknown>;
+
+  it("takes the first tag of an operation", async () => {
+    const parser = new OpenApiParserService();
+    const parsed = await parser.parse(taggedSpec, SPEC_URL);
+    const users = parsed.endpoints.find((e) => e.path === "/users");
+
+    expect(users?.tag).toBe("Users");
+  });
+
+  it("leaves the tag empty for an operation without tags", async () => {
+    const parser = new OpenApiParserService();
+    const parsed = await parser.parse(taggedSpec, SPEC_URL);
+    const health = parsed.endpoints.find((e) => e.path === "/health");
+
+    expect(health?.tag).toBeUndefined();
+  });
+});

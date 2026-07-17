@@ -22,7 +22,6 @@ const endpoints = ref<Endpoint[]>([]);
 
 const appId = ref("");
 const selectedEndpoint = ref<Endpoint | null>(null);
-const query = ref("");
 const title = ref("");
 const refScenarioId = ref("");
 const delaySec = ref(3);
@@ -48,14 +47,6 @@ const scenarioOptions = computed(() =>
 
 const appName = computed(() => apps.value.find((a) => a.id === appId.value)?.name ?? "");
 
-const filteredEndpoints = computed(() => {
-  const q = query.value.trim().toLowerCase();
-  if (!q) return endpoints.value;
-  return endpoints.value.filter((e) =>
-    [e.path, e.summary, e.method].some((t) => String(t ?? "").toLowerCase().includes(q)),
-  );
-});
-
 const canAdd = computed(() => {
   if (!title.value.trim()) return false;
   if (needsEndpoint.value) return !!selectedEndpoint.value;
@@ -80,14 +71,15 @@ async function loadScenarios() {
 
 async function loadEndpoints() {
   selectedEndpoint.value = null;
-  query.value = "";
   endpoints.value = [];
   if (!appId.value) return;
   const { data } = await $api.GET(`/api/apps/${appId.value}`, {});
   if (data) endpoints.value = data.endpoints ?? [];
 }
 
-function pickEndpoint(ep: Endpoint) {
+function pickEndpoint(picked: { id?: string }) {
+  const ep = endpoints.value.find((e) => e.id === picked.id);
+  if (!ep) return;
   selectedEndpoint.value = ep;
   if (!title.value.trim()) title.value = ep.summary || ep.path;
 }
@@ -165,63 +157,34 @@ onMounted(() => {
 
         <div>
           <div :class="eyebrow">2 · Endpoint{{ appName ? ` из ${appName}` : "" }}</div>
-          <div class="border border-zinc-200 rounded-xl overflow-hidden">
-            <template v-if="appId">
-              <div
-                class="flex items-center gap-2.5 px-3.5 py-2.5 border-b border-zinc-200 bg-zinc-50"
-              >
-                <span class="inline-flex text-zinc-400 shrink-0"><Icon name="search" :size="16" /></span>
-                <input
-                  v-model="query"
-                  type="text"
-                  placeholder="Найти endpoint по пути или описанию…"
-                  class="flex-1 min-w-0 border-0 outline-none bg-transparent font-sans text-[0.9375rem] text-zinc-900 placeholder:text-zinc-400"
-                />
-              </div>
-              <div class="min-h-[240px] max-h-[240px] overflow-y-auto p-1.5">
-                <div
-                  v-if="!filteredEndpoints.length"
-                  class="px-3 py-8 text-center font-sans text-[0.875rem] text-zinc-400"
-                >
-                  Ничего не найдено
-                </div>
-                <div
-                  v-for="ep in filteredEndpoints"
-                  :key="ep.id"
-                  :class="[
-                    'rounded-lg border-[1.5px] cursor-pointer',
-                    selectedEndpoint?.id === ep.id
-                      ? 'border-rose-600 bg-rose-50'
-                      : 'border-transparent',
-                  ]"
-                  @click="pickEndpoint(ep)"
-                >
-                  <EndpointRow
-                    :method="ep.method"
-                    :path="ep.path"
-                    :description="ep.summary"
-                    :interactive="selectedEndpoint?.id !== ep.id"
-                  />
-                </div>
-              </div>
-            </template>
+          <template v-if="appId">
+            <div class="max-h-[320px] overflow-y-auto">
+              <EndpointGroupList
+                selectable
+                default-collapsed
+                :endpoints="endpoints"
+                :selected-id="selectedEndpoint?.id"
+                empty-text="У приложения нет endpoints"
+                @select="pickEndpoint"
+              />
+            </div>
+          </template>
 
-            <!-- Same height as the endpoint list so the dialog does not jump. -->
-            <div
-              v-else
-              class="min-h-[289px] flex flex-col items-center justify-center gap-3 px-6 text-center bg-zinc-50/60"
+          <!-- Placeholder before an app is picked so the dialog does not jump. -->
+          <div
+            v-else
+            class="border border-zinc-200 rounded-xl min-h-[240px] flex flex-col items-center justify-center gap-3 px-6 text-center bg-zinc-50/60"
+          >
+            <span
+              class="w-11 h-11 rounded-2xl bg-white border border-zinc-200 inline-flex items-center justify-center text-zinc-400"
             >
-              <span
-                class="w-11 h-11 rounded-2xl bg-white border border-zinc-200 inline-flex items-center justify-center text-zinc-400"
-              >
-                <Icon name="package-search" :size="20" />
-              </span>
-              <div class="font-sans text-[0.875rem] font-semibold text-zinc-600">
-                Сначала выберите приложение
-              </div>
-              <div class="font-sans text-[0.8125rem] text-zinc-400 max-w-[280px]">
-                Список endpoint’ов появится здесь.
-              </div>
+              <Icon name="package-search" :size="20" />
+            </span>
+            <div class="font-sans text-[0.875rem] font-semibold text-zinc-600">
+              Сначала выберите приложение
+            </div>
+            <div class="font-sans text-[0.8125rem] text-zinc-400 max-w-[280px]">
+              Список endpoint’ов появится здесь.
             </div>
           </div>
         </div>

@@ -66,12 +66,31 @@ export interface Endpoint {
   method: HttpMethod;
   path: string;
   summary?: string;
+  /** First OpenAPI `tags` entry, used to group endpoints into collapsible blocks. Empty → «Прочее». */
+  tag?: string;
   inputs: SchemaField[];
   /** Fields of the response — of *one element* when `outputIsArray` is set. */
   outputs: SchemaField[];
   /** The endpoint answers with a collection, so `outputs` describe its element. */
   outputIsArray?: boolean;
   status: EndpointStatus;
+}
+
+/** One variable of an app environment. The `baseUrl` key is always present. */
+export interface EnvironmentVariable {
+  key: string;
+  value: string;
+}
+
+/**
+ * A named environment of an API provider (app). Every app has a non-deletable
+ * `Prod` environment. Variables are an extensible set; today the only member is
+ * `baseUrl` — the absolute address every endpoint path is resolved against.
+ */
+export interface Environment {
+  id: string;
+  name: string;
+  variables: EnvironmentVariable[];
 }
 
 /** Input/output schema of a single step, as served to the scenario builder. */
@@ -87,12 +106,14 @@ export interface App {
   name: string;
   description?: string;
   openapiUrl: string;
-  /** Absolute origin (+ base path) every endpoint path is resolved against. */
+  /** Absolute origin (+ base path) every endpoint path is resolved against. Seeds the Prod environment. */
   baseUrl?: string;
   host?: string;
   apiVersion?: string;
   specSnapshot?: unknown;
   endpoints: Endpoint[];
+  /** Environments of the provider. The default `Prod` environment cannot be deleted. */
+  environments?: Environment[];
   published: boolean;
   scenarioCount?: number;
   createdAt: string;
@@ -115,13 +136,13 @@ export interface ImportPreviewResult {
   host?: string;
   apiVersion?: string;
   endpointCount: number;
-  endpoints: Pick<Endpoint, "method" | "path" | "summary">[];
+  endpoints: Pick<Endpoint, "method" | "path" | "summary" | "tag">[];
 }
 
 export interface ReimportDiff {
-  added: Pick<Endpoint, "method" | "path" | "summary">[];
-  deprecated: Pick<Endpoint, "method" | "path" | "summary">[];
-  kept: Pick<Endpoint, "method" | "path" | "summary">[];
+  added: Pick<Endpoint, "method" | "path" | "summary" | "tag">[];
+  deprecated: Pick<Endpoint, "method" | "path" | "summary" | "tag">[];
+  kept: Pick<Endpoint, "method" | "path" | "summary" | "tag">[];
 }
 
 /** Типы блоков страницы. `paragraph` — отображение, остальное — ввод. */
@@ -267,6 +288,12 @@ export interface PeriodicStep extends BaseStep {
 
 export type Step = ApiStep | ScenarioStepRef | DelayStep | FileStep | PeriodicStep;
 
+/** Which environment of a given provider (app) this scenario runs its steps against. */
+export interface EnvironmentSelection {
+  appId: string;
+  environmentId: string;
+}
+
 export interface Scenario {
   id: string;
   ownerId: string;
@@ -277,6 +304,8 @@ export interface Scenario {
   category?: string;
   subcategory?: string;
   steps: Step[];
+  /** Per-provider environment choice; unset providers default to Prod at execution. */
+  environmentSelections?: EnvironmentSelection[];
   published: boolean;
   runCount: number;
   /**
@@ -305,6 +334,7 @@ export interface UpdateScenarioDto {
   category?: string;
   subcategory?: string;
   steps?: Step[];
+  environmentSelections?: EnvironmentSelection[];
   published?: boolean;
 }
 

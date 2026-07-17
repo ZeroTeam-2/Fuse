@@ -32,7 +32,7 @@
           </p>
         </div>
 
-        <form class="flex flex-col gap-5" @submit.prevent="checkUpdates">
+        <form v-if="app.openapiUrl" class="flex flex-col gap-5" @submit.prevent="checkUpdates">
           <Input
             v-model="openapiUrl"
             label="OpenAPI URL"
@@ -62,6 +62,10 @@
             </Button>
           </div>
         </form>
+
+        <p v-else class="font-sans text-sm text-zinc-500 bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-3">
+          Спецификация загружена файлом — повторный импорт файлом скоро.
+        </p>
       </Card>
 
       <template v-if="diff">
