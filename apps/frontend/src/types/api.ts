@@ -108,6 +108,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/runs/{id}/input-submit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Submit manual input values the worker asked for mid-run */
+        post: operations["ExecutionController_submitInputs"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/apps": {
         parameters: {
             query?: never;
@@ -247,6 +264,41 @@ export interface paths {
         patch: operations["AppsController_togglePublish"];
         trace?: never;
     };
+    "/api/apps/{id}/environments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add an environment to an app */
+        post: operations["AppsController_addEnvironment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/apps/{id}/environments/{envId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete an app environment (Prod cannot be deleted) */
+        delete: operations["AppsController_deleteEnvironment"];
+        options?: never;
+        head?: never;
+        /** Update an app environment (name / Base URL) */
+        patch: operations["AppsController_updateEnvironment"];
+        trace?: never;
+    };
     "/api/scenarios": {
         parameters: {
             query?: never;
@@ -318,6 +370,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/scenarios/{id}/manual-inputs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List every value marked as manual input across all steps */
+        get: operations["ScenariosController_getManualInputs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/marketplace": {
         parameters: {
             query?: never;
@@ -361,6 +430,23 @@ export interface paths {
         };
         /** Get a marketplace card detail */
         get: operations["MarketplaceController_getCard"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/marketplace/{id}/manual-inputs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Values the run form must collect for this card */
+        get: operations["MarketplaceController_getManualInputs"];
         put?: never;
         post?: never;
         delete?: never;
@@ -503,6 +589,18 @@ export interface components {
             /** @example https://api.example.com/openapi.json */
             openapiUrl?: string;
         };
+        CreateEnvironmentDto: {
+            /** @example Staging */
+            name: string;
+            /** @example https://staging.api.example.com */
+            baseUrl: string;
+        };
+        UpdateEnvironmentDto: {
+            /** @example Staging */
+            name?: string;
+            /** @example https://staging.api.example.com */
+            baseUrl?: string;
+        };
         CreateScenarioDto: {
             /** @example Deploy to Production */
             title: string;
@@ -525,6 +623,8 @@ export interface components {
             /** @example deploy */
             subcategory?: string;
             steps?: unknown[];
+            /** @description Per-provider environment choice: { appId, environmentId }[] */
+            environmentSelections?: unknown[];
             /** @default false */
             published: boolean;
         };
@@ -673,6 +773,25 @@ export interface operations {
         };
     };
     ExecutionController_submitPage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    ExecutionController_submitInputs: {
         parameters: {
             query?: never;
             header?: never;
@@ -934,6 +1053,73 @@ export interface operations {
             };
         };
     };
+    AppsController_addEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateEnvironmentDto"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AppsController_deleteEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AppsController_updateEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateEnvironmentDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     ScenariosController_findByOwner: {
         parameters: {
             query?: {
@@ -1075,6 +1261,25 @@ export interface operations {
             };
         };
     };
+    ScenariosController_getManualInputs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     MarketplaceController_getCatalog: {
         parameters: {
             query?: {
@@ -1119,6 +1324,25 @@ export interface operations {
         };
     };
     MarketplaceController_getCard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    MarketplaceController_getManualInputs: {
         parameters: {
             query?: never;
             header?: never;

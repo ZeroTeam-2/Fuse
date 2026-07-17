@@ -133,8 +133,57 @@
         </div>
       </Card>
 
+      <!-- Окружения -->
+      <div v-else-if="tab === 'environments'">
+        <div
+          v-if="!store.distinctAppCount"
+          class="border border-dashed border-zinc-300 rounded-2xl px-6 py-14 flex flex-col items-center text-center"
+        >
+          <span
+            class="w-12 h-12 rounded-2xl bg-violet-50 text-violet-600 inline-flex items-center justify-center mb-4"
+          >
+            <Icon name="server" :size="22" />
+          </span>
+          <div class="font-sans text-[0.9375rem] text-zinc-600 max-w-[420px]">
+            Добавьте шаг с endpoint — и здесь можно будет выбрать окружение для каждого
+            поставщика. По умолчанию используется Prod.
+          </div>
+        </div>
+
+        <Card v-else padding="xl" class="flex flex-col gap-5">
+          <p class="font-sans text-[0.9375rem] text-zinc-500">
+            Для каждого поставщика выберите окружение, в котором будут исполняться его шаги.
+          </p>
+          <div
+            v-for="appId in store.distinctAppIds"
+            :key="appId"
+            class="flex flex-col sm:flex-row sm:items-center gap-3 border-b border-zinc-100 pb-4 last:border-0 last:pb-0"
+          >
+            <div class="flex items-center gap-2.5 sm:w-[220px] shrink-0">
+              <span
+                class="w-8 h-8 rounded-lg inline-flex items-center justify-center font-sans font-bold text-[0.8125rem] text-white shrink-0"
+                :style="{ background: '#6366f1' }"
+              >
+                {{ (appNames[appId] ?? "API").charAt(0) }}
+              </span>
+              <span class="font-sans text-[0.9375rem] font-semibold text-zinc-900 min-w-0 truncate">
+                {{ appNames[appId] ?? "API" }}
+              </span>
+            </div>
+            <div class="flex-1 min-w-0">
+              <Select
+                :model-value="selectedEnv(appId)"
+                :options="envOptions(appId)"
+                placeholder="Prod"
+                @update:model-value="setEnv(appId, $event ?? '')"
+              />
+            </div>
+          </div>
+        </Card>
+      </div>
+
       <!-- Настройка шагов -->
-      <div v-else>
+      <div v-else-if="tab === 'steps'">
         <div
           v-if="!store.stepCount"
           class="border border-dashed border-zinc-300 rounded-2xl px-6 py-14 flex flex-col items-center text-center"
@@ -221,7 +270,7 @@
 
 <script setup lang="ts">
 import { CATEGORIES } from "@fuse/shared";
-import type { Step, StepFilter, StepPage, StepSchema, StepType } from "@fuse/shared";
+import type { Environment, Step, StepFilter, StepPage, StepSchema, StepType } from "@fuse/shared";
 
 const { $api } = useNuxtApp() as any;
 const route = useRoute();
@@ -232,6 +281,7 @@ const scenarioId = route.params.id as string;
 const TABS = [
   { value: "main", label: "Основная" },
   { value: "steps", label: "Настройка шагов" },
+  { value: "environments", label: "Окружения" },
 ];
 
 const TYPE_LABELS: Record<string, string> = {
@@ -254,6 +304,7 @@ const form = reactive({ title: "", description: "", category: "", subcategory: "
 
 const appNames = ref<Record<string, string>>({});
 const schemas = ref<StepSchema[]>([]);
+const appEnvironments = ref<Record<string, Environment[]>>({});
 
 const pickedType = ref<{ key: StepType; title: string } | null>(null);
 const configIndex = ref<number | null>(null);
@@ -379,11 +430,16 @@ async function loadSchemas() {
 }
 
 // Steps are persisted on every change, then schemas are re-resolved because the
-// backend derives them from the saved order.
+// backend derives them from the saved order. Environment choices ride along so
+// providers dropped with their last step lose their stale selection too.
 async function persistSteps() {
   if (!store.scenario) return;
+  store.pruneEnvironmentSelections();
   const { error: apiError } = await $api.PATCH(`/api/scenarios/${scenarioId}`, {
-    body: { steps: store.scenario.steps },
+    body: {
+      steps: store.scenario.steps,
+      environmentSelections: store.scenario.environmentSelections ?? [],
+    },
   });
   if (apiError) {
     error.value = "Не удалось сохранить шаги";
@@ -391,6 +447,42 @@ async function persistSteps() {
   }
   error.value = "";
   await loadSchemas();
+  await loadEnvironmentsForApps();
+}
+
+// Environments of every provider used in the scenario. Fetched per app (GET by
+// id also seeds a legacy app's Prod), so the tab can offer them in a Select.
+async function loadEnvironmentsForApps() {
+  await Promise.all(
+    store.distinctAppIds.map(async (id) => {
+      if (appEnvironments.value[id]) return;
+      const { data } = await $api.GET(`/api/apps/${id}`, {});
+      if (data) appEnvironments.value[id] = data.environments ?? [];
+    }),
+  );
+}
+
+function envOptions(appId: string) {
+  return (appEnvironments.value[appId] ?? []).map((e) => ({
+    value: e.id,
+    label: e.name,
+    description: e.variables.find((v) => v.key === "baseUrl")?.value,
+  }));
+}
+
+function selectedEnv(appId: string): string {
+  const sel = store.scenario?.environmentSelections?.find((s) => s.appId === appId);
+  if (sel) return sel.environmentId;
+  const prod = (appEnvironments.value[appId] ?? []).find((e) => e.name === "Prod");
+  return prod?.id ?? "";
+}
+
+async function setEnv(appId: string, environmentId: string) {
+  store.setEnvironmentSelection(appId, environmentId);
+  if (!store.scenario) return;
+  await $api.PATCH(`/api/scenarios/${scenarioId}`, {
+    body: { environmentSelections: store.scenario.environmentSelections },
+  });
 }
 
 function pickType(t: { key: StepType; title: string }) {
@@ -495,6 +587,7 @@ onMounted(async () => {
   try {
     await Promise.all([loadScenario(), loadApps()]);
     await loadSchemas();
+    await loadEnvironmentsForApps();
   } finally {
     loading.value = false;
   }
