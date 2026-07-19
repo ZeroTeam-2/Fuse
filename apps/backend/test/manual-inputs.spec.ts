@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { SchemaField, Step, StepPage, StepSchema } from "@fuse/shared";
 import {
   enumerateManualInputs,
-  mapPageDataToLocalKeys,
+  mapPageDataToOutputs,
   missingRequiredKeys,
   sliceInputsForStep,
   type ManualInputDeps,
@@ -83,14 +83,12 @@ describe("enumerateManualInputs", () => {
       paramKey: "orgId",
       label: "ИНН организации",
       required: true,
-      source: "form",
     });
     expect(paramInput).toMatchObject({
       kind: "param",
       stepIndex: 2,
       label: "Тема",
       required: false,
-      source: "form",
     });
   });
 
@@ -135,47 +133,29 @@ describe("enumerateManualInputs", () => {
     expect(result.map((d) => d.key)).toEqual(["s0.s0:id"]);
   });
 
-  it("marks a value bound by a page input block as asked by the page", async () => {
+  it("does not create descriptors for a page step", async () => {
     const page: StepPage = {
       title: "Данные",
       rows: [
         {
           id: "r1",
           items: [
-            { id: "b1", type: "input", span: 4, label: "ИНН организации", binding: "inn" },
+            { id: "b1", type: "input", span: 4, label: "ИНН организации", binding: "inn", required: true },
           ],
         },
       ],
     };
 
     const steps = [
-      apiStep("Организация", {
-        mappings: { inn: "user", region: "user" },
-        page,
-      }),
+      { id: "p1", title: "Страница", type: "page", page } as Step,
+      apiStep("Организация", { mappings: { inn: "s0:inn", region: "user" } }),
     ];
-
-    const result = await enumerateManualInputs(
-      steps,
-      deps({ Организация: { inputs: [INN_FIELD], outputs: [] } }),
-    );
-
-    expect(result.find((d) => d.paramKey === "inn")?.source).toBe("page");
-    expect(result.find((d) => d.paramKey === "region")?.source).toBe("form");
-  });
-
-  it("does not cover a value when the input block has no binding", async () => {
-    const page: StepPage = {
-      title: "Данные",
-      rows: [{ id: "r1", items: [{ id: "b1", type: "input", span: 4, label: "ИНН" }] }],
-    };
-
-    const steps = [apiStep("Организация", { mappings: { inn: "user" }, page })];
 
     const result = await enumerateManualInputs(steps, deps());
 
-    // Без привязки блок ничего не закрывает — значение спросит общая форма.
-    expect(result[0].source).toBe("form");
+    // Значения страницы собирает сама страница по ходу исполнения; форма
+    // запуска спрашивает только оставшийся ручной ввод других шагов.
+    expect(result.map((d) => d.key)).toEqual(["s1:region"]);
   });
 
   it("skips a broken step instead of failing the whole enumeration", async () => {
@@ -209,33 +189,31 @@ describe("input scoping", () => {
   });
 });
 
-describe("mapPageDataToLocalKeys", () => {
-  it("translates page block ids into the step values they are bound to", () => {
-    const step = apiStep("Организация", {
-      page: {
-        title: "Данные",
-        rows: [
-          {
-            id: "r1",
-            items: [
-              { id: "инн_организации", type: "input", span: 2, binding: "inn" },
-              { id: "статус", type: "select", span: 2, binding: "filter:orgId" },
-              { id: "comment", type: "input", span: 4 },
-            ],
-          },
-        ],
-      },
-    });
+describe("mapPageDataToOutputs", () => {
+  it("translates page block ids into the output keys of the page step", () => {
+    const page: StepPage = {
+      title: "Данные",
+      rows: [
+        {
+          id: "r1",
+          items: [
+            { id: "инн_организации", type: "input", span: 2, binding: "inn" },
+            { id: "статус", type: "select", span: 2, binding: "status" },
+            { id: "comment", type: "input", span: 2 },
+          ],
+        },
+      ],
+    };
 
     expect(
-      mapPageDataToLocalKeys(step, {
+      mapPageDataToOutputs(page, {
         инн_организации: "7707083893",
         статус: "active",
         comment: "как есть",
       }),
     ).toEqual({
       inn: "7707083893",
-      "filter:orgId": "active",
+      status: "active",
       comment: "как есть",
     });
   });

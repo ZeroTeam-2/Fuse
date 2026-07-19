@@ -3,7 +3,9 @@ import type {
   PageBlockCategory,
   PageBlockType,
   PageRow,
+  SchemaField,
   StepPage,
+  StepSchema,
 } from "../types";
 
 /** Все типы блоков палитры, сгруппированные позже по категории. */
@@ -39,6 +41,57 @@ export function pageBlocks(page: StepPage | undefined): PageBlock[] {
 /** Число размещённых на странице элементов — им конструктор подписывает шаг. */
 export function pageBlockCount(page: StepPage | undefined): number {
   return pageBlocks(page).length;
+}
+
+/** Ключ, под которым значение блока ввода попадает в результат шага-страницы. */
+export function blockOutputKey(block: PageBlock): string {
+  return block.binding || block.id;
+}
+
+/**
+ * Отображаемое имя выхода блока — что видит человек в сводке шага и в пикере
+ * полей следующего шага: кастомный ключ, если задан, иначе лейбл блока, иначе
+ * технический id (последний — только у блока без лейбла и ключа).
+ */
+export function blockOutputName(block: PageBlock): string {
+  return block.binding || block.label || block.id;
+}
+
+/** Формат ключа выхода — как у ключей параметров: латиница/цифры/подчёркивание. */
+export const OUTPUT_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * Ключи выходов, встречающиеся у блоков ввода страницы более одного раза.
+ * Непустой список — страница невалидна: маппинг `s{idx}:{key}` стал бы
+ * неоднозначным. Валидируют и инспектор конструктора, и сервер при сохранении.
+ */
+export function duplicateOutputKeys(page: StepPage | undefined): string[] {
+  const seen = new Set<string>();
+  const dupes = new Set<string>();
+  for (const block of pageBlocks(page).filter(isInputBlock)) {
+    const key = blockOutputKey(block);
+    if (seen.has(key)) dupes.add(key);
+    seen.add(key);
+  }
+  return [...dupes];
+}
+
+/**
+ * Схема шага-страницы для маппинга следующих шагов: выходы — блоки ввода
+ * (`dropzone` — файл, остальные — строка), входов в смысле маппинга нет —
+ * входной контекст страницы (блоки отображения, `optionsSource`) резолвится
+ * напрямую из результатов пройденных шагов.
+ */
+export function pageStepSchema(page: StepPage | undefined): StepSchema {
+  const outputs: SchemaField[] = pageBlocks(page)
+    .filter(isInputBlock)
+    .map((block) => ({
+      key: blockOutputKey(block),
+      label: blockOutputName(block),
+      type: block.type === "dropzone" ? "file" : "string",
+    }));
+
+  return { inputs: [], outputs, outputIsArray: false };
 }
 
 /**

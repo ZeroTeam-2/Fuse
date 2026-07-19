@@ -15,7 +15,7 @@ import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { StepType } from "@fuse/shared";
-import type { ApiStep, DelayStep, SchemaField } from "@fuse/shared";
+import type { ApiStep, DelayStep, PageStep, SchemaField } from "@fuse/shared";
 
 const rootDir = resolve(import.meta.dirname, "../../..");
 
@@ -52,6 +52,7 @@ const SEED_APP_NAME = "Mock API (seed)";
 const SEED_ENDPOINT_ID = "seed-echo";
 const DELAY_SCENARIO_TITLE = "Демо: задержка";
 const API_SCENARIO_TITLE = "Демо: запрос к API";
+const PAGE_SCENARIO_TITLE = "Демо: страницы";
 
 const endpointInputs: SchemaField[] = [
   { key: "query", label: "Запрос", type: "string", loc: "body", required: true },
@@ -130,6 +131,82 @@ const apiStep: ApiStep = {
   consts: { query: "7707083893" },
 };
 
+// Полный поток страниц: ввод на странице → значение в api-шаг маппингом
+// `s0:inn` → финальная display-страница с данными ответа. На этом сценарии
+// проверяется семантика page-шагов (пауза, выходы, неблокирующий финал).
+const pageInputStep: PageStep = {
+  id: "step-page-input",
+  title: "Ввод данных",
+  type: StepType.PAGE,
+  page: {
+    title: "Ввод данных",
+    rows: [
+      {
+        id: "r-hint",
+        items: [
+          {
+            id: "b-hint",
+            type: "paragraph",
+            span: 6,
+            text: "Укажите ИНН — сценарий отправит его в эхо-API.",
+          },
+        ],
+      },
+      {
+        id: "r-inn",
+        items: [
+          {
+            id: "b-inn",
+            type: "input",
+            span: 6,
+            label: "ИНН",
+            placeholder: "7707083893",
+            binding: "inn",
+            required: true,
+          },
+        ],
+      },
+    ],
+  },
+};
+
+const pageEchoStep: ApiStep = {
+  id: "step-page-echo",
+  title: "Эхо-запрос",
+  type: StepType.API,
+  appId,
+  endpointId: SEED_ENDPOINT_ID,
+  method: "POST",
+  path: "/post",
+  mappings: { query: "s0:inn" },
+};
+
+const pageResultStep: PageStep = {
+  id: "step-page-result",
+  title: "Результат",
+  type: StepType.PAGE,
+  page: {
+    title: "Результат",
+    rows: [
+      {
+        id: "r-done",
+        items: [
+          {
+            id: "b-done",
+            type: "paragraph",
+            span: 6,
+            text: "Готово! Ниже — адрес, на который ушёл запрос.",
+          },
+        ],
+      },
+      {
+        id: "r-url",
+        items: [{ id: "b-url", type: "paragraph", span: 6, binding: "s1:url" }],
+      },
+    ],
+  },
+};
+
 async function upsertScenario(title: string, description: string, steps: unknown[]) {
   await db!.collection("scenarios").updateOne(
     { ownerId, title },
@@ -154,13 +231,18 @@ const apiScenarioId = await upsertScenario(
   "Сценарий с api-шагом к локальному мок-API.",
   [apiStep],
 );
+const pageScenarioId = await upsertScenario(
+  PAGE_SCENARIO_TITLE,
+  "Страница ввода → эхо-запрос → финальная страница с ответом.",
+  [pageInputStep, pageEchoStep, pageResultStep],
+);
 
 // Тестам нужны id сид-сущностей (e2e входит под этим пользователем и запускает
 // этот сценарий). Файл в .gitignore — он локальный артефакт, как и сами данные.
 await writeFile(
   resolve(rootDir, ".seed.json"),
   `${JSON.stringify(
-    { userId: ownerId, email: SEED_USER_EMAIL, appId, delayScenarioId, apiScenarioId },
+    { userId: ownerId, email: SEED_USER_EMAIL, appId, delayScenarioId, apiScenarioId, pageScenarioId },
     null,
     2,
   )}\n`,
@@ -175,7 +257,9 @@ const counts = {
 console.log("Сид выполнен:");
 console.log(`  пользователь: ${SEED_USER_EMAIL} (id ${ownerId})`);
 console.log(`  приложение:   ${SEED_APP_NAME} → ${MOCK_API_URL}`);
-console.log(`  сценарии:     «${DELAY_SCENARIO_TITLE}», «${API_SCENARIO_TITLE}»`);
+console.log(
+  `  сценарии:     «${DELAY_SCENARIO_TITLE}», «${API_SCENARIO_TITLE}», «${PAGE_SCENARIO_TITLE}»`,
+);
 console.log(`  всего: users=${counts.users} apps=${counts.apps} scenarios=${counts.scenarios}`);
 console.log("  id сущностей записаны в .seed.json (нужны e2e-тестам)");
 

@@ -10,7 +10,12 @@ import type {
   StepPage,
   StepSchema,
 } from "@fuse/shared";
-import { blockCategory } from "@fuse/shared";
+import {
+  OUTPUT_KEY_PATTERN,
+  blockCategory,
+  blockOutputKey,
+  duplicateOutputKeys,
+} from "@fuse/shared";
 
 const props = defineProps<{
   step: Step;
@@ -71,10 +76,13 @@ function starterRows(): PageRow[] {
 }
 
 // ---- Состояние -----------------------------------------------------------
-const title = ref(props.step.page?.title || props.step.title || "Страница шага");
+// Конструктор открывается только для шага «Страница»; раскладка копируется,
+// чтобы правки не текли в стор до «Готово».
+const initialPage = props.step.type === "page" ? props.step.page : undefined;
+const title = ref(initialPage?.title || props.step.title || "Страница шага");
 const rows = ref<PageRow[]>(
-  props.step.page?.rows?.length
-    ? (JSON.parse(JSON.stringify(props.step.page.rows)) as PageRow[])
+  initialPage?.rows?.length
+    ? (JSON.parse(JSON.stringify(initialPage.rows)) as PageRow[])
     : starterRows(),
 );
 
@@ -105,26 +113,6 @@ interface BindOption {
   label: string;
   description?: string;
 }
-/**
- * Ввод: ЛЮБОЙ входной параметр этого шага, а не только заранее помеченный
- * «Ручной ввод». Сама привязка объявляет параметр заполняемым пользователем —
- * источник проставится на сохранении. Плюс уже настроенные операнды условий
- * фильтрации, чтобы их привязку не потерять.
- */
-const inputBindings = computed<BindOption[]>(() => {
-  const inputs = props.schemas[props.stepIndex]?.inputs ?? [];
-  // Показываем оригинальный ключ параметра (query), а не русскую подпись —
-  // редактор мыслит техническими именами входов шага. Подпись уходит в описание.
-  const opts: BindOption[] = inputs.map((f) => ({
-    value: f.key,
-    label: f.key,
-    description: f.label && f.label !== f.key ? `${f.label} · ${f.type}` : f.type,
-  }));
-  for (const [key, filter] of Object.entries(props.step.filters ?? {})) {
-    opts.push({ value: `filter:${key}`, label: `filter:${filter.field}` });
-  }
-  return opts;
-});
 /** Отображение: выходы только предыдущих шагов, у которых есть выходы. */
 const displayBindings = computed<BindOption[]>(() => {
   const opts: BindOption[] = [];
@@ -139,9 +127,9 @@ const displayBindings = computed<BindOption[]>(() => {
   return opts;
 });
 /**
- * Источник вариантов select — выходы предыдущих шагов техническими ключами
- * (`cars`). Массивное поле развернётся в список опций на рантайме; тип поля
- * подсказан в описании, чтобы было видно, где массив.
+ * Источник вариантов select — выходы предыдущих шагов. Массивное поле
+ * развернётся в список опций на рантайме; тип поля подсказан в описании,
+ * чтобы было видно, где массив.
  */
 const optionSourceBindings = computed<BindOption[]>(() => {
   const opts: BindOption[] = [];
@@ -150,7 +138,7 @@ const optionSourceBindings = computed<BindOption[]>(() => {
     if (!outputs.length) continue;
     const stepTitle = props.steps[i]?.title || `Шаг ${i + 1}`;
     for (const o of outputs) {
-      opts.push({ value: `s${i}:${o.key}`, label: o.key, description: `${o.type} · Шаг ${i + 1} · ${stepTitle}` });
+      opts.push({ value: `s${i}:${o.key}`, label: o.label || o.key, description: `${o.type} · Шаг ${i + 1} · ${stepTitle}` });
     }
   }
   return opts;
@@ -159,20 +147,58 @@ const optionSourceSelectOptions = computed(() => [
   { value: "", label: "Не выбрано" },
   ...optionSourceBindings.value,
 ]);
-function bindingsFor(block: PageBlock): BindOption[] {
-  return blockCategory(block.type) === "input" ? inputBindings.value : displayBindings.value;
-}
 const bindingSelectOptions = computed(() => {
   if (!selected.value) return [];
-  return [{ value: "", label: "Не привязано" }, ...bindingsFor(selected.value.block)];
+  return [{ value: "", label: "Не привязано" }, ...displayBindings.value];
 });
 
-/** Человекочитаемое имя привязки для чипа на блоке (label, а не сырой ключ). */
+/**
+ * Чип на блоке: у блока ввода — его ключ выхода (под ним значение попадёт в
+ * результат шага), у блока отображения — подпись привязанного поля источника.
+ */
 function bindingLabel(block: PageBlock): string {
+  if (blockCategory(block.type) === "input") return blockOutputKey(block);
   if (!block.binding) return "";
-  const opt = bindingsFor(block).find((o) => o.value === block.binding);
+  const opt = displayBindings.value.find((o) => o.value === block.binding);
   return opt?.label ?? block.binding;
 }
+
+// ---- Ключи выходов блоков ввода -------------------------------------------
+/**
+ * Ключ выхода валидируется на месте: формат идентификатора и уникальность в
+ * пределах страницы. С ошибками «Готово» недоступно — иначе их же вернул бы
+ * сервер при сохранении шагов.
+ */
+function outputKeyError(block: PageBlock): string {
+  if (block.binding && !OUTPUT_KEY_PATTERN.test(block.binding)) {
+    return "Только латиница, цифры и подчёркивание, не с цифры.";
+  }
+  const key = blockOutputKey(block);
+  const clash = rows.value
+    .flatMap((r) => r.items)
+    .some(
+      (b) =>
+        b.id !== block.id &&
+        blockCategory(b.type) === "input" &&
+        blockOutputKey(b) === key,
+    );
+  return clash ? `Ключ «${key}» уже занят другим блоком.` : "";
+}
+
+const hasKeyErrors = computed(() => {
+  const page: StepPage = { title: title.value, rows: rows.value };
+  if (duplicateOutputKeys(page).length > 0) return true;
+  return rows.value
+    .flatMap((r) => r.items)
+    .some(
+      (b) =>
+        blockCategory(b.type) === "input" &&
+        b.binding &&
+        !OUTPUT_KEY_PATTERN.test(b.binding),
+    );
+});
+
+const canSave = computed(() => totalItems.value > 0 && !hasKeyErrors.value);
 
 // ---- Мутации -------------------------------------------------------------
 function select(id: string) {
@@ -205,6 +231,9 @@ function patchSelected(p: Partial<PageBlock>) {
 }
 function onBindingChange(value: string) {
   patchSelected({ binding: value || undefined });
+}
+function onOutputKeyChange(value: string) {
+  patchSelected({ binding: value.trim() || undefined });
 }
 
 // ---- Варианты select -----------------------------------------------------
@@ -405,6 +434,7 @@ onBeforeUnmount(() => document.removeEventListener("keydown", onKey));
 
 // ---- Сохранение ----------------------------------------------------------
 function save() {
+  if (!canSave.value) return;
   const page: StepPage = { title: title.value, rows: JSON.parse(JSON.stringify(rows.value)) };
   emit("save", page);
   emit("close");
@@ -434,7 +464,7 @@ function save() {
       </div>
       <span class="font-sans text-[0.8125rem] text-zinc-400">{{ totalItems }} элем.</span>
       <Button variant="secondary" @click="emit('close')">Отмена</Button>
-      <Button variant="dark" @click="save">
+      <Button variant="dark" :disabled="!canSave" @click="save">
         <template #left><Icon name="check" :size="16" /></template>
         Готово
       </Button>
@@ -758,35 +788,51 @@ function save() {
         </div>
 
         <div class="px-5 py-5 flex flex-col gap-4">
-          <!-- привязка -->
-          <div>
+          <!-- ключ выхода (ввод) / привязка к источнику (отображение) -->
+          <div v-if="blockCategory(selected.block.type) === 'input'">
             <div class="flex items-center gap-2 mb-2.5">
-              <span
-                :class="[
-                  'w-1.5 h-1.5 rounded-full shrink-0',
-                  blockCategory(selected.block.type) === 'input' ? 'bg-indigo-500' : 'bg-violet-500',
-                ]"
-              />
+              <span class="w-1.5 h-1.5 rounded-full shrink-0 bg-indigo-500" />
+              <span class="font-sans text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-zinc-500">
+                Ключ выхода
+              </span>
+            </div>
+            <Input
+              :model-value="selected.block.binding || ''"
+              mono
+              :placeholder="selected.block.id"
+              @update:model-value="onOutputKeyChange(String($event))"
+            />
+            <p
+              v-if="outputKeyError(selected.block)"
+              class="font-sans text-[0.75rem] text-rose-600 mt-2"
+            >
+              {{ outputKeyError(selected.block) }}
+            </p>
+            <p v-else class="font-sans text-[0.75rem] text-zinc-400 mt-2">
+              Под этим ключом введённое значение попадёт в результат шага — его
+              заберут маппинги следующих шагов. Пусто — используется id блока.
+            </p>
+          </div>
+
+          <div v-else>
+            <div class="flex items-center gap-2 mb-2.5">
+              <span class="w-1.5 h-1.5 rounded-full shrink-0 bg-violet-500" />
               <span class="font-sans text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-zinc-500">
                 Привязка к данным
               </span>
             </div>
             <Select
-              :label="blockCategory(selected.block.type) === 'input' ? 'Входной параметр шага' : 'Поле результата пройденного шага'"
+              label="Поле результата пройденного шага"
               :model-value="selected.block.binding || ''"
               :options="bindingSelectOptions"
               placeholder="Не привязано"
               @change="onBindingChange"
             />
             <p
-              v-if="!bindingsFor(selected.block).length"
+              v-if="!displayBindings.length"
               class="font-sans text-[0.75rem] text-amber-600 mt-2"
             >
-              {{
-                blockCategory(selected.block.type) === "input"
-                  ? "У шага нет входных параметров для привязки."
-                  : "У предыдущих шагов нет выходов для привязки."
-              }}
+              У предыдущих шагов нет выходов для привязки.
             </p>
           </div>
 
