@@ -13,6 +13,7 @@ import { AppsModule } from "./apps/apps.module";
 import { ScenariosModule } from "./scenarios/scenarios.module";
 import { MarketplaceModule } from "./marketplace/marketplace.module";
 import { UploadsModule } from "./uploads/uploads.module";
+import { NotificationsModule } from "./notifications/notifications.module";
 import { LoggingModule } from "./logging/logging.module";
 import { JwtAuthGuard } from "./auth/guards/jwt-auth.guard";
 
@@ -52,6 +53,7 @@ import { JwtAuthGuard } from "./auth/guards/jwt-auth.guard";
     ScenariosModule,
     MarketplaceModule,
     UploadsModule,
+    NotificationsModule,
     LoggingModule,
   ],
   providers: [

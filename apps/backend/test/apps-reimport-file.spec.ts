@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from "vitest";
 vi.mock("@nestjs/mongoose", () => ({
   Prop: () => () => {},
   Schema: () => (cls: any) => cls,
-  SchemaFactory: { createForClass: () => ({}) },
+  SchemaFactory: { createForClass: () => ({ index: () => ({}) }) },
   InjectModel: () => () => {},
 }));
 
