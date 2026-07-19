@@ -64,6 +64,11 @@ function scenarioModelStub(steps: Step[]) {
 
 const config = { get: vi.fn().mockReturnValue("http://queue") } as any;
 const gateway = { publish: vi.fn() } as any;
+const minio = { deleteFile: vi.fn(), getPresignedUrl: vi.fn() } as any;
+const notifications = {
+  notifyRunEvent: vi.fn().mockResolvedValue(undefined),
+  deleteForRun: vi.fn().mockResolvedValue(undefined),
+} as any;
 
 function manualInputsStub(required: boolean) {
   return {
@@ -93,6 +98,8 @@ describe("ExecutionService — run inputs", () => {
       config,
       gateway,
       manualInputsStub(true),
+      minio,
+      notifications,
     );
 
     const run = await service.createRun("u1", "sc1", { "s0:inn": "7707083893" });
@@ -108,6 +115,8 @@ describe("ExecutionService — run inputs", () => {
       config,
       gateway,
       manualInputsStub(true),
+      minio,
+      notifications,
     );
 
     await expect(service.createRun("u1", "sc1", {})).rejects.toThrow(
@@ -123,6 +132,8 @@ describe("ExecutionService — run inputs", () => {
       config,
       gateway,
       manualInputsStub(false),
+      minio,
+      notifications,
     );
 
     await expect(service.createRun("u1", "sc1")).resolves.toBeTruthy();
@@ -132,6 +143,7 @@ describe("ExecutionService — run inputs", () => {
 describe("ExecutionService — mid-run input submit", () => {
   it("merges submitted values into Run.inputs so a worker restart does not re-ask", async () => {
     const runModel = runModelStub({
+      userId: "u1",
       status: RunStatus.WAITING_INPUT,
       currentStep: 2,
       inputs: { "s0:inn": "7707083893" },
@@ -143,9 +155,11 @@ describe("ExecutionService — mid-run input submit", () => {
       config,
       gateway,
       manualInputsStub(true),
+      minio,
+      notifications,
     );
 
-    await service.submitInputs("run-1", 2, { "s2:subject": "Привет" });
+    await service.submitInputs("run-1", "u1", 2, { "s2:subject": "Привет" });
 
     const update = runModel.findByIdAndUpdate.mock.calls[0][1].$set;
     expect(update.inputs).toEqual({
@@ -167,20 +181,23 @@ describe("ExecutionService — mid-run input submit", () => {
 
   it("refuses input for a run that is not waiting", async () => {
     const service = new ExecutionService(
-      runModelStub({ status: RunStatus.RUNNING, currentStep: 2 }),
+      runModelStub({ userId: "u1", status: RunStatus.RUNNING, currentStep: 2 }),
       scenarioModelStub([]),
       config,
       gateway,
       manualInputsStub(true),
+      minio,
+      notifications,
     );
 
-    await expect(service.submitInputs("run-1", 2, {})).rejects.toThrow(
+    await expect(service.submitInputs("run-1", "u1", 2, {})).rejects.toThrow(
       BadRequestException,
     );
   });
 
   it("writes page data into the pendingInput mailbox", async () => {
     const runModel = runModelStub({
+      userId: "u1",
       status: RunStatus.WAITING_INPUT,
       currentStep: 1,
     });
@@ -191,9 +208,11 @@ describe("ExecutionService — mid-run input submit", () => {
       config,
       gateway,
       manualInputsStub(true),
+      minio,
+      notifications,
     );
 
-    await service.submitPageData("run-1", 1, { инн: "77" });
+    await service.submitPageData("run-1", "u1", 1, { инн: "77" });
 
     expect(runModel.findByIdAndUpdate.mock.calls[0][1].$set.pendingInput).toEqual({
       stepIndex: 1,

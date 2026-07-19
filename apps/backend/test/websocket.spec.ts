@@ -4,7 +4,7 @@ import { RunStatus } from "@fuse/shared";
 vi.mock("@nestjs/mongoose", () => ({
   Prop: () => () => {},
   Schema: () => (cls: any) => cls,
-  SchemaFactory: { createForClass: () => ({}) },
+  SchemaFactory: { createForClass: () => ({ index: () => ({}) }) },
   InjectModel: () => () => {},
 }));
 

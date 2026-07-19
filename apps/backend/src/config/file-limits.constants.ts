@@ -22,6 +22,12 @@ export const DEFAULT_SPEC_URL_FETCH_MAX_MB = 10;
 /** Размер одной части при чанковой загрузке. */
 export const DEFAULT_UPLOAD_PART_SIZE_MB = 5;
 
+/**
+ * Лимит файлового ответа внешнего API, сохраняемого воркером в S3 как артефакт
+ * запуска. Тело буферизуется в памяти воркера целиком, поэтому потолок жёсткий.
+ */
+export const DEFAULT_RUN_ARTIFACT_MAX_MB = 50;
+
 export function mbToBytes(mb: number): number {
   return mb * BYTES_PER_MB;
 }
