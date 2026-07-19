@@ -6,7 +6,7 @@ vi.mock("@nestjs/mongoose", () => ({
   Prop: () => () => {},
   Schema: () => (cls: any) => cls,
   SchemaFactory: {
-    createForClass: () => ({}),
+    createForClass: () => ({ index: () => ({}) }),
   },
   InjectModel: () => () => {},
 }));
@@ -108,6 +108,11 @@ describe("Run status transitions", () => {
       mockConfig as ConfigService,
       mockGateway as any,
       { forSteps: vi.fn().mockResolvedValue([]) } as any,
+      { deleteFile: vi.fn(), getPresignedUrl: vi.fn() } as any,
+      {
+        notifyRunEvent: vi.fn().mockResolvedValue(undefined),
+        deleteForRun: vi.fn().mockResolvedValue(undefined),
+      } as any,
     );
   });
 
@@ -149,39 +154,39 @@ describe("Run status transitions", () => {
 
   describe("running → cancelled", () => {
     it("cancelRun transitions RUNNING to CANCELLED", async () => {
-      const cancelledRun = { _id: "run-1", status: RunStatus.CANCELLED };
+      const cancelledRun = { _id: "run-1", userId: "u1", status: RunStatus.CANCELLED };
       setMockValues(
-        { _id: "run-1", status: RunStatus.RUNNING },
+        { _id: "run-1", userId: "u1", status: RunStatus.RUNNING },
         cancelledRun,
       );
 
-      const result = await service.cancelRun("run-1");
+      const result = await service.cancelRun("run-1", "u1");
       expect(result.status).toBe(RunStatus.CANCELLED);
     });
 
     it("cancelRun rejects when already COMPLETED", async () => {
-      setMockValues({ _id: "run-1", status: RunStatus.COMPLETED }, null);
-      await expect(service.cancelRun("run-1")).rejects.toThrow();
+      setMockValues({ _id: "run-1", userId: "u1", status: RunStatus.COMPLETED }, null);
+      await expect(service.cancelRun("run-1", "u1")).rejects.toThrow();
     });
 
     it("cancelRun rejects when already FAILED", async () => {
-      setMockValues({ _id: "run-1", status: RunStatus.FAILED }, null);
-      await expect(service.cancelRun("run-1")).rejects.toThrow();
+      setMockValues({ _id: "run-1", userId: "u1", status: RunStatus.FAILED }, null);
+      await expect(service.cancelRun("run-1", "u1")).rejects.toThrow();
     });
 
     it("cancelRun rejects when already CANCELLED", async () => {
-      setMockValues({ _id: "run-1", status: RunStatus.CANCELLED }, null);
-      await expect(service.cancelRun("run-1")).rejects.toThrow();
+      setMockValues({ _id: "run-1", userId: "u1", status: RunStatus.CANCELLED }, null);
+      await expect(service.cancelRun("run-1", "u1")).rejects.toThrow();
     });
 
     it("cancelRun succeeds when WAITING_INPUT", async () => {
-      const cancelledRun = { _id: "run-1", status: RunStatus.CANCELLED };
+      const cancelledRun = { _id: "run-1", userId: "u1", status: RunStatus.CANCELLED };
       setMockValues(
-        { _id: "run-1", status: RunStatus.WAITING_INPUT },
+        { _id: "run-1", userId: "u1", status: RunStatus.WAITING_INPUT },
         cancelledRun,
       );
 
-      const result = await service.cancelRun("run-1");
+      const result = await service.cancelRun("run-1", "u1");
       expect(result.status).toBe(RunStatus.CANCELLED);
     });
   });
@@ -195,41 +200,41 @@ describe("Run status transitions", () => {
         pageData: { name: "test" },
       };
       setMockValues(
-        { _id: "run-1", status: RunStatus.WAITING_INPUT, currentStep: 2 },
+        { _id: "run-1", userId: "u1", status: RunStatus.WAITING_INPUT, currentStep: 2 },
         runningRun,
       );
 
-      const result = await service.submitPageData("run-1", 2, { name: "test" });
+      const result = await service.submitPageData("run-1", "u1", 2, { name: "test" });
       expect(result.status).toBe(RunStatus.RUNNING);
     });
 
     it("submitPageData rejects when status is RUNNING", async () => {
       setMockValues(
-        { _id: "run-1", status: RunStatus.RUNNING, currentStep: 0 },
+        { _id: "run-1", userId: "u1", status: RunStatus.RUNNING, currentStep: 0 },
         null,
       );
       await expect(
-        service.submitPageData("run-1", 0, { foo: "bar" }),
+        service.submitPageData("run-1", "u1", 0, { foo: "bar" }),
       ).rejects.toThrow();
     });
 
     it("submitPageData rejects when status is COMPLETED", async () => {
       setMockValues(
-        { _id: "run-1", status: RunStatus.COMPLETED, currentStep: 5 },
+        { _id: "run-1", userId: "u1", status: RunStatus.COMPLETED, currentStep: 5 },
         null,
       );
       await expect(
-        service.submitPageData("run-1", 5, {}),
+        service.submitPageData("run-1", "u1", 5, {}),
       ).rejects.toThrow();
     });
 
     it("submitPageData rejects when stepIndex does not match currentStep", async () => {
       setMockValues(
-        { _id: "run-1", status: RunStatus.WAITING_INPUT, currentStep: 3 },
+        { _id: "run-1", userId: "u1", status: RunStatus.WAITING_INPUT, currentStep: 3 },
         null,
       );
       await expect(
-        service.submitPageData("run-1", 5, {}),
+        service.submitPageData("run-1", "u1", 5, {}),
       ).rejects.toThrow();
     });
   });

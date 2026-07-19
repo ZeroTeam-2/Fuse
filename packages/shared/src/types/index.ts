@@ -420,6 +420,20 @@ export interface Run {
   stepResults: RunStepResult[];
   currentStep: number;
   error?: string;
+  /** Входы запуска по скоуп-ключам — «Повторить запуск» шлёт их как есть. */
+  inputs?: Record<string, unknown>;
+  /** Реестр файлов запуска (артефакты + загрузки пользователя). */
+  files?: UploadedFileRef[];
+  /**
+   * Финальная display-only страница запуска с разрешёнными данными блоков —
+   * отформатированный итоговый экран для показа в результате запуска.
+   */
+  finalPage?: {
+    stepIndex: number;
+    stepTitle: string;
+    page: StepPage;
+    resolved?: Record<string, unknown>;
+  };
   createdAt: string;
   updatedAt: string;
 }
@@ -428,6 +442,47 @@ export interface CreateRunDto {
   scenarioId: string;
   /** Значения ручного ввода по скоуп-ключам (`s0:inn`, `s2.s0:filter:status`). */
   inputs?: Record<string, unknown>;
+}
+
+/**
+ * Ссылка на файл запуска в хранилище платформы: и загруженный пользователем
+ * вход (`uploads/...`), и артефакт — файловый ответ внешнего API, сохранённый
+ * воркером (`runs/{userId}/{runId}/...`). Форма совпадает с `UploadedFileRef`,
+ * поэтому клиент распознаёт оба через `isUploadedFileRef`.
+ */
+export type RunFileRef = UploadedFileRef;
+
+/** Элемент списка запусков — без тяжёлых полей (`stepResults`, `inputs`). */
+export interface RunListItem {
+  id: string;
+  scenarioId: string;
+  /** Денормализуется на лету; у удалённого сценария — плейсхолдер. */
+  scenarioTitle: string;
+  status: RunStatus;
+  currentStep: number;
+  totalSteps: number;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type NotificationType =
+  | "run_completed"
+  | "run_failed"
+  | "run_cancelled"
+  | "run_waiting_input";
+
+export interface RunNotification {
+  id: string;
+  userId: string;
+  runId: string;
+  scenarioId: string;
+  /** Денормализовано при создании — переживает удаление сценария. */
+  scenarioTitle: string;
+  type: NotificationType;
+  read: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 /**

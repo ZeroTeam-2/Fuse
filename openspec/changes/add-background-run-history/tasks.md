@@ -1,34 +1,34 @@
 ## 1. Shared: типы и события
 
-- [ ] 1.1 В `packages/shared/src/types/index.ts` добавить `RunFileRef` (алиас/расширение `UploadedFileRef`), `RunListItem` (id, scenarioId, scenarioTitle, status, createdAt, updatedAt, currentStep, totalSteps, error?), типы уведомлений (`Notification`, `NotificationType`: run_completed | run_failed | run_cancelled | run_waiting_input)
-- [ ] 1.2 В `packages/shared/src/events/index.ts` добавить события namespace уведомлений: `notification:new`, снапшот `notifications:snapshot` (`{ unreadCount }`)
+- [x] 1.1 В `packages/shared/src/types/index.ts` добавить `RunFileRef` (алиас/расширение `UploadedFileRef`), `RunListItem` (id, scenarioId, scenarioTitle, status, createdAt, updatedAt, currentStep, totalSteps, error?), типы уведомлений (`Notification`, `NotificationType`: run_completed | run_failed | run_cancelled | run_waiting_input)
+- [x] 1.2 В `packages/shared/src/events/index.ts` добавить события namespace уведомлений: `notification:new`, снапшот `notifications:snapshot` (`{ unreadCount }`)
 
 ## 2. Backend: реестр файлов и файловые ответы API (run-artifacts)
 
-- [ ] 2.1 В `run.schema.ts` добавить поле `files: RunFileRef[]` (default `[]`) и индекс `{ userId: 1, createdAt: -1 }`
-- [ ] 2.2 В `worker.service.ts` в `executeApiStep` (и финальном ответе `pollUntilComplete`) реализовать детект файлового ответа по `Content-Type`/`Content-Disposition`: json → JSON, text/* → строка, иначе → `arrayBuffer` → `minio.uploadFile('runs/{userId}/{runId}/{stepIndex}-{uuid}{ext}')`, результат шага = `RunFileRef`; лимит `RUN_ARTIFACT_MAX_BYTES` (превышение = StepExecutionError)
-- [ ] 2.3 Атомарно регистрировать артефакт в `run.files` (`$push`) вместе с записью результата шага (upload в S3 — до записи в Mongo)
-- [ ] 2.4 Регистрировать в `run.files` пользовательские `UploadedFileRef` из `createRun(inputs)`, `submitInputs` и `submitPageData` (обход значений с `isUploadedFileRef`)
-- [ ] 2.5 Endpoint `GET /api/runs/:id/file-link?objectName=...`: владелец запуска + objectName ∈ `run.files` → `getPresignedUrl`; иначе 403/404
+- [x] 2.1 В `run.schema.ts` добавить поле `files: RunFileRef[]` (default `[]`) и индекс `{ userId: 1, createdAt: -1 }`
+- [x] 2.2 В `worker.service.ts` в `executeApiStep` (и финальном ответе `pollUntilComplete`) реализовать детект файлового ответа по `Content-Type`/`Content-Disposition`: json → JSON, text/* → строка, иначе → `arrayBuffer` → `minio.uploadFile('runs/{userId}/{runId}/{stepIndex}-{uuid}{ext}')`, результат шага = `RunFileRef`; лимит `RUN_ARTIFACT_MAX_BYTES` (превышение = StepExecutionError)
+- [x] 2.3 Атомарно регистрировать артефакт в `run.files` (`$push`) вместе с записью результата шага (upload в S3 — до записи в Mongo)
+- [x] 2.4 Регистрировать в `run.files` пользовательские `UploadedFileRef` из `createRun(inputs)`, `submitInputs` и `submitPageData` (обход значений с `isUploadedFileRef`)
+- [x] 2.5 Endpoint `GET /api/runs/:id/file-link?objectName=...`: владелец запуска + objectName ∈ `run.files` → `getPresignedUrl`; иначе 403/404
 
 ## 3. Backend: список и удаление запусков (run-history)
 
-- [ ] 3.1 `GET /api/runs` в `execution.controller.ts`/`execution.service.ts`: фильтр `userId` из JWT, опциональный `status` (список через запятую), пагинация `PaginatedResponse<RunListItem>`, сортировка `createdAt: -1`, `.select()` без тяжёлых полей, батч-подгрузка названий сценариев («Сценарий удалён» при отсутствии)
-- [ ] 3.2 `DELETE /api/runs/:id`: владелец, только терминальный статус (иначе 409 с подсказкой отменить), каскад — S3-файлы из `files[]` (ошибки логировать, не прерывать) → уведомления запуска → документ `Run`
-- [ ] 3.3 Добавить проверку владельца в `cancelRun`, `submitPageData`, `submitInputs` (по образцу `getRun`)
-- [ ] 3.4 Отдавать `inputs` запуска в `GET /api/runs/:id` (нужно фронту для «Повторить запуск»)
+- [x] 3.1 `GET /api/runs` в `execution.controller.ts`/`execution.service.ts`: фильтр `userId` из JWT, опциональный `status` (список через запятую), пагинация `PaginatedResponse<RunListItem>`, сортировка `createdAt: -1`, `.select()` без тяжёлых полей, батч-подгрузка названий сценариев («Сценарий удалён» при отсутствии)
+- [x] 3.2 `DELETE /api/runs/:id`: владелец, только терминальный статус (иначе 409 с подсказкой отменить), каскад — S3-файлы из `files[]` (ошибки логировать, не прерывать) → уведомления запуска → документ `Run`
+- [x] 3.3 Добавить проверку владельца в `cancelRun`, `submitPageData`, `submitInputs` (по образцу `getRun`)
+- [x] 3.4 Отдавать `inputs` запуска в `GET /api/runs/:id` (нужно фронту для «Повторить запуск»)
 
 ## 4. Backend: уведомления (run-notifications)
 
-- [ ] 4.1 Модуль `notifications/`: схема `Notification` (userId, runId, scenarioId, scenarioTitle, type, read, timestamps; индексы `{userId, createdAt:-1}`, `{userId, read}`, уникальный `{runId, type}`), сервис с `notify(...)` (игнор duplicate-key)
-- [ ] 4.2 REST: `GET /api/notifications` (пагинация), `GET /api/notifications/unread-count`, `POST /api/notifications/:id/read`, `POST /api/notifications/read-all` — всё только для текущего пользователя
-- [ ] 4.3 Gateway namespace `notifications`: JWT из куки handshake, комната `user:{userId}`, снапшот `{ unreadCount }` при подключении, эмит `notification:new` из сервиса
-- [ ] 4.4 Вызвать `notify(...)` из воркера при переходах в `completed`/`failed`/`cancelled`/`waiting_input` (в `completeRun`/`failRun`/обработке отмены/паузы)
+- [x] 4.1 Модуль `notifications/`: схема `Notification` (userId, runId, scenarioId, scenarioTitle, type, read, timestamps; индексы `{userId, createdAt:-1}`, `{userId, read}`, уникальный `{runId, type}`), сервис с `notify(...)` (игнор duplicate-key)
+- [x] 4.2 REST: `GET /api/notifications` (пагинация), `GET /api/notifications/unread-count`, `POST /api/notifications/:id/read`, `POST /api/notifications/read-all` — всё только для текущего пользователя
+- [x] 4.3 Gateway namespace `notifications`: JWT из куки handshake, комната `user:{userId}`, снапшот `{ unreadCount }` при подключении, эмит `notification:new` из сервиса
+- [x] 4.4 Вызвать `notify(...)` из воркера при переходах в `completed`/`failed`/`cancelled`/`waiting_input` (в `completeRun`/`failRun`/обработке отмены/паузы)
 
 ## 5. Backend: проверка и типы
 
-- [ ] 5.1 Прогнать backend-тесты/линт; проверить Swagger-аннотации новых endpoint'ов
-- [ ] 5.2 Регенерировать типы фронта `pnpm gen:types` (нужен поднятый бэк; НЕ убивать живой dev-процесс пользователя — согласовать)
+- [x] 5.1 Прогнать backend-тесты/линт; проверить Swagger-аннотации новых endpoint'ов
+- [x] 5.2 Регенерировать типы фронта `pnpm gen:types` (нужен поднятый бэк; НЕ убивать живой dev-процесс пользователя — согласовать)
 
 ## 6. Frontend: колокольчик уведомлений
 
@@ -48,7 +48,14 @@
 - [ ] 8.1 В отображении результата шага/итога распознавать `RunFileRef` (`isUploadedFileRef`) и рендерить карточку файла (имя, размер, тип) вместо JSON
 - [ ] 8.2 Кнопка «Скачать»: запрос `GET /api/runs/:id/file-link` → открыть presigned URL
 
+## 10. Финальная display-страница как результат запуска
+
+- [x] 10.1 `Run.finalPage` в схеме + shared-типе; воркер в `executePageStep` сохраняет display-only страницу (page + resolved) в `Run.finalPage`, последняя перезаписывает предыдущую; `-finalPage` в проекции списка
+- [x] 10.2 История (`RunRow`): в панели «Результат» рендерить `RunPageRunner` из `details.finalPage`, если он есть, вместо сырых данных шага
+- [x] 10.3 `RunPanel`: при открытии завершённого запуска без живого `page:required` дочитывать `finalPage` из `GET /api/runs/:id` и показывать финальную страницу
+- [x] 10.4 Проверка: юнит-тесты зелёные; вживую — запуск «Демо: страницы» до конца, финальная markdown-страница видна и в истории, и по «Открыть результат»
+
 ## 9. Верификация
 
-- [ ] 9.1 Юнит-тесты: детект файлового ответа, каскад удаления, идемпотентность уведомлений (уникальный индекс), проверка владельца в list/delete/file-link
-- [ ] 9.2 E2E вручную по сиду: запуск сценария с файловым ответом (mock-api) → уйти со страницы → колокольчик → раздел «Запуски» → открыть результат → скачать файл → удалить запуск → файлы удалены из MinIO
+- [x] 9.1 Юнит-тесты: детект файлового ответа, каскад удаления, идемпотентность уведомлений (уникальный индекс), проверка владельца в list/delete/file-link
+- [x] 9.2 E2E вручную по сиду: запуск сценария с файловым ответом (mock-api) → уйти со страницы → колокольчик → раздел «Запуски» → открыть результат → скачать файл → удалить запуск → файлы удалены из MinIO

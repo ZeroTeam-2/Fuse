@@ -123,7 +123,19 @@
           <p class="font-sans text-[0.9375rem] text-zinc-900">{{ resultView.value }}</p>
         </Card>
 
-        <CodeBlock v-if="lastResult != null" :code="lastResult" label="Полный ответ" />
+        <!-- Данные результата: файл из S3 -->
+        <RunFileCard
+          v-else-if="resultView?.kind === 'file'"
+          :file="resultView.file"
+          :run-id="runId"
+          kind="output"
+        />
+
+        <CodeBlock
+          v-if="lastResult != null && resultView?.kind !== 'file'"
+          :code="lastResult"
+          label="Полный ответ"
+        />
 
         <Card v-if="stepTimings.length" padding="lg">
           <KeyValueGrid :items="stepTimings" :columns="1" />
@@ -184,8 +196,9 @@ import type {
   ServerWsEvent,
   RunStatusPayload,
   RunStepResult,
+  UploadedFileRef,
 } from "@fuse/shared";
-import { blockCategory } from "@fuse/shared";
+import { blockCategory, isUploadedFileRef } from "@fuse/shared";
 
 const props = defineProps<{ scenarioId: string }>();
 const emit = defineEmits<{
@@ -306,6 +319,7 @@ type ResultView =
   | { kind: "list"; count: number; items: ReturnType<typeof toItems>[] }
   | { kind: "object"; items: ReturnType<typeof toItems> }
   | { kind: "scalar"; value: string }
+  | { kind: "file"; file: UploadedFileRef }
   | null;
 
 const PREVIEW_LIMIT = 5;
@@ -313,6 +327,12 @@ const PREVIEW_LIMIT = 5;
 const resultView = computed<ResultView>(() => {
   const raw = lastResult.value;
   if (raw == null) return null;
+
+  // Файловый ответ API: воркер сохранил файл в S3 и оставил в результате
+  // ссылку — показываем карточку файла со скачиванием, а не JSON ссылки.
+  if (isUploadedFileRef(raw)) {
+    return { kind: "file", file: raw };
+  }
 
   if (Array.isArray(raw)) {
     const rows = raw
@@ -610,6 +630,9 @@ function applySnapshot(payload: RunStatusPayload) {
       if (currentPage.value && pageHasInputs(currentPage.value.page)) {
         currentPage.value = null;
       }
+      // Запуск открыт уже завершённым (из истории, по `?run=`) — живого
+      // `page:required` не было, финальную страницу берём из сохранённой.
+      if (!currentPage.value) void restoreFinalPage();
       pendingInputs.value = null;
       if (!totalDurationMs.value) {
         totalDurationMs.value = stepProgress.value.reduce(
@@ -648,6 +671,30 @@ function applySnapshot(payload: RunStatusPayload) {
     case "running":
       if (phase.value !== "waiting") phase.value = "running";
       break;
+  }
+}
+
+/**
+ * Финальный экран уже завершённого запуска: display-only страница с
+ * разрешёнными данными сохранена воркером в `Run.finalPage` — в снапшоте
+ * сокета её нет, поэтому дочитываем из БД. Живой запуск сюда не заходит: там
+ * `currentPage` уже выставлен событием `page:required`.
+ */
+async function restoreFinalPage() {
+  if (currentPage.value || !runId.value) return;
+  try {
+    const { data } = await $api.GET(`/api/runs/${runId.value}`, {});
+    const fp = (data as { finalPage?: PageState })?.finalPage;
+    if (fp?.page && !pageHasInputs(fp.page)) {
+      currentPage.value = {
+        stepIndex: fp.stepIndex,
+        stepTitle: fp.stepTitle,
+        page: fp.page,
+        resolved: fp.resolved,
+      };
+    }
+  } catch {
+    // Финальная страница — украшение результата; без неё показываем данные шага.
   }
 }
 

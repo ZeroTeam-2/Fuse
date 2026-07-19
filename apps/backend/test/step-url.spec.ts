@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("@nestjs/mongoose", () => ({
   Prop: () => () => {},
   Schema: () => (cls: any) => cls,
-  SchemaFactory: { createForClass: () => ({}) },
+  SchemaFactory: { createForClass: () => ({ index: () => ({}) }) },
   InjectModel: () => () => {},
 }));
 
@@ -52,6 +52,8 @@ function makeWorker(app: unknown) {
     gateway as any,
     ssrfGuard as any,
     manualInputs as any,
+    { getObjectBuffer: vi.fn() } as any,
+    { notifyRunEvent: vi.fn().mockResolvedValue(undefined) } as any,
   );
 
   return { worker, ssrfGuard };
