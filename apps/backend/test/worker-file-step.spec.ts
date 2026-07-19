@@ -5,7 +5,7 @@ import type { Step } from "@fuse/shared";
 vi.mock("@nestjs/mongoose", () => ({
   Prop: () => () => {},
   Schema: () => (cls: any) => cls,
-  SchemaFactory: { createForClass: () => ({}) },
+  SchemaFactory: { createForClass: () => ({ index: () => ({}) }) },
   InjectModel: () => () => {},
 }));
 
@@ -123,6 +123,7 @@ function harness(run: Record<string, unknown>, steps: Step[], app: unknown = APP
     { assertSafeUrl: vi.fn().mockResolvedValue(undefined) } as any,
     { forSteps: vi.fn().mockResolvedValue([]) } as any,
     minio as any,
+    { notifyRunEvent: vi.fn().mockResolvedValue(undefined) } as any,
   );
 
   // Опрос без реальных пауз.

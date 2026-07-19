@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  DEFAULT_RUN_ARTIFACT_MAX_MB,
   DEFAULT_SINGLE_UPLOAD_MAX_MB,
   DEFAULT_SPEC_FILE_MAX_MB,
   DEFAULT_SPEC_URL_FETCH_MAX_MB,
@@ -60,6 +61,10 @@ export const envSchema = z.object({
   SPEC_URL_FETCH_MAX_MB: z
     .string()
     .default(String(DEFAULT_SPEC_URL_FETCH_MAX_MB))
+    .transform(Number),
+  RUN_ARTIFACT_MAX_MB: z
+    .string()
+    .default(String(DEFAULT_RUN_ARTIFACT_MAX_MB))
     .transform(Number),
 
   LOG_COLLECTOR_URL: z.string().default(""),

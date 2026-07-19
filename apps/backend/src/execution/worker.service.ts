@@ -7,6 +7,7 @@ import {
 import { ConfigService } from "@nestjs/config";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
+import { randomUUID } from "node:crypto";
 import { Consumer } from "sqs-consumer";
 import { SQSClient } from "@aws-sdk/client-sqs";
 import {
@@ -26,6 +27,7 @@ import type {
   UploadedFileRef,
   EnvironmentSelection,
   ManualInputDescriptor,
+  RunFileRef,
   RunStepResult,
   SchemaField,
   ServerWsEvent,
@@ -37,6 +39,7 @@ import { SsrfGuard } from "../apps/ssrf-guard";
 import { joinBaseUrl, resolveAppBaseUrl } from "../apps/base-url";
 import { RunGateway } from "../websocket/run.gateway";
 import { MinioService } from "../minio/minio.service";
+import { NotificationsService } from "../notifications/notifications.service";
 import { resolveMappings, groupInputsByLocation } from "./mapping-resolver";
 import type { LocatedInputs } from "./mapping-resolver";
 import { ManualInputsService } from "./manual-inputs.service";
@@ -52,6 +55,17 @@ import {
   RunCancelledError,
   RunPausedError,
 } from "./execution-errors";
+import {
+  artifactExt,
+  artifactFileName,
+  baseMime,
+  isFileResponse,
+} from "./response-artifacts";
+import {
+  BYTES_PER_MB,
+  DEFAULT_RUN_ARTIFACT_MAX_MB,
+  mbToBytes,
+} from "../config/file-limits.constants";
 
 const POLL_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -67,6 +81,8 @@ function samePath(a: number[], b: number[]): boolean {
 
 interface StepContext {
   runId: string;
+  /** Владелец запуска — под его префиксом сохраняются артефакты в S3. */
+  userId: string;
   stepIndex: number;
   /** Путь до шага от корня запуска: `[3]` либо `[2, 0]` для шага вложенного сценария. */
   stepPath: number[];
@@ -106,6 +122,7 @@ export class WorkerService
     private readonly ssrfGuard: SsrfGuard,
     private readonly manualInputsService: ManualInputsService,
     private readonly minioService: MinioService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -301,6 +318,7 @@ export class WorkerService
       try {
         const ctx: StepContext = {
           runId,
+          userId: run.userId,
           stepIndex: i,
           stepPath: [i],
           stepResults: reloadedRun.stepResults as unknown as RunStepResult[],
@@ -433,6 +451,9 @@ export class WorkerService
       },
       timestamp: new Date().toISOString(),
     });
+
+    // Пользователь мог давно уйти со страницы — о завершении скажет колокольчик.
+    await this.notificationsService.notifyRunEvent(runId, "run_completed");
 
     this.logger.log(`Run ${runId} completed successfully`);
   }
@@ -630,11 +651,86 @@ export class WorkerService
       );
     }
 
-    const contentType = response.headers.get("content-type") ?? "";
-    if (contentType.includes("application/json")) {
+    return this.readApiResponse(response, ctx, step.title);
+  }
+
+  /**
+   * Тело ответа API-шага по типу содержимого: JSON — как объект, текст — как
+   * строку, файловое (не json/не text либо attachment) — бинарно в S3 как
+   * артефакт запуска; результатом шага становится `RunFileRef`. Раньше бинарный
+   * ответ проходил через `response.text()` и оседал испорченной строкой в Mongo.
+   */
+  private async readApiResponse(
+    response: Response,
+    ctx: StepContext,
+    stepTitle: string,
+  ): Promise<unknown> {
+    const contentType = response.headers.get("content-type");
+    const contentDisposition = response.headers.get("content-disposition");
+
+    if (isFileResponse(contentType, contentDisposition)) {
+      return this.saveFileResponse(response, ctx, stepTitle);
+    }
+
+    if (baseMime(contentType).includes("json")) {
       return response.json();
     }
     return response.text();
+  }
+
+  /** Файловый ответ → S3 (`runs/{userId}/{runId}/...`) + реестр `run.files`. */
+  private async saveFileResponse(
+    response: Response,
+    ctx: StepContext,
+    stepTitle: string,
+  ): Promise<RunFileRef> {
+    const contentType = response.headers.get("content-type");
+    const contentDisposition = response.headers.get("content-disposition");
+    const mime = baseMime(contentType) || "application/octet-stream";
+
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(await response.arrayBuffer());
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new StepExecutionError(
+        `Не удалось прочитать файловый ответ API: ${reason}`,
+      );
+    }
+
+    const maxMb =
+      this.configService.get<number>("RUN_ARTIFACT_MAX_MB") ??
+      DEFAULT_RUN_ARTIFACT_MAX_MB;
+    if (buffer.length > mbToBytes(maxMb)) {
+      throw new StepExecutionError(
+        `Файловый ответ API (${Math.ceil(buffer.length / BYTES_PER_MB)} МБ) превышает лимит ${maxMb} МБ`,
+      );
+    }
+
+    const fileName = artifactFileName(
+      contentDisposition,
+      contentType,
+      stepTitle,
+    );
+    const objectName = `runs/${ctx.userId}/${ctx.runId}/${ctx.stepPath.join("-")}-${randomUUID()}${artifactExt(fileName, contentType)}`;
+
+    await this.minioService.uploadFile(objectName, buffer, mime);
+
+    const fileRef: RunFileRef = {
+      objectName,
+      fileName,
+      fileSize: buffer.length,
+      fileType: mime,
+    };
+
+    // Объект уже в S3 — регистрация делает его видимым каскадному удалению.
+    // Упавший между upload и $push воркер оставит сироту в S3, но не битую
+    // запись в реестре.
+    await this.runModel
+      .updateOne({ _id: ctx.runId }, { $push: { files: fileRef } })
+      .exec();
+
+    return fileRef;
   }
 
   private applyPathParams(path: string, pathParams: Record<string, unknown>): string {
@@ -697,6 +793,7 @@ export class WorkerService
       step.pollIntervalSec,
       step.progressField,
       ctx,
+      step.title,
     );
   }
 
@@ -710,6 +807,7 @@ export class WorkerService
     intervalSec: number | undefined,
     progressField: string | undefined,
     ctx: StepContext,
+    stepTitle: string,
   ): Promise<unknown> {
     const intervalMs = (intervalSec ?? 5) * 1000;
     const startTime = Date.now();
@@ -734,6 +832,17 @@ export class WorkerService
         throw new StepExecutionError(
           `Poll failed: ${response.status} ${response.statusText}`,
         );
+      }
+
+      // Провайдер может отдать готовый файл прямо в ответе на опрос —
+      // это и есть завершение: сохраняем артефакт и выходим из цикла.
+      if (
+        isFileResponse(
+          response.headers.get("content-type"),
+          response.headers.get("content-disposition"),
+        )
+      ) {
+        return this.saveFileResponse(response, ctx, stepTitle);
       }
 
       const data = await response.json().catch(() => null);
@@ -821,6 +930,7 @@ export class WorkerService
       const nestedPath = [...ctx.stepPath, i];
       const nestedCtx: StepContext = {
         runId: ctx.runId,
+        userId: ctx.userId,
         stepIndex: i,
         stepPath: nestedPath,
         stepResults: nestedResults,
@@ -864,6 +974,10 @@ export class WorkerService
   ): Promise<unknown> {
     const inputBlocks = pageBlocks(step.page).filter(isInputBlock);
 
+    // Блоки отображения и динамические варианты select берут данные пройденных
+    // шагов: клиент их сам не видит, поэтому значения разрешаются здесь.
+    const resolved = resolvePageBindings(step.page, ctx.stepResults);
+
     const event: ServerWsEvent = {
       type: "page:required",
       runId: ctx.runId,
@@ -871,15 +985,31 @@ export class WorkerService
         stepIndex: ctx.stepIndex,
         stepTitle: step.title,
         page: step.page,
-        // Блоки отображения и динамические варианты select берут данные
-        // пройденных шагов: клиент их сам не видит, поэтому значения
-        // разрешаются здесь и едут в payload.
-        resolved: resolvePageBindings(step.page, ctx.stepResults),
+        resolved,
       },
       timestamp: new Date().toISOString(),
     };
 
     if (inputBlocks.length === 0) {
+      // Display-only страница — итоговый экран результата. Сохраняем её с уже
+      // разрешёнными данными: живого `page:required` при просмотре из истории
+      // или повторном открытии уже не будет. Последняя такая страница
+      // перезаписывает предыдущую — она и есть финальный экран.
+      await this.runModel
+        .updateOne(
+          { _id: ctx.runId },
+          {
+            $set: {
+              finalPage: {
+                stepIndex: ctx.stepIndex,
+                stepTitle: step.title,
+                page: step.page,
+                resolved,
+              },
+            },
+          },
+        )
+        .exec();
       await this.publish(ctx.runId, event);
       return {};
     }
@@ -1076,6 +1206,14 @@ export class WorkerService
 
     await this.publish(runId, request);
 
+    // Запуск встал и ждёт человека — это событие колокольчика не хуже
+    // завершения: пользователь мог уйти со страницы задолго до остановки.
+    await this.notificationsService.notifyRunEvent(
+      runId,
+      "run_waiting_input",
+      stepIndex,
+    );
+
     throw new RunPausedError(`Шаг «${_stepTitle}» ждёт ввода пользователя`);
   }
 
@@ -1083,6 +1221,8 @@ export class WorkerService
     await this.runModel
       .updateOne({ _id: runId }, { $set: { status: RunStatus.FAILED, error } })
       .exec();
+
+    await this.notificationsService.notifyRunEvent(runId, "run_failed");
 
     const run = await this.runModel.findById(runId).exec();
 

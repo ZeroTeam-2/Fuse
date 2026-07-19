@@ -5,7 +5,7 @@ import type { ManualInputDescriptor, Step } from "@fuse/shared";
 vi.mock("@nestjs/mongoose", () => ({
   Prop: () => () => {},
   Schema: () => (cls: any) => cls,
-  SchemaFactory: { createForClass: () => ({}) },
+  SchemaFactory: { createForClass: () => ({ index: () => ({}) }) },
   InjectModel: () => () => {},
 }));
 
@@ -111,6 +111,7 @@ function harness(run: Record<string, unknown>, steps: Step[], descriptors: Manua
     { assertSafeUrl: vi.fn().mockResolvedValue(undefined) } as any,
     { forSteps: vi.fn().mockResolvedValue(descriptors) } as any,
     { getObjectBuffer: vi.fn().mockResolvedValue(Buffer.from("")) } as any,
+    { notifyRunEvent: vi.fn().mockResolvedValue(undefined) } as any,
   );
 
   return { worker, runModel, run, gateway: (worker as any).gateway };

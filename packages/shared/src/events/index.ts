@@ -1,4 +1,4 @@
-import type { ManualInputDescriptor } from "../types";
+import type { ManualInputDescriptor, RunNotification } from "../types";
 import type { RunStatus } from "../enums";
 
 export interface WsEvent<TType extends string, TPayload = unknown> {
@@ -86,3 +86,20 @@ export type ServerWsEvent =
 export type ClientWsEvent =
   | WsEvent<"page:submit", { stepIndex: number; data: Record<string, unknown> }>
   | WsEvent<"run:cancel", null>;
+
+/**
+ * События namespace `notifications` (комната `user:{userId}`). Не `WsEvent`:
+ * тот привязан к `runId`-комнатам namespace `runs`.
+ */
+export interface NotificationsSnapshotPayload {
+  unreadCount: number;
+}
+
+export interface NotificationNewPayload {
+  notification: RunNotification;
+  unreadCount: number;
+}
+
+export type NotificationsServerEvent =
+  | { type: "notifications:snapshot"; payload: NotificationsSnapshotPayload }
+  | { type: "notification:new"; payload: NotificationNewPayload };
