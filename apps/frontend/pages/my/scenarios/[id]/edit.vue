@@ -265,14 +265,20 @@
       :steps="steps"
       :schemas="schemas"
       @save="savePage"
-      @close="pageIndex = null"
+      @close="closePageEditor"
     />
   </div>
 </template>
 
 <script setup lang="ts">
-import { CATEGORIES, blockCategory } from "@fuse/shared";
-import type { Environment, MappingValue, Step, StepFilter, StepPage, StepSchema, StepType } from "@fuse/shared";
+import {
+  CATEGORIES,
+  blockOutputName,
+  isInputBlock,
+  pageBlockCount,
+  pageBlocks,
+} from "@fuse/shared";
+import type { Environment, Step, StepFilter, StepPage, StepSchema, StepType } from "@fuse/shared";
 
 const { $api } = useNuxtApp() as any;
 const route = useRoute();
@@ -292,6 +298,7 @@ const TYPE_LABELS: Record<string, string> = {
   delay: "Задержка",
   file: "Файл",
   periodic: "Периодический запрос",
+  page: "Страница",
 };
 
 const DOT_COLORS = ["#8b5cf6", "#6366f1", "#10b981", "#f59e0b", "#0ea5e9", "#ec4899"];
@@ -311,6 +318,12 @@ const appEnvironments = ref<Record<string, Environment[]>>({});
 const pickedType = ref<{ key: StepType; title: string } | null>(null);
 const configIndex = ref<number | null>(null);
 const pageIndex = ref<number | null>(null);
+/**
+ * Индекс только что добавленного page-шага, ещё не сохранённого: сервер
+ * отклоняет пустую страницу, поэтому шаг persist'ится по «Готово» конструктора,
+ * а закрытие без сохранения убирает черновик.
+ */
+const draftPageIndex = ref<number | null>(null);
 const dragIndex = ref<number | null>(null);
 const overIndex = ref<number | null>(null);
 
@@ -351,6 +364,7 @@ function pathOf(step: Step) {
   if (step.type === "api") return step.path;
   if (step.type === "periodic") return step.pollPath;
   if (step.type === "delay") return `${step.seconds} с`;
+  if (step.type === "page") return `${pageBlockCount(step.page)} элем.`;
   return "";
 }
 
@@ -378,8 +392,31 @@ function filterSummary(filter?: StepFilter): string {
   return `, где ${filter.field} ${OPERATOR_LABELS[filter.op] ?? filter.op} ${value}`;
 }
 
+/**
+ * Имя поля источника в сводке: у шага-страницы ключ по умолчанию — это id
+ * блока, вместо него показываем отображаемое имя (кастомный ключ либо лейбл).
+ */
+function refFieldName(idx: number, key: string): string {
+  if (steps.value[idx]?.type !== "page") return key;
+  return schemas.value[idx]?.outputs.find((o) => o.key === key)?.label || key;
+}
+
 function stepParams(i: number) {
   const step = steps.value[i];
+
+  // У шага-страницы входов нет — сводка показывает его выходы: видно, какие
+  // значения страница отдаёт следующим шагам. Имя — кастомный ключ, иначе
+  // лейбл блока; лейбл дублируем рядом, когда показан кастомный ключ.
+  if (step.type === "page") {
+    return pageBlocks(step.page)
+      .filter(isInputBlock)
+      .map((b) => ({
+        kind: "ВЫХОД",
+        name: blockOutputName(b),
+        source: b.binding && b.label ? b.label : "Ввод на странице",
+      }));
+  }
+
   const mappings = step.mappings ?? {};
   const consts = step.consts ?? {};
   const filters = step.filters ?? {};
@@ -390,7 +427,7 @@ function stepParams(i: number) {
       kind: (f.loc ?? "body").toUpperCase(),
       name: f.key,
       source: ref
-        ? `Шаг ${Number(ref[1]) + 1} · ${ref[2]}${filterSummary(filters[f.key])}`
+        ? `Шаг ${Number(ref[1]) + 1} · ${refFieldName(Number(ref[1]), ref[2])}${filterSummary(filters[f.key])}`
         : source === "const"
           ? `Константа: ${consts[f.key] || "—"}`
           : "Ввод пользователя",
@@ -494,6 +531,15 @@ function pickType(t: { key: StepType; title: string }) {
 async function addStep(step: Step) {
   store.addStep(step);
   pickedType.value = null;
+
+  // Page-шаг рождается с пустой раскладкой, которую сервер не примет, —
+  // сразу открываем конструктор, сохранение произойдёт по «Готово».
+  if (step.type === "page") {
+    draftPageIndex.value = store.stepCount - 1;
+    pageIndex.value = draftPageIndex.value;
+    return;
+  }
+
   await persistSteps();
 }
 
@@ -512,39 +558,25 @@ function openStep(index: number) {
   configIndex.value = index;
 }
 
-/**
- * Привязка блока ввода к параметру шага И ЕСТЬ объявление «этот вход заполняет
- * пользователь»: на сохранении переносим её в источник значения шага
- * (`mappings[key] = "user"` либо операнд условия `filters[key].value.mode`),
- * переопределяя прежнюю константу/ссылку. Снятие привязки источник не
- * откатывает — вернуть константу/ref можно во вкладке параметров шага.
- */
-function reconcileSources(step: Step, page: StepPage): Step {
-  const mappings: Record<string, MappingValue> = { ...step.mappings };
-  const filters: Record<string, StepFilter> = { ...step.filters };
-
-  for (const row of page.rows) {
-    for (const block of row.items) {
-      if (blockCategory(block.type) !== "input" || !block.binding) continue;
-      const filterKey = block.binding.match(/^filter:(.+)$/);
-      if (filterKey) {
-        const key = filterKey[1];
-        if (filters[key]) {
-          filters[key] = { ...filters[key], value: { ...filters[key].value, mode: "user" } };
-        }
-      } else {
-        mappings[block.binding] = "user";
-      }
-    }
-  }
-
-  return { ...step, page, mappings, filters } as Step;
-}
-
 async function savePage(page: StepPage) {
   if (pageIndex.value === null) return;
-  const step = steps.value[pageIndex.value];
-  if (step) await updateStep(pageIndex.value, reconcileSources(step, page));
+  const index = pageIndex.value;
+  const step = steps.value[index];
+  // Черновик снимается ДО await: конструктор вслед за `save` эмитит `close`,
+  // и обработчик закрытия не должен принять сохранённый шаг за черновик.
+  draftPageIndex.value = null;
+  pageIndex.value = null;
+  // Раскладка — единственная настройка page-шага: блоки ввода сами объявляют
+  // его выходы, никакие маппинги при сохранении не переписываются.
+  if (step) await updateStep(index, { ...step, page } as Step);
+}
+
+/** Закрытие конструктора без сохранения: черновик page-шага не оставляем. */
+function closePageEditor() {
+  if (draftPageIndex.value !== null) {
+    store.removeStep(draftPageIndex.value);
+    draftPageIndex.value = null;
+  }
   pageIndex.value = null;
 }
 

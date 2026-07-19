@@ -51,6 +51,16 @@ const canSubmit = computed(
   () => !props.busy && requiredBlocks().every((b) => !isBlank(blockValue(b))),
 );
 
+/**
+ * Display-only страница (без блоков ввода) не собирает данных и не сабмитится:
+ * worker публикует её и продолжает сам, кнопка «Продолжить» здесь лишняя.
+ */
+const hasInputBlocks = computed(() =>
+  props.page.rows.some((row) =>
+    row.items.some((b) => blockCategory(b.type) === "input"),
+  ),
+);
+
 function displayValue(block: PageBlock): string {
   const v = props.resolved?.[block.id];
   if (v !== undefined && v !== null && v !== "") return String(v);
@@ -264,7 +274,7 @@ function submit() {
       </div>
     </div>
 
-    <div>
+    <div v-if="hasInputBlocks">
       <Button variant="primary" :size="size" type="submit" :disabled="!canSubmit">
         {{ busy ? "Отправляем…" : submitText }}
       </Button>

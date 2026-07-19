@@ -135,6 +135,100 @@ describe("OpenAPI parser: array-aware output schema", () => {
 
 });
 
+describe("OpenAPI parser: outputs from the response example", () => {
+  function specWithContent(content: Record<string, unknown>) {
+    return {
+      openapi: "3.0.0",
+      info: { title: "Demo", version: "1.0.0" },
+      servers: [{ url: "https://api.example.com" }],
+      paths: {
+        "/task/{task_id}": {
+          get: {
+            summary: "Task status",
+            responses: {
+              "200": { description: "OK", content: { "application/json": content } },
+            },
+          },
+        },
+      },
+    } as Record<string, unknown>;
+  }
+
+  it("derives fields from a content-level example next to an empty schema (FastAPI)", async () => {
+    const parser = new OpenApiParserService();
+
+    // Ровно форма из авто-спеки FastAPI без response_model.
+    const parsed = await parser.parse(
+      specWithContent({ schema: {}, example: { status: "string", result: "string" } }),
+      SPEC_URL,
+    );
+    const endpoint = parsed.endpoints[0];
+
+    expect(endpoint.outputs.map((f) => f.key)).toEqual(["status", "result"]);
+    expect(endpoint.outputs.every((f) => f.type === "string")).toBe(true);
+    expect(endpoint.outputIsArray).toBe(false);
+  });
+
+  it("marks the response as a collection when the example is an array of objects", async () => {
+    const parser = new OpenApiParserService();
+
+    const parsed = await parser.parse(
+      specWithContent({ schema: {}, example: [{ id: "42", amount: 10 }] }),
+      SPEC_URL,
+    );
+    const endpoint = parsed.endpoints[0];
+
+    expect(endpoint.outputIsArray).toBe(true);
+    expect(endpoint.outputs.map((f) => f.key)).toEqual(["id", "amount"]);
+    expect(endpoint.outputs.find((f) => f.key === "amount")?.type).toBe("number");
+  });
+
+  it("falls back to the example inside the schema", async () => {
+    const parser = new OpenApiParserService();
+
+    const parsed = await parser.parse(
+      specWithContent({ schema: { example: { done: true } } }),
+      SPEC_URL,
+    );
+
+    const done = parsed.endpoints[0].outputs.find((f) => f.key === "done");
+    expect(done?.type).toBe("boolean");
+  });
+
+  it("falls back to the first named example", async () => {
+    const parser = new OpenApiParserService();
+
+    const parsed = await parser.parse(
+      specWithContent({
+        schema: {},
+        examples: { ok: { value: { status: "done", items: [{ id: "1" }] } } },
+      }),
+      SPEC_URL,
+    );
+    const endpoint = parsed.endpoints[0];
+
+    expect(endpoint.outputs.map((f) => f.key)).toEqual(["status", "items"]);
+    // Вложенный массив объектов получает схему элемента, как и у схемного пути.
+    const items = endpoint.outputs.find((f) => f.key === "items");
+    expect(items?.type).toBe("array");
+    expect(items?.items?.map((f) => f.key)).toEqual(["id"]);
+  });
+
+  it("prefers a real schema over the example", async () => {
+    const parser = new OpenApiParserService();
+
+    const parsed = await parser.parse(
+      specWithContent({
+        schema: { type: "object", properties: { task_id: { type: "string" } } },
+        example: { status: "string", result: "string" },
+      }),
+      SPEC_URL,
+    );
+
+    expect(parsed.endpoints[0].outputs.map((f) => f.key)).toEqual(["task_id"]);
+  });
+});
+
 describe("OpenAPI parser: endpoint tags", () => {
   const taggedSpec = {
     openapi: "3.0.0",

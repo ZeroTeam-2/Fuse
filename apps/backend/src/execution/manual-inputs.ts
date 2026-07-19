@@ -1,13 +1,17 @@
 import type {
   ManualInputDescriptor,
-  PageBlock,
   RunStepResult,
   SchemaField,
   Step,
   StepPage,
   StepSchema,
 } from "@fuse/shared";
-import { isDisplayBlock, isInputBlock, pageBlocks } from "@fuse/shared";
+import {
+  blockOutputKey,
+  isDisplayBlock,
+  isInputBlock,
+  pageBlocks,
+} from "@fuse/shared";
 
 /**
  * Перечисление значений сценария, помеченных ручным вводом, — параметров
@@ -63,37 +67,24 @@ export function sliceInputsForStep(
   return slice;
 }
 
-/** Блоки ввода страницы — только они собирают значения шага. */
-function pageInputBlocks(page: StepPage | undefined): PageBlock[] {
-  return pageBlocks(page).filter(isInputBlock);
-}
-
 /**
- * Блок ввода закрывает значение шага, если привязан к нему через `binding`.
- * Блоки без привязки ничего не закрывают: их значение уйдёт во входы шага под
- * собственным `id`, не подменяя ручной параметр.
+ * Данные сабмита страницы (по id блоков) — в результат шага-страницы: значение
+ * блока ввода кладётся под его ключ выхода (`binding` либо собственный `id`).
+ * Ключи, не узнанные по блокам, сохраняются как есть.
  */
-export function pageCovers(step: Step, localKey: string): boolean {
-  return pageInputBlocks(step.page).some((block) => block.binding === localKey);
-}
-
-/**
- * Данные страницы — из id блоков в локальные ключи значений шага. Значение
- * привязанного блока кладётся под его `binding`, непривязанного — под `id`.
- */
-export function mapPageDataToLocalKeys(
-  step: Step,
+export function mapPageDataToOutputs(
+  page: StepPage | undefined,
   data: Record<string, unknown>,
 ): Record<string, unknown> {
-  const bindings = new Map(
-    pageInputBlocks(step.page)
-      .filter((block) => block.binding)
-      .map((block) => [block.id, block.binding as string]),
+  const outputKeys = new Map(
+    pageBlocks(page)
+      .filter(isInputBlock)
+      .map((block) => [block.id, blockOutputKey(block)]),
   );
 
   const mapped: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data)) {
-    mapped[bindings.get(key) ?? key] = value;
+    mapped[outputKeys.get(key) ?? key] = value;
   }
 
   return mapped;
@@ -228,6 +219,10 @@ async function collectFromSteps(
     const step = steps[index];
     const path = [...stepPath, index];
 
+    // Шаг-страница значения собирает сам по ходу исполнения: форме запуска
+    // спрашивать нечего, дескрипторов он не порождает.
+    if (step.type === "page") continue;
+
     if (step.type === "scenario") {
       if (visited.has(step.refScenarioId) || path.length >= MAX_DEPTH) {
         // Цикл между сценариями или слишком глубокая вложенность: обход обязан
@@ -273,7 +268,6 @@ async function collectFromSteps(
         label: field?.label || paramKey,
         type: field?.type ?? "string",
         required: field?.required ?? false,
-        source: pageCovers(step, paramKey) ? "page" : "form",
       });
     }
 
@@ -294,7 +288,6 @@ async function collectFromSteps(
         type: field?.type ?? "string",
         // Без операнда условие не отберёт ни одного элемента и шаг упадёт.
         required: true,
-        source: pageCovers(step, localKey) ? "page" : "form",
       });
     }
   }
@@ -311,19 +304,12 @@ export async function enumerateManualInputs(
   return out;
 }
 
-/** Значения, которые обязан дать сам пользователь: форма их и спрашивает. */
-export function formInputs(
-  descriptors: ManualInputDescriptor[],
-): ManualInputDescriptor[] {
-  return descriptors.filter((d) => d.source === "form");
-}
-
 /** Обязательные значения формы, которых нет во входах запуска. */
 export function missingRequiredKeys(
   descriptors: ManualInputDescriptor[],
   inputs: Record<string, unknown> | undefined,
 ): string[] {
-  return formInputs(descriptors)
+  return descriptors
     .filter((d) => d.required && isBlank(inputs?.[d.key]))
     .map((d) => d.key);
 }

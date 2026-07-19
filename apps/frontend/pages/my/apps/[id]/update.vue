@@ -32,14 +32,51 @@
           </p>
         </div>
 
-        <form v-if="app.openapiUrl" class="flex flex-col gap-5" @submit.prevent="checkUpdates">
+        <form class="flex flex-col gap-5" @submit.prevent="checkUpdates">
+          <div class="flex flex-col gap-2">
+            <span class="text-[0.8125rem] font-sans font-semibold text-zinc-900">
+              Источник спецификации
+            </span>
+            <SegmentedControl
+              v-model="mode"
+              :options="[
+                { value: 'url', label: 'URL' },
+                { value: 'file', label: 'Файл' },
+              ]"
+            />
+          </div>
+
           <Input
+            v-if="mode === 'url'"
             v-model="openapiUrl"
             label="OpenAPI URL"
             type="url"
             mono
             placeholder="https://api.example.com/openapi.json"
           />
+
+          <template v-else>
+            <div class="flex flex-col gap-2">
+              <label class="text-[0.8125rem] font-sans font-semibold text-zinc-900">
+                Файл спецификации
+              </label>
+              <Dropzone
+                ref="dropzoneRef"
+                :max-size="specMaxSizeBytes"
+                @select="onFileSelect"
+                @error="onFileError"
+              />
+            </div>
+
+            <Input
+              v-model="fileBaseUrl"
+              label="Базовый URL API"
+              type="url"
+              mono
+              placeholder="https://api.example.com"
+              hint="Укажите, если в спецификации нет servers — иначе останется текущий"
+            />
+          </template>
 
           <p
             v-if="reimportError"
@@ -62,10 +99,6 @@
             </Button>
           </div>
         </form>
-
-        <p v-else class="font-sans text-sm text-zinc-500 bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-3">
-          Спецификация загружена файлом — повторный импорт файлом скоро.
-        </p>
       </Card>
 
       <template v-if="diff">
@@ -174,6 +207,46 @@ const saving = ref(false);
 const reimportError = ref("");
 const successMessage = ref("");
 
+// Источник обновления — URL либо файл, как на создании. Дефолт — по тому, как
+// приложение было импортировано; для файловых приложений URL-ветки просто нет.
+const mode = ref<"url" | "file">("url");
+const selectedFile = ref<File | null>(null);
+const fileBaseUrl = ref("");
+const dropzoneRef = ref<{ clear: () => void } | null>(null);
+
+const runtimeConfig = useRuntimeConfig();
+const specMaxSizeBytes = computed(
+  () => (runtimeConfig.public.specFileMaxMb as number) * 1024 * 1024,
+);
+
+// Диф построен по одному источнику — смена источника делает его неактуальным.
+watch(mode, () => {
+  diff.value = null;
+  reimportError.value = "";
+  successMessage.value = "";
+  selectedFile.value = null;
+  fileBaseUrl.value = "";
+  dropzoneRef.value?.clear();
+});
+
+function onFileSelect(file: File) {
+  selectedFile.value = file;
+  reimportError.value = "";
+}
+
+function onFileError(message: string) {
+  selectedFile.value = null;
+  reimportError.value = message;
+}
+
+/** Файл уходит и в диф, и в apply — состояния на сервере нет. */
+function fileFormData(): FormData {
+  const fd = new FormData();
+  fd.append("file", selectedFile.value!);
+  if (fileBaseUrl.value.trim()) fd.append("baseUrl", fileBaseUrl.value.trim());
+  return fd;
+}
+
 const metaLine = computed(() => {
   if (!app.value) return "";
   return [
@@ -199,6 +272,7 @@ async function fetchApp() {
     });
     app.value = data ?? null;
     openapiUrl.value = data?.openapiUrl ?? "";
+    if (!data?.openapiUrl) mode.value = "file";
   } catch {
     app.value = null;
   } finally {
@@ -207,51 +281,80 @@ async function fetchApp() {
 }
 
 async function checkUpdates() {
+  if (mode.value === "file" && !selectedFile.value) {
+    reimportError.value = "Выберите файл спецификации";
+    return;
+  }
   checking.value = true;
   reimportError.value = "";
   successMessage.value = "";
   try {
-    const { data, error } = await $api.POST("/api/apps/{id}/reimport", {
-      params: { path: { id: appId } },
-      body: { openapiUrl: openapiUrl.value },
-    });
+    const { data, error } =
+      mode.value === "file"
+        ? await $api.POST("/api/apps/{id}/reimport-file", {
+            params: { path: { id: appId } },
+            body: fileFormData(),
+          })
+        : await $api.POST("/api/apps/{id}/reimport", {
+            params: { path: { id: appId } },
+            body: { openapiUrl: openapiUrl.value },
+          });
     if (error || !data) {
       reimportError.value = error?.message ?? "Не удалось проверить обновления";
       return;
     }
     diff.value = data;
   } catch {
-    reimportError.value = "Не удалось проверить обновления. Проверьте URL.";
+    reimportError.value =
+      mode.value === "file"
+        ? "Не удалось проверить обновления. Проверьте файл."
+        : "Не удалось проверить обновления. Проверьте URL.";
   } finally {
     checking.value = false;
   }
 }
 
 async function saveUpdate() {
+  if (mode.value === "file" && !selectedFile.value) {
+    reimportError.value = "Выберите файл спецификации";
+    return;
+  }
   saving.value = true;
   reimportError.value = "";
   try {
-    // Спека перечитывается по сохранённому URL, поэтому сначала фиксируем новый,
-    // если пользователь его отредактировал.
-    if (openapiUrl.value !== app.value?.openapiUrl) {
-      const { error } = await $api.PATCH("/api/apps/{id}", {
+    if (mode.value === "file") {
+      // Apply применяет тот же файл, что и диф, — сервер состояния не хранит.
+      const { error } = await $api.POST("/api/apps/{id}/reimport-file/apply", {
         params: { path: { id: appId } },
-        body: { openapiUrl: openapiUrl.value },
+        body: fileFormData(),
       });
       if (error) {
-        reimportError.value = error?.message ?? "Не удалось сохранить ссылку на спецификацию";
+        reimportError.value = error?.message ?? "Не удалось сохранить обновление";
         return;
       }
-    }
+    } else {
+      // Спека перечитывается по сохранённому URL, поэтому сначала фиксируем
+      // новый, если пользователь его отредактировал.
+      if (openapiUrl.value !== app.value?.openapiUrl) {
+        const { error } = await $api.PATCH("/api/apps/{id}", {
+          params: { path: { id: appId } },
+          body: { openapiUrl: openapiUrl.value },
+        });
+        if (error) {
+          reimportError.value = error?.message ?? "Не удалось сохранить ссылку на спецификацию";
+          return;
+        }
+      }
 
-    // Раньше здесь был только PATCH метаданных — endpoints и снапшот спеки в БД
-    // не обновлялись НИКОГДА, а UI всё равно рапортовал об успехе.
-    const { error } = await $api.POST("/api/apps/{id}/reimport/apply", {
-      params: { path: { id: appId } },
-    });
-    if (error) {
-      reimportError.value = error?.message ?? "Не удалось сохранить обновление";
-      return;
+      // Раньше здесь был только PATCH метаданных — endpoints и снапшот спеки в БД
+      // не обновлялись НИКОГДА, а UI всё равно рапортовал об успехе.
+      const { error } = await $api.POST("/api/apps/{id}/reimport/apply", {
+        params: { path: { id: appId } },
+      });
+      if (error) {
+        reimportError.value = error?.message ?? "Не удалось сохранить обновление";
+        return;
+      }
     }
 
     successMessage.value = "Обновление успешно сохранено";

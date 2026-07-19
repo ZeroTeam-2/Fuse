@@ -14,6 +14,7 @@ import type {
   Step,
   StepSchema,
 } from "@fuse/shared";
+import { duplicateOutputKeys, pageBlockCount, pageStepSchema } from "@fuse/shared";
 import { Scenario, ScenarioDocument } from "./scenario.schema";
 import { detectCycle } from "./cycle-guard";
 import { AppsService } from "../apps/apps.service";
@@ -93,6 +94,8 @@ export class ScenariosService {
     const scenario = await this.findById(id, ownerId);
 
     if (dto.steps) {
+      this.assertValidPageSteps(dto.steps as Step[]);
+
       const refSteps = (dto.steps as Step[]).filter(
         (s): s is ScenarioStepRef => s.type === "scenario",
       );
@@ -148,6 +151,30 @@ export class ScenariosService {
       throw new NotFoundException(`Scenario #${id} not found`);
     }
     return updated;
+  }
+
+  /**
+   * Шаг «Страница» обязан нести хотя бы один блок (пустая страница при
+   * запуске — пустой экран без смысла), а ключи выходов его блоков ввода не
+   * должны повторяться: маппинг `s{idx}:{key}` стал бы неоднозначным.
+   */
+  private assertValidPageSteps(steps: Step[]): void {
+    for (const step of steps) {
+      if (step.type !== "page") continue;
+
+      if (pageBlockCount(step.page) === 0) {
+        throw new BadRequestException(
+          `Шаг «${step.title}»: страница пуста — добавьте хотя бы один блок`,
+        );
+      }
+
+      const dupes = duplicateOutputKeys(step.page);
+      if (dupes.length > 0) {
+        throw new BadRequestException(
+          `Шаг «${step.title}»: ключи выходов страницы повторяются — ${dupes.join(", ")}`,
+        );
+      }
+    }
   }
 
   async togglePublish(id: string, ownerId: string): Promise<ScenarioDocument> {
@@ -287,6 +314,11 @@ export class ScenariosService {
 
       case "scenario":
         return this.getScenarioRefStepSchema(step);
+
+      case "page":
+        // Выходы — блоки ввода страницы: их значения следующие шаги забирают
+        // обычным маппингом «Из шага».
+        return pageStepSchema(step.page);
 
       default:
         return EMPTY_SCHEMA;

@@ -106,9 +106,9 @@
             />
           </div>
 
-          <!-- inline page: awaiting user input on this step -->
+          <!-- inline page: awaiting user input on this page step -->
           <div
-            v-else-if="waitingForStep === i && step.page"
+            v-else-if="waitingForStep === i && step.type === 'page'"
             class="rounded-2xl border border-zinc-200 bg-zinc-50 p-5"
           >
             <RunPageRunner
@@ -164,7 +164,10 @@ const stepTimings = ref<Record<number, number>>({});
 const stepErrors = ref<Record<number, string>>({});
 const totalDurationMs = ref(0);
 const waitingForStep = ref<number | null>(null);
-/** Ручные значения сценария — включая собираемые страницами шагов. */
+/**
+ * Ручные значения сценария. Шаги «Страница» дескрипторов не порождают — их
+ * значения собирает сама страница по ходу, так что форма спрашивает весь список.
+ */
 const manualInputs = ref<ManualInputDescriptor[]>([]);
 const pendingInputs = ref<{
   stepIndex: number;
@@ -172,13 +175,7 @@ const pendingInputs = ref<{
   fields: ManualInputDescriptor[];
 } | null>(null);
 
-/**
- * Форма перед запуском спрашивает только значения без страницы (`source: "form"`);
- * покрытые страницей (`source: "page"`) собирает сама страница шага по ходу.
- */
-const formFields = computed(() =>
-  manualInputs.value.filter((field) => field.source === "form"),
-);
+const formFields = computed(() => manualInputs.value);
 
 const showInputsForm = computed(
   () => phase.value === "idle" && formFields.value.length > 0,
@@ -431,7 +428,7 @@ function applyRunSnapshot(snapshot: RunSnapshot) {
     const step = scenario.value?.steps?.[stepIndex];
     running.value = false;
     phase.value = "waiting";
-    if (step?.page) {
+    if (step?.type === "page") {
       // Данные блоков отображения/динамических вариантов при восстановлении
       // взять неоткуда (событие уже прошло) — блоки покажутся пустыми, а select
       // сохранит статические варианты; ввод по-прежнему собирается.

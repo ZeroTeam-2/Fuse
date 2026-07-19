@@ -95,6 +95,11 @@
           Общее время: {{ totalDurationMs }} мс
         </p>
 
+        <!-- Финальный экран: display-only страница последнего шага «Страница». -->
+        <Card v-if="currentPage" padding="lg">
+          <RunPageRunner :page="currentPage.page" :resolved="currentPage.resolved" />
+        </Card>
+
         <!-- Данные результата: коллекция -->
         <template v-if="resultView?.kind === 'list'">
           <p class="font-sans text-sm font-semibold text-zinc-900">
@@ -180,6 +185,7 @@ import type {
   RunStatusPayload,
   RunStepResult,
 } from "@fuse/shared";
+import { blockCategory } from "@fuse/shared";
 
 const props = defineProps<{ scenarioId: string }>();
 const emit = defineEmits<{
@@ -228,16 +234,13 @@ const starting = ref(false);
 const phase = ref<Phase>("idle");
 const stepProgress = ref<StepProgress[]>([]);
 const currentPage = ref<PageState | null>(null);
-/** Ручные значения сценария — включая те, что собирают страницы шагов. */
-const manualInputs = ref<ManualInputDescriptor[]>([]);
 /**
- * Форма перед запуском спрашивает ТОЛЬКО значения без страницы (`source: "form"`).
- * Значения, покрытые страницей шага (`source: "page"`), собирает сама страница по
- * ходу выполнения — иначе их спросили бы дважды.
+ * Ручные значения сценария. Шаги «Страница» дескрипторов не порождают — их
+ * значения собирает сама страница по ходу исполнения, поэтому форма перед
+ * запуском спрашивает весь список.
  */
-const formFields = computed(() =>
-  manualInputs.value.filter((field) => field.source === "form"),
-);
+const manualInputs = ref<ManualInputDescriptor[]>([]);
+const formFields = computed(() => manualInputs.value);
 const pendingInputs = ref<PendingInputsState | null>(null);
 const totalDurationMs = ref(0);
 const errorMessage = ref("");
@@ -245,6 +248,13 @@ const errorMessage = ref("");
 const runId = ref("");
 const socketApi = shallowRef<ReturnType<typeof useRunSocket> | null>(null);
 let processedCount = 0;
+
+/** Есть ли на странице блоки ввода — display-only страницы исполнение не ждёт. */
+function pageHasInputs(page: StepPage): boolean {
+  return page.rows.some((row) =>
+    row.items.some((b) => blockCategory(b.type) === "input"),
+  );
+}
 
 // Map internal step status → DS StepProgress status (done/active/pending).
 function dsStatus(s: StepProgress["status"]): "done" | "active" | "pending" {
@@ -507,14 +517,20 @@ function handleWsEvent(event: ServerWsEvent) {
       break;
     }
     case "page:required": {
-      phase.value = "waiting";
-      pendingInputs.value = null;
+      const page = event.payload.page as StepPage;
       currentPage.value = {
         stepIndex: event.payload.stepIndex,
         stepTitle: event.payload.stepTitle,
-        page: event.payload.page as StepPage,
+        page,
         resolved: event.payload.resolved,
       };
+      // Display-only страницу worker публикует и продолжает сам: исполнение не
+      // ждёт, поэтому и панель остаётся в «running» — страница покажется по
+      // завершении (финальный экран) либо сменится следующей.
+      if (pageHasInputs(page)) {
+        phase.value = "waiting";
+        pendingInputs.value = null;
+      }
       break;
     }
     // Обязательного значения не оказалось во входах запуска — воркер остановился
@@ -532,7 +548,11 @@ function handleWsEvent(event: ServerWsEvent) {
     case "run:done": {
       totalDurationMs.value = event.payload.totalDurationMs ?? 0;
       phase.value = "done";
-      currentPage.value = null;
+      // Display-only страница последнего шага остаётся финальным экраном —
+      // run:done её не скрывает; страница с вводом к этому моменту отработала.
+      if (currentPage.value && pageHasInputs(currentPage.value.page)) {
+        currentPage.value = null;
+      }
       pendingInputs.value = null;
       break;
     }
@@ -586,7 +606,10 @@ function applySnapshot(payload: RunStatusPayload) {
   switch (payload.status) {
     case "completed":
       phase.value = "done";
-      currentPage.value = null;
+      // Финальный display-only экран не сбрасываем и по снапшоту.
+      if (currentPage.value && pageHasInputs(currentPage.value.page)) {
+        currentPage.value = null;
+      }
       pendingInputs.value = null;
       if (!totalDurationMs.value) {
         totalDurationMs.value = stepProgress.value.reduce(
@@ -613,9 +636,9 @@ function applySnapshot(payload: RunStatusPayload) {
       break;
     case "waiting_input":
       // Ни страницы, ни списка запрошенных значений в снапшоте нет — шаг ждёт
-      // либо своей страницы (она есть в сценарии), либо добора (тогда считаем,
+      // либо своей страницы (шаг типа «Страница»), либо добора (тогда считаем,
       // чего именно не хватает, по входам запуска).
-      if (scenario.value?.steps?.[payload.currentStep]?.page) {
+      if (scenario.value?.steps?.[payload.currentStep]?.type === "page") {
         restoreWaitingPage(payload.currentStep);
       } else {
         void restoreWaitingInputs(payload.currentStep);
@@ -630,7 +653,7 @@ function applySnapshot(payload: RunStatusPayload) {
 
 function restoreWaitingPage(stepIndex: number) {
   const step = scenario.value?.steps?.[stepIndex];
-  if (!step?.page) return;
+  if (step?.type !== "page") return;
   // Данные блоков отображения при восстановлении взять неоткуда (событие уже
   // прошло) — блоки покажутся пустыми, ввод по-прежнему собирается.
   currentPage.value = {

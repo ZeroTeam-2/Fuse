@@ -9,11 +9,18 @@ import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
 import { Consumer } from "sqs-consumer";
 import { SQSClient } from "@aws-sdk/client-sqs";
-import { RunStatus, isUploadedFileRef } from "@fuse/shared";
+import {
+  RunStatus,
+  isUploadedFileRef,
+  isInputBlock,
+  pageBlocks,
+  blockOutputKey,
+} from "@fuse/shared";
 import type {
   Step,
   ApiStep,
   DelayStep,
+  PageStep,
   PeriodicStep,
   ScenarioStepRef,
   UploadedFileRef,
@@ -36,7 +43,7 @@ import { ManualInputsService } from "./manual-inputs.service";
 import {
   isBlank,
   localKeyOf,
-  mapPageDataToLocalKeys,
+  mapPageDataToOutputs,
   resolvePageBindings,
   sliceInputsForStep,
 } from "./manual-inputs";
@@ -431,39 +438,6 @@ export class WorkerService
   }
 
   private async executeStep(step: Step, ctx: StepContext): Promise<unknown> {
-    if (step.page) {
-      // То, что пользователь ввёл на странице, — это и есть входные данные шага:
-      // раньше результат ожидания отбрасывался, и ветка «Ручной ввод» в маппингах
-      // (а с ней и ручное значение условия фильтра) была мертва.
-      const { data } = await this.requestUserInput(
-        ctx.runId,
-        ctx.stepIndex,
-        step.title,
-        {
-          type: "page:required",
-          runId: ctx.runId,
-          payload: {
-            stepIndex: ctx.stepIndex,
-            stepTitle: step.title,
-            page: step.page,
-            // Блоки отображения и динамические варианты select берут данные
-            // пройденных шагов: клиент их сам не видит, поэтому значения
-            // разрешаются здесь и едут в payload.
-            resolved: resolvePageBindings(step.page, ctx.stepResults),
-          },
-          timestamp: new Date().toISOString(),
-        },
-      );
-
-      if (data && typeof data === "object") {
-        // Ключи полей страницы → ключи значений шага по привязке (`target`).
-        ctx.userInput = {
-          ...ctx.userInput,
-          ...mapPageDataToLocalKeys(step, data),
-        };
-      }
-    }
-
     await this.ensureManualInputs(step, ctx);
 
     switch (step.type) {
@@ -478,6 +452,9 @@ export class WorkerService
 
       case "scenario":
         return this.executeScenarioStep(step, ctx);
+
+      case "page":
+        return this.executePageStep(step, ctx);
 
       case "file":
         // Тип выведен из употребления: функционал поглощён api-шагом
@@ -872,6 +849,66 @@ export class WorkerService
     }
 
     return { nestedScenario: step.refScenarioId };
+  }
+
+  /**
+   * Шаг «Страница». Блоки ввода собирают значения — они и есть результат шага
+   * (ключ — `binding` блока либо его `id`): следующие шаги читают их обычным
+   * маппингом `s{idx}:{key}`. Страница без блоков ввода не блокирует поток:
+   * публикуется для показа (стоящая последней — финальный экран результата)
+   * и завершается пустым результатом.
+   */
+  private async executePageStep(
+    step: PageStep,
+    ctx: StepContext,
+  ): Promise<unknown> {
+    const inputBlocks = pageBlocks(step.page).filter(isInputBlock);
+
+    const event: ServerWsEvent = {
+      type: "page:required",
+      runId: ctx.runId,
+      payload: {
+        stepIndex: ctx.stepIndex,
+        stepTitle: step.title,
+        page: step.page,
+        // Блоки отображения и динамические варианты select берут данные
+        // пройденных шагов: клиент их сам не видит, поэтому значения
+        // разрешаются здесь и едут в payload.
+        resolved: resolvePageBindings(step.page, ctx.stepResults),
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    if (inputBlocks.length === 0) {
+      await this.publish(ctx.runId, event);
+      return {};
+    }
+
+    const { data } = await this.requestUserInput(
+      ctx.runId,
+      ctx.stepIndex,
+      step.title,
+      event,
+    );
+
+    const result = mapPageDataToOutputs(step.page, data ?? {});
+
+    // PageRunner валидирует обязательность у себя, но программный сабмит
+    // (POST без UI) мог прислать что угодно — пустые обязательные ключи
+    // роняют шаг здесь, а не пустым значением тремя шагами позже.
+    const emptyRequired = inputBlocks
+      .filter((block) => block.required)
+      .filter((block) => isBlank(result[blockOutputKey(block)]));
+
+    if (emptyRequired.length > 0) {
+      throw new StepExecutionError(
+        `Шаг «${step.title}»: не заполнены обязательные поля страницы — ${emptyRequired
+          .map((block) => `«${block.label || blockOutputKey(block)}»`)
+          .join(", ")}`,
+      );
+    }
+
+    return result;
   }
 
   /**

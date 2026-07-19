@@ -190,6 +190,74 @@ export class AppsController {
     return this.appsService.applyReimport(id, req.user.userId);
   }
 
+  @Post(":id/reimport-file")
+  @ApiOperation({
+    summary: "Reimport an app's spec from an uploaded file and return a diff",
+  })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        file: { type: "string", format: "binary" },
+        baseUrl: {
+          type: "string",
+          format: "url",
+          description: "Override when the spec has no absolute servers[0].url",
+        },
+      },
+      required: ["file"],
+    },
+  })
+  @UseInterceptors(FileInterceptor("file"))
+  reimportFile(
+    @Param("id") id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body() dto: ImportPreviewFileDto,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    validateSpecFile(file);
+    return this.appsService.reimportFromFile(id, req.user.userId, {
+      specText: file.buffer.toString("utf-8"),
+      contentType: file.mimetype,
+      baseUrlOverride: dto.baseUrl,
+    });
+  }
+
+  @Post(":id/reimport-file/apply")
+  @ApiOperation({
+    summary: "Apply a reimport from an uploaded file: merge endpoints",
+  })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        file: { type: "string", format: "binary" },
+        baseUrl: {
+          type: "string",
+          format: "url",
+          description: "Override when the spec has no absolute servers[0].url",
+        },
+      },
+      required: ["file"],
+    },
+  })
+  @UseInterceptors(FileInterceptor("file"))
+  applyReimportFile(
+    @Param("id") id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body() dto: ImportPreviewFileDto,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    validateSpecFile(file);
+    return this.appsService.applyReimportFromFile(id, req.user.userId, {
+      specText: file.buffer.toString("utf-8"),
+      contentType: file.mimetype,
+      baseUrlOverride: dto.baseUrl,
+    });
+  }
+
   @Patch(":id")
   @ApiOperation({ summary: "Update app metadata" })
   update(

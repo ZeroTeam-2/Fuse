@@ -119,6 +119,9 @@ function add() {
     step = { id, type: "scenario", title: name, refScenarioId: refScenarioId.value, mappings: {} };
   } else if (props.stepType === "delay") {
     step = { id, type: "delay", title: name, seconds: delaySec.value };
+  } else if (props.stepType === "page") {
+    // Раскладка добавляется после — в конструкторе из панели настройки шага.
+    step = { id, type: "page", title: name, page: { title: name, rows: [] } };
   } else {
     // Тип «Файл» удалён из палитры; сюда попадать не из чего.
     return;
@@ -230,6 +233,19 @@ onMounted(() => {
             </button>
           </div>
           <Input v-model.number="delaySec" type="number" hint="От 1 до 600 секунд" />
+        </div>
+      </template>
+
+      <template v-else-if="stepType === 'page'">
+        <div>
+          <div :class="eyebrow">1 · Страница</div>
+          <p
+            class="font-sans text-[0.8125rem] text-zinc-500 border border-dashed border-zinc-200 rounded-xl px-4 py-5 text-center"
+          >
+            Раскладку страницы вы соберёте в конструкторе после добавления шага. Блоки ввода
+            станут выходами шага — их значения доступны следующим шагам, блоки отображения
+            показывают данные пройденных шагов.
+          </p>
         </div>
       </template>
 

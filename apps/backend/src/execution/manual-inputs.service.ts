@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
 import type { ManualInputDescriptor, Step, StepSchema } from "@fuse/shared";
+import { pageStepSchema } from "@fuse/shared";
 import { Scenario, ScenarioDocument } from "../scenarios/scenario.schema";
 import { App, AppDocument } from "../apps/app.schema";
 import { enumerateManualInputs, type ManualInputDeps } from "./manual-inputs";
@@ -51,6 +52,13 @@ export class ManualInputsService {
         outputs: endpoint.outputs as unknown as StepSchema["outputs"],
         outputIsArray: endpoint.outputIsArray ?? false,
       };
+    }
+
+    // Выходы шага-страницы — его блоки ввода: по ним следующие шаги строят
+    // маппинг «Из шага» (в т.ч. когда страница — последний шаг вложенного
+    // сценария и отдаёт его результат наружу).
+    if (step.type === "page") {
+      return pageStepSchema(step.page);
     }
 
     // Вложенный сценарий отдаёт наружу результат своего последнего шага —
