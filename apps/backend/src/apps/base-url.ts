@@ -48,11 +48,13 @@ export function deriveBaseUrl(
   spec: SpecLike | null | undefined,
   openapiUrl: string,
 ): string | undefined {
-  let specOrigin: URL;
+  // Пустой/невалидный URL спеки — случай импорта из файла: абсолютный
+  // servers[0].url всё ещё выводим, относительному не от чего резолвиться.
+  let specOrigin: URL | undefined;
   try {
     specOrigin = new URL(openapiUrl);
   } catch {
-    return undefined;
+    specOrigin = undefined;
   }
 
   const server = spec?.servers?.[0];
@@ -67,7 +69,7 @@ export function deriveBaseUrl(
     }
   }
 
-  if (spec?.host) {
+  if (spec?.host && specOrigin) {
     try {
       const base = new URL(`${specOrigin.protocol}//${spec.host}`);
       if (spec.basePath) {
@@ -81,7 +83,7 @@ export function deriveBaseUrl(
 
   // Спецификации без `servers` (типично для FastAPI: документ отдаётся по
   // https://host/openapi.json, а API живёт на том же origin).
-  return specOrigin.origin;
+  return specOrigin?.origin;
 }
 
 /** Имя окружения по умолчанию — обязательное и неудаляемое. */

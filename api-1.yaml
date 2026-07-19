@@ -1,0 +1,204 @@
+openapi: 3.1.0
+info:
+  title: FastAPI
+  version: 0.1.0
+paths:
+  /image/process:
+    post:
+      summary: Image Process
+      operationId: image_process_image_process_post
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/Body_image_process_image_process_post"
+            examples:
+              simple:
+                summary: Только промт
+                value:
+                  image: "@filename"
+                  data: '{"prompt": "Распознай текст на изображении"}'
+              docx:
+                summary: С выводом в docx
+                value:
+                  image: "@filename"
+                  data: '{"prompt": "Распознай текст на изображении", "output_type": "docx"}'
+        required: true
+      responses:
+        "200":
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProcessResponse"
+              example:
+                task_id: c5fc5f03-c9ef-4d52-a953-1ea1d2bb5ccd
+                status: pending
+        "422":
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HTTPValidationError"
+  /pdf/process:
+    post:
+      summary: Pdf Process
+      operationId: pdf_process_pdf_process_post
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/Body_pdf_process_pdf_process_post"
+            examples:
+              simple:
+                summary: Только промт
+                value:
+                  doc: "@filename"
+                  data: '{"prompt": "Распознай текст на изображении"}'
+              docx:
+                summary: С выводом в docx
+                value:
+                  doc: "@filename"
+                  data: '{"prompt": "Распознай текст на изображении", "output_type": "docx"}'
+              pages_count:
+                summary: С ограничением страниц
+                value:
+                  doc: "@filename"
+                  data: '{"prompt": "Распознай текст на изображении", "pages_count": 3}'
+              all:
+                summary: Все возможные аргументы
+                value:
+                  doc: "@filename"
+                  data: '{"prompt": "Распознай текст на изображении", "output_type":
+                    "docx","pages_count": 3}'
+        required: true
+      responses:
+        "200":
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProcessResponse"
+              example:
+                task_id: c5fc5f03-c9ef-4d52-a953-1ea1d2bb5ccd
+                status: pending
+        "422":
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HTTPValidationError"
+  /task/{task_id}:
+    get:
+      summary: Task Status
+      operationId: task_status_task__task_id__get
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Task Id
+      responses:
+        "200":
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+              example:
+                status: string
+                result: string
+        "422":
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HTTPValidationError"
+components:
+  schemas:
+    Body_image_process_image_process_post:
+      properties:
+        image:
+          type: string
+          format: binary
+          title: Image
+          description: Изображение
+        data:
+          type: string
+          title: Data
+          description: "Json строка с промтом. Параметры json - {'prompt': str,
+            'output_type': str ('docx' | None)}"
+      type: object
+      required:
+        - image
+        - data
+      title: Body_image_process_image_process_post
+    Body_pdf_process_pdf_process_post:
+      properties:
+        doc:
+          type: string
+          format: binary
+          title: Doc
+          description: PDF файл
+        data:
+          type: string
+          title: Data
+          description: |-
+            Json строка с промтом. Параметры json - {'prompt': str, 
+             'output_type': str ('docx' | None ), 
+             'pages_count': int | None}
+      type: object
+      required:
+        - doc
+        - data
+      title: Body_pdf_process_pdf_process_post
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: "#/components/schemas/ValidationError"
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    ProcessResponse:
+      properties:
+        task_id:
+          type: string
+          title: Task Id
+        status:
+          type: string
+          title: Status
+      type: object
+      required:
+        - task_id
+        - status
+      title: ProcessResponse
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+              - type: string
+              - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+        input:
+          title: Input
+        ctx:
+          type: object
+          title: Context
+      type: object
+      required:
+        - loc
+        - msg
+        - type
+      title: ValidationError
+servers:
+  - url: /llm-doc-recognizer

@@ -4,6 +4,7 @@ export const StepType = {
   DELAY: "delay",
   FILE: "file",
   PERIODIC: "periodic",
+  PAGE: "page",
 } as const;
 
 export type StepType = (typeof StepType)[keyof typeof StepType];

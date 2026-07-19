@@ -216,25 +216,7 @@ export class AppsService {
     const rawSpec = await this.ssrfGuard.fetchSpec(openapiUrl);
     const parsed = await this.openapiParser.parse(rawSpec, openapiUrl);
 
-    const oldKeys = new Set(app.endpoints.map(endpointKey));
-    const newKeys = new Set(parsed.endpoints.map(endpointKey));
-
-    const added: EndpointSummary[] = [];
-    const kept: EndpointSummary[] = [];
-
-    for (const ep of parsed.endpoints) {
-      if (oldKeys.has(endpointKey(ep))) {
-        kept.push(toSummary(ep));
-      } else {
-        added.push(toSummary(ep));
-      }
-    }
-
-    const deprecated: EndpointSummary[] = app.endpoints
-      .filter((ep) => !newKeys.has(endpointKey(ep)))
-      .map(toSummary);
-
-    return { added, deprecated, kept };
+    return this.diffEndpoints(app.endpoints, parsed.endpoints);
   }
 
   async applyReimport(id: string, ownerId: string): Promise<AppDocument> {
@@ -244,14 +226,99 @@ export class AppsService {
     const rawSpec = await this.ssrfGuard.fetchSpec(openapiUrl);
     const parsed = await this.openapiParser.parse(rawSpec, openapiUrl);
 
+    return this.persistReimport(app, {
+      endpoints: this.mergeEndpoints(app.endpoints, parsed.endpoints),
+      baseUrl: parsed.baseUrl,
+      host: parsed.host,
+      apiVersion: parsed.apiVersion,
+    });
+  }
+
+  /**
+   * Реимпорт из загруженного файла: тот же диф, что и по URL. Файл шлётся и в
+   * диф, и в apply (состояния на сервере нет) — симметрично паре создания
+   * `import-preview-file` / `from-file`. `openapiUrl` приложения не требуется
+   * и не меняется.
+   */
+  async reimportFromFile(
+    id: string,
+    ownerId: string,
+    params: { specText: string; contentType: string; baseUrlOverride?: string },
+  ): Promise<ReimportDiff> {
+    const app = await this.findById(id, ownerId);
+    const parsed = await this.parseSpecFile(params);
+
+    return this.diffEndpoints(app.endpoints, parsed.endpoints);
+  }
+
+  async applyReimportFromFile(
+    id: string,
+    ownerId: string,
+    params: { specText: string; contentType: string; baseUrlOverride?: string },
+  ): Promise<AppDocument> {
+    const app = await this.findById(id, ownerId);
+    const parsed = await this.parseSpecFile(params);
+
+    // Файл без абсолютного `servers` (и без переопределения) не должен затирать
+    // рабочий baseUrl приложения пустотой: в отличие от создания, URL уже есть.
+    return this.persistReimport(app, {
+      endpoints: this.mergeEndpoints(app.endpoints, parsed.endpoints),
+      baseUrl: parsed.baseUrl ?? app.baseUrl,
+      host: parsed.host ?? app.host,
+      apiVersion: parsed.apiVersion ?? app.apiVersion,
+    });
+  }
+
+  private async parseSpecFile(params: {
+    specText: string;
+    contentType: string;
+    baseUrlOverride?: string;
+  }) {
+    const rawSpec = parseSpecText(params.specText, params.contentType);
+    return this.openapiParser.parse(rawSpec, "", {
+      baseUrlOverride: params.baseUrlOverride,
+    });
+  }
+
+  /** Диф реимпорта: новые / исчезнувшие / совпавшие endpoints по методу+пути. */
+  private diffEndpoints(
+    current: Endpoint[],
+    incoming: Endpoint[],
+  ): ReimportDiff {
+    const oldKeys = new Set(current.map(endpointKey));
+    const newKeys = new Set(incoming.map(endpointKey));
+
+    const added: EndpointSummary[] = [];
+    const kept: EndpointSummary[] = [];
+
+    for (const ep of incoming) {
+      if (oldKeys.has(endpointKey(ep))) {
+        kept.push(toSummary(ep));
+      } else {
+        added.push(toSummary(ep));
+      }
+    }
+
+    const deprecated: EndpointSummary[] = current
+      .filter((ep) => !newKeys.has(endpointKey(ep)))
+      .map(toSummary);
+
+    return { added, deprecated, kept };
+  }
+
+  /**
+   * Слияние endpoints реимпорта: совпавшие сохраняют id (на них ссылаются шаги
+   * сценариев), исчезнувшие остаются с пометкой deprecated.
+   */
+  private mergeEndpoints(current: Endpoint[], incoming: Endpoint[]): Endpoint[] {
     const oldEndpoints = new Map<string, Endpoint>();
-    for (const ep of app.endpoints) {
+    for (const ep of current) {
       oldEndpoints.set(endpointKey(ep), ep);
     }
 
-    const newKeys = new Set(parsed.endpoints.map(endpointKey));
+    const newKeys = new Set(incoming.map(endpointKey));
 
-    const merged: Endpoint[] = parsed.endpoints.map((ep) => {
+    const merged: Endpoint[] = incoming.map((ep) => {
       const existing = oldEndpoints.get(endpointKey(ep));
       return {
         ...ep,
@@ -266,24 +333,28 @@ export class AppsService {
       }
     }
 
+    return merged;
+  }
+
+  private async persistReimport(
+    app: AppDocument,
+    update: {
+      endpoints: Endpoint[];
+      baseUrl?: string;
+      host?: string;
+      apiVersion?: string;
+    },
+  ): Promise<AppDocument> {
     const updated = await this.appModel
       .findOneAndUpdate(
-        { _id: id, ownerId },
-        {
-          $set: {
-            endpoints: merged,
-            baseUrl: parsed.baseUrl,
-            host: parsed.host,
-            apiVersion: parsed.apiVersion,
-            syncedAt: new Date(),
-          },
-        },
+        { _id: app._id, ownerId: app.ownerId },
+        { $set: { ...update, syncedAt: new Date() } },
         { new: true },
       )
       .exec();
 
     if (!updated) {
-      throw new NotFoundException(`App #${id} not found`);
+      throw new NotFoundException(`App #${app._id} not found`);
     }
     return updated;
   }

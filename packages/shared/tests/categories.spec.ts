@@ -46,13 +46,14 @@ describe("Categories", () => {
 });
 
 describe("Enums", () => {
-  it("StepType has all 5 types", () => {
-    expect(Object.keys(StepType)).toHaveLength(5);
+  it("StepType has all 6 types", () => {
+    expect(Object.keys(StepType)).toHaveLength(6);
     expect(StepType.API).toBe("api");
     expect(StepType.SCENARIO).toBe("scenario");
     expect(StepType.DELAY).toBe("delay");
     expect(StepType.FILE).toBe("file");
     expect(StepType.PERIODIC).toBe("periodic");
+    expect(StepType.PAGE).toBe("page");
   });
 
   it("RunStatus has 6 statuses", () => {

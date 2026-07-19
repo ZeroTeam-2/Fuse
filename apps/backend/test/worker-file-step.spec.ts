@@ -56,17 +56,12 @@ const FILE_REF = {
   fileType: "application/pdf",
 };
 
-/** Api-шаг загрузки: dropzone страницы привязан к файловому входу `document`. */
-function uploadApiStep(extra: Record<string, unknown> = {}): Step {
+/** Шаг-страница с dropzone: ключ выхода `document` — ссылка на загруженный файл. */
+function uploadPageStep(): Step {
   return {
-    id: "s-up",
-    title: "Загрузка документа",
-    type: "api",
-    appId: "a1",
-    endpointId: "up1",
-    method: "POST",
-    path: "/upload",
-    mappings: { document: "user" },
+    id: "s-page",
+    title: "Файл",
+    type: "page",
     page: {
       title: "Файл",
       rows: [
@@ -78,6 +73,20 @@ function uploadApiStep(extra: Record<string, unknown> = {}): Step {
         },
       ],
     },
+  } as Step;
+}
+
+/** Api-шаг загрузки: файловый вход `document` замаплен на выход шага-страницы. */
+function uploadApiStep(extra: Record<string, unknown> = {}): Step {
+  return {
+    id: "s-up",
+    title: "Загрузка документа",
+    type: "api",
+    appId: "a1",
+    endpointId: "up1",
+    method: "POST",
+    path: "/upload",
+    mappings: { document: "s0:document" },
     ...extra,
   } as Step;
 }
@@ -164,14 +173,17 @@ describe("WorkerService — api step with a file input", () => {
 
     const run = submittedRun();
     const { worker, minio } = harness(run, [
+      uploadPageStep(),
       uploadApiStep({
-        mappings: { document: "user", comment: "const" },
+        mappings: { document: "s0:document", comment: "const" },
         consts: { comment: "скан договора" },
       }),
     ]);
 
     await (worker as any).executeRun("run-1");
 
+    // Ссылка на файл доехала до api-шага из результата шага-страницы.
+    expect(stepResult(run, 0)).toEqual({ document: FILE_REF });
     expect(minio.getObjectBuffer).toHaveBeenCalledWith("uploads/u1/doc.pdf");
     expect(run.status).toBe(RunStatus.COMPLETED);
 
@@ -190,18 +202,17 @@ describe("WorkerService — api step with a file input", () => {
     expect(await filePart.text()).toBe("PDF");
     expect(form.get("comment")).toBe("скан договора");
 
-    // Результат шага — ответ провайдера, без ссылок хранилища.
-    expect(stepResult(run, 0)).toEqual({ received: true });
+    // Результат api-шага — ответ провайдера, без ссылок хранилища.
+    expect(stepResult(run, 1)).toEqual({ received: true });
   });
 
   it("keeps the plain JSON body when the step has no file input", async () => {
     fetchMock.mockResolvedValue(jsonResponse({ ok: true }));
 
     const run = submittedRun();
-    run.pendingInput = { stepIndex: 0, data: {} };
+    delete run.pendingInput;
     const { worker } = harness(run, [
       uploadApiStep({
-        page: undefined,
         mappings: { comment: "const" },
         consts: { comment: "без файла" },
       }),
@@ -233,7 +244,7 @@ describe("WorkerService — api step with a file input", () => {
     fetchMock.mockResolvedValue(jsonResponse({ received: true }));
 
     const run = submittedRun();
-    const { worker } = harness(run, [uploadApiStep()], legacyApp);
+    const { worker } = harness(run, [uploadPageStep(), uploadApiStep()], legacyApp);
 
     await (worker as any).executeRun("run-1");
 
@@ -252,6 +263,7 @@ describe("WorkerService — api step with a file input", () => {
 
     const run = submittedRun();
     const { worker } = harness(run, [
+      uploadPageStep(),
       uploadApiStep(),
       {
         id: "s-poll",
@@ -263,7 +275,7 @@ describe("WorkerService — api step with a file input", () => {
         pollPath: "/status/{taskId}",
         pollIntervalSec: 1,
         progressField: "percent",
-        mappings: { taskId: "s0:taskId" },
+        mappings: { taskId: "s1:taskId" },
       } as Step,
     ]);
     const publish = vi.fn();
@@ -279,7 +291,7 @@ describe("WorkerService — api step with a file input", () => {
       .map((call) => call[1].payload.progress);
     expect(progressEvents).toEqual([50, 100]);
 
-    expect(stepResult(run, 1)).toEqual({ status: "done", percent: 100, text: "распознано" });
+    expect(stepResult(run, 2)).toEqual({ status: "done", percent: 100, text: "распознано" });
     expect(run.status).toBe(RunStatus.COMPLETED);
   });
 
@@ -290,6 +302,7 @@ describe("WorkerService — api step with a file input", () => {
 
     const run = submittedRun();
     const { worker } = harness(run, [
+      uploadPageStep(),
       uploadApiStep(),
       {
         id: "s-poll",
@@ -300,7 +313,7 @@ describe("WorkerService — api step with a file input", () => {
         pollMethod: "GET",
         pollPath: "/status/{taskId}",
         pollIntervalSec: 1,
-        mappings: { taskId: "s0:taskId" },
+        mappings: { taskId: "s1:taskId" },
       } as Step,
     ]);
 

@@ -59,7 +59,6 @@ describe("ManualInputsService", () => {
       kind: "param",
       label: "ИНН организации",
       required: true,
-      source: "form",
     });
   });
 

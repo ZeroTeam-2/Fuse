@@ -163,10 +163,11 @@ export type PageBlockSpan = 1 | 2 | 3 | 4 | 5 | 6;
  * Один элемент страницы на сетке из 6 колонок.
  *
  * `binding` зависит от категории блока:
- * - ввод (`input`/`select`/`dropzone`/`richtext`) — локальный ключ значения
- *   ЭТОГО шага: параметр (`inn`) либо операнд условия фильтрации (`filter:inn`);
+ * - ввод (`input`/`select`/`dropzone`/`richtext`) — **ключ выхода** шага-страницы
+ *   (`inn`): под ним введённое значение попадает в результат шага, откуда его
+ *   забирают маппинги следующих шагов;
  * - отображение (`paragraph`) — выход пройденного шага (`s{idx}:{outKey}`).
- * Без привязки блок ввода уходит во входы шага под собственным `id`.
+ * Без привязки блок ввода отдаёт значение под собственным `id`.
  */
 export interface PageBlock {
   id: string;
@@ -263,7 +264,6 @@ export interface BaseStep {
   consts?: Record<string, string>;
   /** Keyed by input field key, like `mappings`. Only meaningful for `s{idx}:{key}` mappings. */
   filters?: Record<string, StepFilter>;
-  page?: StepPage;
   /**
    * Шаг ссылался на приложение/API, которое было удалено. Проставляется
    * сервером (`AppsService.delete`) и снимается сам, когда шаг удаляют или
@@ -323,7 +323,25 @@ export interface PeriodicStep extends BaseStep {
   progressField?: string;
 }
 
-export type Step = ApiStep | ScenarioStepRef | DelayStep | FileStep | PeriodicStep;
+/**
+ * Пользовательский экран как самостоятельный шаг потока. Блоки ввода страницы —
+ * выходы шага (ключ — `binding` блока либо его `id`): следующие шаги забирают
+ * значения штатным маппингом `s{idx}:{key}`. Блоки отображения привязываются к
+ * выходам любых пройденных шагов. Страница только с блоками отображения не
+ * блокирует исполнение; стоящая последним шагом — финальный экран результата.
+ */
+export interface PageStep extends BaseStep {
+  type: "page";
+  page: StepPage;
+}
+
+export type Step =
+  | ApiStep
+  | ScenarioStepRef
+  | DelayStep
+  | FileStep
+  | PeriodicStep
+  | PageStep;
 
 /** Which environment of a given provider (app) this scenario runs its steps against. */
 export interface EnvironmentSelection {
@@ -426,8 +444,6 @@ export interface ManualInputDescriptor {
   label: string;
   type: SchemaField["type"];
   required: boolean;
-  /** Кто спросит значение: общая форма перед запуском или страница ввода шага. */
-  source: "form" | "page";
 }
 
 export interface SubmitInputsDto {
