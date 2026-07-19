@@ -17,6 +17,7 @@ export interface SeedData {
   appId: string;
   delayScenarioId: string;
   apiScenarioId: string;
+  pageScenarioId: string;
 }
 
 export function readSeed(): SeedData {

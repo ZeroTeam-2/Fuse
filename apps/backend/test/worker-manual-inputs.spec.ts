@@ -70,7 +70,6 @@ function descriptor(over: Partial<ManualInputDescriptor>): ManualInputDescriptor
     label: "ИНН",
     type: "string",
     required: true,
-    source: "form",
     ...over,
   };
 }
@@ -254,10 +253,12 @@ describe("WorkerService — manual inputs", () => {
     expect(calledUrls()[1]).toContain("orgId=org-2");
   });
 
-  it("routes page data to the param it is bound to, despite a different block id", async () => {
+  it("records page inputs as the page step result and feeds the next step's mapping", async () => {
     const steps = [
-      apiStep("Организации", "e1", {
-        mappings: { inn: "user" },
+      {
+        id: "p1",
+        title: "Данные",
+        type: "page",
         page: {
           title: "Данные",
           rows: [
@@ -269,7 +270,8 @@ describe("WorkerService — manual inputs", () => {
             },
           ],
         },
-      }),
+      } as Step,
+      apiStep("Организации", "e1", { mappings: { inn: "s0:inn" } }),
     ];
 
     const run: Record<string, unknown> = {
@@ -280,29 +282,74 @@ describe("WorkerService — manual inputs", () => {
       stepResults: [],
       inputs: {},
     };
-    const { worker } = harness(run, steps, [descriptor({ source: "page" })]);
+    const { worker } = harness(run, steps, []);
 
-    // Фаза 1: воркер доходит до страницы, публикует запрос и ПАУЗИТ (обработчик
-    // освобождается, API ещё не вызван).
+    // Фаза 1: воркер доходит до шага-страницы, публикует запрос и ПАУЗИТ
+    // (обработчик освобождается, API ещё не вызван).
     await (worker as any).executeRun("run-1");
     expect(run.status).toBe(RunStatus.WAITING_INPUT);
     expect(calledUrls()).toHaveLength(0);
 
-    // submit: пользователь заполнил страницу (ключ поля — `инн_организации`,
-    // параметр — `inn`). Это делает ExecutionService.submitPageData + до-ставка
-    // сообщения-продолжения.
+    // submit: пользователь заполнил страницу (ключ поля — id блока
+    // `инн_организации`, ключ выхода — `inn`). Это делает
+    // ExecutionService.submitPageData + до-ставка сообщения-продолжения.
     run.pendingInput = { stepIndex: 0, data: { инн_организации: "7707083893" } };
     run.status = RunStatus.RUNNING;
 
-    // Фаза 2: продолжение отдельным сообщением — данные страницы уходят в `inn`.
+    // Фаза 2: результат шага-страницы = введённые значения по ключам выходов;
+    // следующий шаг забирает их обычным маппингом `s0:inn`.
     await (worker as any).executeRun("run-1");
+    const pageResult = (run.stepResults as any)["0"] ?? (run.stepResults as any)[0];
+    expect(pageResult.result).toEqual({ inn: "7707083893" });
     expect(calledUrls()[0]).toContain("inn=7707083893");
+    expect(run.status).toBe(RunStatus.COMPLETED);
   });
 
-  it("resolves a display block from a previous step's result into the page payload", async () => {
+  it("fails the page step when a required block is submitted empty", async () => {
+    const steps = [
+      {
+        id: "p1",
+        title: "Данные",
+        type: "page",
+        page: {
+          title: "Данные",
+          rows: [
+            {
+              id: "r1",
+              items: [
+                { id: "b1", type: "input", span: 4, label: "ИНН", binding: "inn", required: true },
+              ],
+            },
+          ],
+        },
+      } as Step,
+    ];
+
+    const run: Record<string, unknown> = {
+      _id: "run-1",
+      scenarioId: "sc1",
+      status: RunStatus.RUNNING,
+      currentStep: 0,
+      stepResults: [],
+      inputs: {},
+      // Программный сабмит прислал пустое обязательное значение.
+      pendingInput: { stepIndex: 0, data: { b1: "" } },
+    };
+    const { worker } = harness(run, steps, []);
+
+    await (worker as any).executeRun("run-1");
+
+    expect(run.status).toBe(RunStatus.FAILED);
+    expect(String(run.error)).toContain("обязательные поля страницы");
+  });
+
+  it("publishes a display-only page without pausing and completes the run", async () => {
     const steps = [
       apiStep("Организации", "e2"),
-      apiStep("Заказы", "e2", {
+      {
+        id: "p1",
+        title: "Проверьте",
+        type: "page",
         page: {
           title: "Проверьте",
           rows: [
@@ -314,7 +361,7 @@ describe("WorkerService — manual inputs", () => {
             },
           ],
         },
-      }),
+      } as Step,
     ];
 
     const run: Record<string, unknown> = {
@@ -326,25 +373,27 @@ describe("WorkerService — manual inputs", () => {
       inputs: {},
     };
 
-    const { worker, runModel } = harness(run, steps, []);
+    const { worker } = harness(run, steps, []);
     const publish = vi.fn();
     (worker as any).gateway = { publish };
 
-    // Страница шага 2 требует ответа — отвечаем, пока воркер ждёт.
-    respondWhileWaiting(runModel, run, {});
-
+    // Display-only страница не блокирует поток: сабмита нет, запуск завершается.
     await (worker as any).executeRun("run-1");
 
     const page = publish.mock.calls.find((call) => call[1].type === "page:required");
     expect(page).toBeTruthy();
     // Шаг 0 вернул { id: "org-1" } — блок отображения показывает это значение.
     expect(page![1].payload.resolved).toEqual({ out1: "org-1" });
+    expect(run.status).toBe(RunStatus.COMPLETED);
   });
 
   it("resolves dynamic select options from a previous step's array field", async () => {
     const steps = [
       apiStep("Организации", "e2"),
-      apiStep("Заказы", "e2", {
+      {
+        id: "p1",
+        title: "Выбор",
+        type: "page",
         page: {
           title: "Выбор",
           rows: [
@@ -356,7 +405,7 @@ describe("WorkerService — manual inputs", () => {
             },
           ],
         },
-      }),
+      } as Step,
     ];
 
     // Шаг 0 отвечает объектом с вложенным массивом `cars`.
