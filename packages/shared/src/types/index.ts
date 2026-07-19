@@ -176,6 +176,12 @@ export interface PageBlock {
   label?: string;
   placeholder?: string;
   text?: string;
+  /**
+   * Только `paragraph`: формат содержимого — обычный текст (по умолчанию) или
+   * Markdown, который рантайм рендерит в разметку. Отсутствие поля или
+   * неизвестное значение читается как `"text"`.
+   */
+  format?: "text" | "markdown";
   binding?: string;
   /** Ввод: пустое значение блокирует продолжение шага. Для отображения не имеет смысла. */
   required?: boolean;
