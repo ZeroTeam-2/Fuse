@@ -138,9 +138,15 @@ function submit() {
         :key="block.id"
         :style="{ gridColumn: `span ${block.span}` }"
       >
-        <!-- отображение -->
+        <!-- отображение: Markdown-формат рендерится в разметку (HTML уже
+             прошёл allowlist-санитайзер внутри renderMarkdown) -->
+        <div
+          v-if="block.type === 'paragraph' && block.format === 'markdown'"
+          class="fuse-md font-sans text-[0.9375rem] text-zinc-700 leading-relaxed"
+          v-html="renderMarkdown(displayValue(block))"
+        />
         <p
-          v-if="block.type === 'paragraph'"
+          v-else-if="block.type === 'paragraph'"
           class="font-sans text-[0.9375rem] text-zinc-700 leading-relaxed whitespace-pre-wrap m-0"
         >
           {{ displayValue(block) }}
@@ -281,3 +287,91 @@ function submit() {
     </div>
   </form>
 </template>
+
+<style>
+/* Разметка Markdown-абзаца — тот же голос, что у .fuse-richtext-view
+   (RichTextEditor), плюс теги, которых нет у tiptap: h1, code/pre, a, hr. */
+.fuse-md h1 {
+  font-weight: 700;
+  font-size: 1.3125rem;
+  letter-spacing: -0.01em;
+  color: #18181b;
+  margin: 0.7em 0 0.35em;
+}
+.fuse-md h2 {
+  font-weight: 700;
+  font-size: 1.1875rem;
+  letter-spacing: -0.01em;
+  color: #18181b;
+  margin: 0.7em 0 0.35em;
+}
+.fuse-md h3,
+.fuse-md h4,
+.fuse-md h5,
+.fuse-md h6 {
+  font-weight: 700;
+  font-size: 1.0625rem;
+  color: #18181b;
+  margin: 0.6em 0 0.3em;
+}
+.fuse-md p {
+  margin: 0.5em 0;
+  line-height: 1.6;
+}
+.fuse-md ul,
+.fuse-md ol {
+  padding-left: 1.25rem;
+  margin: 0.5em 0;
+}
+.fuse-md ul {
+  list-style: disc;
+}
+.fuse-md ol {
+  list-style: decimal;
+}
+.fuse-md blockquote {
+  border-left: 3px solid #e4e4e7;
+  padding-left: 0.75rem;
+  color: #52525b;
+  margin: 0.5em 0;
+}
+.fuse-md strong {
+  font-weight: 700;
+}
+.fuse-md code {
+  font-family: ui-monospace, monospace;
+  font-size: 0.875em;
+  background: #f4f4f5;
+  border-radius: 0.375rem;
+  padding: 0.125rem 0.375rem;
+}
+.fuse-md pre {
+  background: #f4f4f5;
+  border-radius: 0.75rem;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+.fuse-md pre code {
+  background: none;
+  padding: 0;
+}
+.fuse-md a {
+  color: #7c3aed;
+  font-weight: 600;
+}
+.fuse-md a:hover {
+  color: #6d28d9;
+}
+.fuse-md hr {
+  border: 0;
+  border-top: 1px solid #e4e4e7;
+  margin: 0.75em 0;
+}
+.fuse-md :first-child {
+  margin-top: 0;
+}
+.fuse-md :last-child {
+  margin-bottom: 0;
+}
+</style>

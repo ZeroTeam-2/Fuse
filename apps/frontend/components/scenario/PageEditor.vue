@@ -46,7 +46,7 @@ const PALETTE: PaletteItem[] = [
   { type: "select", name: "Выпадающий список", icon: "chevrons-up-down", desc: "Выбор из вариантов", span: 3 },
   { type: "dropzone", name: "Загрузка файла", icon: "upload", desc: "Drag & drop файла", span: 6 },
   { type: "richtext", name: "Форматируемый текст", icon: "pilcrow", desc: "Редактор с разметкой", span: 6 },
-  { type: "paragraph", name: "Абзац", icon: "align-left", desc: "Текст / вывод данных", span: 6 },
+  { type: "paragraph", name: "Текст", icon: "align-left", desc: "Текст / вывод данных", span: 6 },
 ];
 const META: Record<PageBlockType, PaletteItem> = Object.fromEntries(
   PALETTE.map((p) => [p.type, p]),
@@ -970,6 +970,27 @@ function save() {
           </label>
 
           <div v-if="selected.block.type === 'paragraph'" class="flex flex-col gap-2">
+            <label class="text-[0.8125rem] font-sans font-semibold text-zinc-900">Формат</label>
+            <!-- «Обычный текст» — отсутствие поля format: старые страницы его не имеют -->
+            <div class="grid grid-cols-2 gap-1.5 p-1 rounded-xl bg-zinc-100">
+              <button
+                v-for="f in [
+                  { key: 'text', label: 'Обычный текст' },
+                  { key: 'markdown', label: 'Markdown' },
+                ]"
+                :key="f.key"
+                type="button"
+                :class="[
+                  'h-8 rounded-lg font-sans text-[0.8125rem] font-semibold transition-colors cursor-pointer',
+                  (selected.block.format ?? 'text') === f.key
+                    ? 'bg-white text-zinc-900 shadow-sm'
+                    : 'text-zinc-500 hover:text-zinc-800',
+                ]"
+                @click="patchSelected({ format: f.key === 'markdown' ? 'markdown' : undefined })"
+              >
+                {{ f.label }}
+              </button>
+            </div>
             <label class="text-[0.8125rem] font-sans font-semibold text-zinc-900">Текст</label>
             <textarea
               :value="selected.block.text || ''"

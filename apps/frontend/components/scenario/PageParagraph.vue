@@ -29,7 +29,7 @@ watch(
   <p
     ref="el"
     contenteditable
-    data-placeholder="Введите текст абзаца…"
+    data-placeholder="Введите текст…"
     class="m-0 outline-none cursor-text font-sans text-[0.9375rem] text-zinc-600 leading-relaxed min-h-[1.4em] empty:before:content-[attr(data-placeholder)] empty:before:text-zinc-300"
     @mousedown.stop
     @focus="emit('editing', true)"

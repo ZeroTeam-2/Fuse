@@ -203,6 +203,20 @@ const pageResultStep: PageStep = {
         id: "r-url",
         items: [{ id: "b-url", type: "paragraph", span: 6, binding: "s1:url" }],
       },
+      // Markdown-блок: текст хранится с литеральными «\n» (как отдают внешние
+      // API) — рантайм обязан развернуть их и отрисовать разметку.
+      {
+        id: "r-md",
+        items: [
+          {
+            id: "b-md",
+            type: "paragraph",
+            span: 6,
+            format: "markdown",
+            text: "### Итог\\n- статус: **успешно**\\n- полный ответ — ниже на странице",
+          },
+        ],
+      },
     ],
   },
 };
