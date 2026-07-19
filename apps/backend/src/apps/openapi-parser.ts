@@ -17,6 +17,7 @@ interface OpenAPIParameter {
 
 interface OpenAPISchemaObject {
   type?: string;
+  format?: string;
   properties?: Record<string, OpenAPISchemaObject>;
   required?: string[];
   items?: OpenAPISchemaObject;
@@ -24,13 +25,19 @@ interface OpenAPISchemaObject {
   description?: string;
 }
 
+interface OpenAPIContentObject {
+  schema?: OpenAPISchemaObject;
+  example?: unknown;
+  examples?: Record<string, { value?: unknown }>;
+}
+
 interface OpenAPIRequestBody {
-  content?: Record<string, { schema?: OpenAPISchemaObject; example?: unknown }>;
+  content?: Record<string, OpenAPIContentObject>;
   required?: boolean;
 }
 
 interface OpenAPIResponse {
-  content?: Record<string, { schema?: OpenAPISchemaObject; example?: unknown }>;
+  content?: Record<string, OpenAPIContentObject>;
   description?: string;
 }
 
@@ -38,6 +45,7 @@ interface OpenAPIOperation {
   summary?: string;
   description?: string;
   deprecated?: boolean;
+  tags?: string[];
   parameters?: OpenAPIParameter[];
   requestBody?: OpenAPIRequestBody;
   responses?: Record<string, OpenAPIResponse>;
@@ -67,7 +75,6 @@ export interface ParsedSpec {
   host?: string;
   apiVersion?: string;
   endpoints: Endpoint[];
-  specSnapshot: unknown;
 }
 
 const VALID_METHODS = new Set(["get", "post", "put", "delete", "patch"]);
@@ -77,6 +84,7 @@ export class OpenApiParserService {
   async parse(
     rawSpec: Record<string, unknown>,
     openapiUrl: string,
+    options?: { baseUrlOverride?: string },
   ): Promise<ParsedSpec> {
     let spec: OpenAPIDocument;
     try {
@@ -85,14 +93,16 @@ export class OpenApiParserService {
       throw new BadRequestException("Failed to parse OpenAPI specification");
     }
 
-    const baseUrl = deriveBaseUrl(spec, openapiUrl);
+    let baseUrl = deriveBaseUrl(spec, openapiUrl);
+    if (baseUrl === undefined && options?.baseUrlOverride) {
+      baseUrl = options.baseUrlOverride;
+    }
 
     return {
       baseUrl,
       host: this.extractHost(baseUrl),
       apiVersion: spec.info?.version,
       endpoints: this.extractEndpoints(spec),
-      specSnapshot: spec,
     };
   }
 
@@ -129,6 +139,9 @@ export class OpenApiParserService {
           method: method.toUpperCase() as HttpMethod,
           path,
           summary: operation.summary,
+          // First tag groups the endpoint into a collapsible block; untagged
+          // operations fall into the «Прочее» block on the client.
+          tag: operation.tags?.[0],
           inputs: this.extractInputs(operation, allParameters),
           outputs,
           outputIsArray: isArray,
@@ -189,14 +202,107 @@ export class OpenApiParserService {
     );
     if (!successCode) return { fields: [], isArray: false };
 
-    const response = responses[successCode];
-    const schema = this.getFirstContentSchema(response?.content);
-    if (!schema) return { fields: [], isArray: false };
+    const content = this.getFirstContent(responses[successCode]?.content);
+    if (!content) return { fields: [], isArray: false };
 
-    return {
-      fields: this.extractSchemaFields(schema),
-      isArray: schema.type === "array",
-    };
+    const schema = content.schema;
+    if (schema) {
+      const fields = this.extractSchemaFields(schema);
+      if (fields.length > 0) {
+        return { fields, isArray: schema.type === "array" };
+      }
+    }
+
+    // Схема пустая или без properties (типично для FastAPI без response_model:
+    // `schema: {}` + example рядом) — выводим поля из примера ответа, иначе
+    // endpoint остаётся «без выходов» и к его ответу нечего привязать.
+    return this.outputsFromExample(content);
+  }
+
+  /** Пример ответа: content-уровень → внутри схемы → первый из карты examples. */
+  private outputsFromExample(content: OpenAPIContentObject): {
+    fields: SchemaField[];
+    isArray: boolean;
+  } {
+    const candidates = [
+      content.example,
+      content.schema?.example,
+      ...Object.values(content.examples ?? {}).map((e) => e?.value),
+    ];
+
+    for (const example of candidates) {
+      const parsed = this.fieldsFromExampleValue(example);
+      if (parsed.fields.length > 0) return parsed;
+    }
+
+    return { fields: [], isArray: false };
+  }
+
+  /**
+   * Поля из значения примера: объект — по ключам, массив объектов — признак
+   * коллекции + поля элемента. Обязательность пример не сообщает, тип берётся
+   * от JS-значения, само значение уходит образцом в `ex`.
+   */
+  private fieldsFromExampleValue(example: unknown): {
+    fields: SchemaField[];
+    isArray: boolean;
+  } {
+    if (Array.isArray(example)) {
+      const element = example.find(
+        (el) => el && typeof el === "object" && !Array.isArray(el),
+      );
+      return {
+        fields: element ? this.fieldsFromExampleObject(element as Record<string, unknown>) : [],
+        isArray: true,
+      };
+    }
+
+    if (example && typeof example === "object") {
+      return {
+        fields: this.fieldsFromExampleObject(example as Record<string, unknown>),
+        isArray: false,
+      };
+    }
+
+    return { fields: [], isArray: false };
+  }
+
+  private fieldsFromExampleObject(example: Record<string, unknown>): SchemaField[] {
+    return Object.entries(example).map(([key, value]) => {
+      const field: SchemaField = {
+        key,
+        label: key,
+        type: this.mapExampleValueType(value),
+        ex: value,
+        required: false,
+      };
+
+      // Массив объектов — схема элемента на один уровень, как и у схемного пути.
+      if (Array.isArray(value)) {
+        const element = value.find(
+          (el) => el && typeof el === "object" && !Array.isArray(el),
+        );
+        if (element) {
+          field.items = this.fieldsFromExampleObject(element as Record<string, unknown>);
+        }
+      }
+
+      return field;
+    });
+  }
+
+  private mapExampleValueType(value: unknown): SchemaField["type"] {
+    if (Array.isArray(value)) return "array";
+    switch (typeof value) {
+      case "number":
+        return "number";
+      case "boolean":
+        return "boolean";
+      case "object":
+        return value === null ? "string" : "object";
+      default:
+        return "string";
+    }
   }
 
   private extractSchemaFields(
@@ -210,7 +316,7 @@ export class OpenApiParserService {
       const field: SchemaField = {
         key,
         label: key,
-        type: this.mapSchemaType(prop.type),
+        type: this.mapSchemaType(prop.type, prop.format),
         loc,
         ex: prop.example,
         required: target.required?.includes(key) ?? false,
@@ -234,6 +340,14 @@ export class OpenApiParserService {
     return first?.schema;
   }
 
+  /** Content-объект целиком: выходам нужна не только схема, но и примеры рядом. */
+  private getFirstContent(
+    content?: Record<string, OpenAPIContentObject>,
+  ): OpenAPIContentObject | undefined {
+    if (!content) return undefined;
+    return Object.values(content)[0];
+  }
+
   private mapParamLocation(inValue: string): ParamLocation | undefined {
     switch (inValue) {
       case "path":
@@ -247,7 +361,13 @@ export class OpenApiParserService {
     }
   }
 
-  private mapSchemaType(type?: string): SchemaField["type"] {
+  private mapSchemaType(type?: string, format?: string): SchemaField["type"] {
+    // OpenAPI 3.x описывает файл multipart-формы как `type: string` +
+    // `format: binary` — без учёта формата файловый вход импортировался
+    // строкой, и multipart-запрос файлового шага не знал имя поля файла.
+    if (type === "string" && (format === "binary" || format === "base64")) {
+      return "file";
+    }
     switch (type) {
       case "string":
         return "string";

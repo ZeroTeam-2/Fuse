@@ -53,30 +53,100 @@
 - pnpm >= 9
 - Docker и Docker Compose (для инфраструктуры)
 
-### Быстрый старт
+## Локальный запуск
+
+Фронтенд и бэкенд работают **на хосте** (hot-reload), а MongoDB, SQS и S3 —
+**в контейнерах** (`docker-compose.dev.yml`). Очередь `scenario-execution` с DLQ
+и бакет создаются автоматически.
 
 ```bash
-# 1. Клонировать репозиторий
-git clone <repo-url> && cd Fuse
-
-# 2. Установить зависимости
+# 1. Зависимости
 pnpm install
 
-# 3. Скопировать и заполнить .env
+# 2. Базовый .env (JWT_SECRET, OAuth-креды и т.п.)
 cp .env.example .env
 
-# 4. Поднять инфраструктуру (MongoDB, MinIO, LocalStack)
+# 3. Инфраструктура в докере: MongoDB + LocalStack (SQS) + MinIO
 pnpm infra
 
-# 5. Запустить разработку (backend + frontend параллельно)
+# 4. Локальный профиль: приложение пойдёт в контейнеры, а не в удалённые сервисы
+cp .env.local.example .env.local
+
+# 5. Фронт и бэк на хосте
 pnpm dev
 
-# Или запустить по отдельности:
+# Или по отдельности:
 pnpm dev:main      # backend API (+ SQS-worker в том же процессе)
 pnpm dev:frontend  # frontend
 ```
 
-### Запуск через Docker Compose (полный стек)
+Фронтенд — http://localhost:5173, бэкенд — http://localhost:3001.
+
+### Порты инфраструктуры
+
+| Сервис | Порт на хосте | Примечание |
+|---|---|---|
+| MongoDB | `27018` | не 27017 — чтобы не конфликтовать с системным `mongod` |
+| SQS (LocalStack) | `4566` | очередь + DLQ создаются на старте |
+| S3 (MinIO) | `9000` | бакет `fuse` создаётся на старте |
+| Консоль MinIO | `9001` | `minioadmin` / `minioadmin` |
+| Мок-API | `8085` | go-httpbin; на него смотрит сид-приложение |
+
+### Сид локальной БД
+
+После `pnpm infra:reset` база пустая — в UI нечего открыть. `pnpm seed` заводит
+пользователя, демо-приложение на мок-API и два сценария: «Демо: задержка»
+(без внешних вызовов) и «Демо: запрос к API».
+
+```bash
+pnpm seed   # идемпотентен: повторный запуск не плодит дубликаты
+```
+
+Сид отказывается работать, если `MONGODB_URL` указывает не на локальную БД —
+случайно засеять прод не получится. Id созданных сущностей пишутся в `.seed.json`
+(в `.gitignore`) — оттуда их берут e2e-тесты.
+
+### Переключение профилей окружения
+
+Бэкенд читает `.env.local` **перед** `.env`, и при совпадении ключей побеждает
+`.env.local`. Переменные, которых в нём нет (`JWT_SECRET`, OAuth-креды),
+продолжают браться из `.env`.
+
+```bash
+cp .env.local.example .env.local   # → локальная инфраструктура в докере
+rm .env.local                      # → удалённые сервисы из .env
+```
+
+`.env` при этом не редактируется. `.env.local` — в `.gitignore`.
+
+Понять, к чему подключён бэкенд, можно по наличию `.env.local`; наверняка — по
+соединениям процесса: `netstat -ano | grep <pid>` покажет `27018` и `4566` для
+локального профиля.
+
+> Это важно не только для удобства: удалённая очередь SQS общая с задеплоенным
+> бэкендом. Без локального профиля он перехватывает запуски, отправленные с
+> вашей машины, и запуск навсегда зависает в статусе «Выполняем сценарий…».
+
+Свежая локальная БД пустая — приложений и сценариев в ней нет. Сид данных пока
+не автоматизирован.
+
+### Управление инфраструктурой
+
+```bash
+pnpm infra        # поднять (ждёт готовности очереди и бакета)
+pnpm infra:logs   # логи
+pnpm infra:down   # остановить; данные в томах сохраняются
+pnpm infra:reset  # снести вместе с томами и поднять заново: чистая БД и бакет
+```
+
+После `pnpm infra:down` инфраструктура остаётся выключенной — перед `pnpm dev`
+её нужно поднять обратно через `pnpm infra`, иначе бэкенд не достучится до
+MongoDB (`ECONNREFUSED ... :27018`).
+
+## Запуск через Docker Compose (полный стек)
+
+Полный стек в докере (backend + frontend + caddy) — это `docker-compose.yml`.
+`docker-compose.dev.yml` приложение **не** поднимает: там только инфраструктура.
 
 ```bash
 cp .env.example .env
@@ -124,12 +194,17 @@ pnpm dev:main         # Только backend API (+ SQS-worker)
 pnpm dev:frontend     # Только frontend
 pnpm build            # Сборка всех пакетов
 pnpm typecheck        # TypeScript проверка всех пакетов
-pnpm test             # Запуск тестов (vitest)
+pnpm test             # Юнит-тесты (vitest)
+pnpm test:infra       # Smoke-тест локальной инфраструктуры (нужен pnpm infra)
+pnpm test:e2e         # E2E в браузере (нужны pnpm infra + pnpm seed + pnpm dev)
+pnpm seed             # Наполнить локальную БД сид-данными
 pnpm lint             # Линтинг (oxlint)
 pnpm format           # Форматирование (oxfmt)
 pnpm gen:types        # Генерация типов из OpenAPI-спеки backend'а
-pnpm infra            # Поднять MongoDB + MinIO + LocalStack
-pnpm infra:down       # Остановить инфраструктуру
+pnpm infra            # Поднять инфраструктуру: MongoDB + LocalStack (SQS) + MinIO
+pnpm infra:logs       # Логи инфраструктуры
+pnpm infra:down       # Остановить инфраструктуру (данные сохраняются)
+pnpm infra:reset      # Остановить и удалить тома (чистая БД и бакет)
 ```
 
 ## Структура проекта
@@ -160,8 +235,9 @@ Fuse/
 │       └── e2e/          # Playwright тесты
 ├── packages/
 │   └── shared/           # Общие типы, enum'ы, категории
-├── docker-compose.yml    # Инфраструктура + продакшен-стек
-└── Caddyfile             # Конфигурация reverse proxy
+├── docker-compose.yml     # Полный стек в докере (backend + frontend + caddy)
+├── docker-compose.dev.yml # Только инфраструктура для разработки на хосте
+└── Caddyfile              # Конфигурация reverse proxy
 ```
 
 ## Безопасность

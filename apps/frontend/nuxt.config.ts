@@ -13,6 +13,7 @@ const publicResult = publicEnvSchema.safeParse({
   apiBaseUrl: process.env.NUXT_PUBLIC_API_BASE_URL ?? "",
   yandexMetricaId: process.env.NUXT_PUBLIC_YANDEX_METRIKA_ID ?? "",
   fileSingleUploadMaxMb: process.env.FILE_SINGLE_UPLOAD_MAX_MB ?? "10",
+  specFileMaxMb: process.env.SPEC_FILE_MAX_MB ?? "15",
 });
 if (!publicResult.success) {
   const errors = publicResult.error.issues
@@ -41,6 +42,18 @@ export default defineNuxtConfig({
 
   modules: ["@nuxtjs/tailwindcss", "@pinia/nuxt", "nuxt-tiptap-editor"],
 
+  vite: {
+    optimizeDeps: {
+      // Tiptap подключается только в редакторе (RichTextEditor). Без этого Vite
+      // обнаруживает его лишь при первом переходе туда, пересобирает зависимости
+      // и перезагружает страницу прямо посреди навигации — переход падает, а
+      // вызвавшая его форма получает ошибку на ровном месте.
+      // Здесь только пакет, который импортирует само приложение: @tiptap/vue-3 и
+      // starter-kit — зависимости nuxt-tiptap-editor и из фронтенда не резолвятся.
+      include: ["@tiptap/extension-placeholder"],
+    },
+  },
+
   components: [
     // Design-system primitives registered without a path prefix so their names
     // match the source design system (<Button>, <Card>, <ScenarioCard>…).
@@ -52,6 +65,9 @@ export default defineNuxtConfig({
 
   app: {
     head: {
+      // Заголовок по умолчанию: без него вкладка браузера остаётся безымянной
+      // (страницы могут переопределять его через useHead).
+      title: "Fuse",
       link: [
         { rel: "preconnect", href: "https://fonts.googleapis.com" },
         {
@@ -72,7 +88,12 @@ export default defineNuxtConfig({
     public: {
       apiBaseUrl: "",
       yandexMetricaId: "",
+      // Дефолты; NUXT_PUBLIC_* переопределяет в рантайме. Держим синхронно с
+      // бэкендом (FILE_SINGLE_UPLOAD_MAX_MB / SPEC_FILE_MAX_MB /
+      // DEFAULT_UPLOAD_PART_SIZE_MB в file-limits.constants.ts).
       fileSingleUploadMaxMb: 10,
+      specFileMaxMb: 15,
+      uploadPartSizeMb: 5,
     },
   },
 

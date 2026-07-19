@@ -66,12 +66,31 @@ export interface Endpoint {
   method: HttpMethod;
   path: string;
   summary?: string;
+  /** First OpenAPI `tags` entry, used to group endpoints into collapsible blocks. Empty → «Прочее». */
+  tag?: string;
   inputs: SchemaField[];
   /** Fields of the response — of *one element* when `outputIsArray` is set. */
   outputs: SchemaField[];
   /** The endpoint answers with a collection, so `outputs` describe its element. */
   outputIsArray?: boolean;
   status: EndpointStatus;
+}
+
+/** One variable of an app environment. The `baseUrl` key is always present. */
+export interface EnvironmentVariable {
+  key: string;
+  value: string;
+}
+
+/**
+ * A named environment of an API provider (app). Every app has a non-deletable
+ * `Prod` environment. Variables are an extensible set; today the only member is
+ * `baseUrl` — the absolute address every endpoint path is resolved against.
+ */
+export interface Environment {
+  id: string;
+  name: string;
+  variables: EnvironmentVariable[];
 }
 
 /** Input/output schema of a single step, as served to the scenario builder. */
@@ -87,12 +106,14 @@ export interface App {
   name: string;
   description?: string;
   openapiUrl: string;
-  /** Absolute origin (+ base path) every endpoint path is resolved against. */
+  /** Absolute origin (+ base path) every endpoint path is resolved against. Seeds the Prod environment. */
   baseUrl?: string;
   host?: string;
   apiVersion?: string;
   specSnapshot?: unknown;
   endpoints: Endpoint[];
+  /** Environments of the provider. The default `Prod` environment cannot be deleted. */
+  environments?: Environment[];
   published: boolean;
   scenarioCount?: number;
   createdAt: string;
@@ -115,43 +136,105 @@ export interface ImportPreviewResult {
   host?: string;
   apiVersion?: string;
   endpointCount: number;
-  endpoints: Pick<Endpoint, "method" | "path" | "summary">[];
+  endpoints: Pick<Endpoint, "method" | "path" | "summary" | "tag">[];
 }
 
 export interface ReimportDiff {
-  added: Pick<Endpoint, "method" | "path" | "summary">[];
-  deprecated: Pick<Endpoint, "method" | "path" | "summary">[];
-  kept: Pick<Endpoint, "method" | "path" | "summary">[];
+  added: Pick<Endpoint, "method" | "path" | "summary" | "tag">[];
+  deprecated: Pick<Endpoint, "method" | "path" | "summary" | "tag">[];
+  kept: Pick<Endpoint, "method" | "path" | "summary" | "tag">[];
 }
 
-export interface PageField {
-  key: string;
-  label: string;
+/** Типы блоков страницы. `paragraph` — отображение, остальное — ввод. */
+export type PageBlockType =
+  | "input"
+  | "select"
+  | "dropzone"
+  | "richtext"
+  | "paragraph";
+
+/** Категория блока: заполняет пользователь (ввод) либо показывает данные (отображение). */
+export type PageBlockCategory = "input" | "display";
+
+/** Ширина блока в колонках сетки страницы (сетка из 6 колонок). */
+export type PageBlockSpan = 1 | 2 | 3 | 4 | 5 | 6;
+
+/**
+ * Один элемент страницы на сетке из 6 колонок.
+ *
+ * `binding` зависит от категории блока:
+ * - ввод (`input`/`select`/`dropzone`/`richtext`) — **ключ выхода** шага-страницы
+ *   (`inn`): под ним введённое значение попадает в результат шага, откуда его
+ *   забирают маппинги следующих шагов;
+ * - отображение (`paragraph`) — выход пройденного шага (`s{idx}:{outKey}`).
+ * Без привязки блок ввода отдаёт значение под собственным `id`.
+ */
+export interface PageBlock {
+  id: string;
+  type: PageBlockType;
+  span: PageBlockSpan;
+  label?: string;
   placeholder?: string;
-  required: boolean;
+  text?: string;
+  /**
+   * Только `paragraph`: формат содержимого — обычный текст (по умолчанию) или
+   * Markdown, который рантайм рендерит в разметку. Отсутствие поля или
+   * неизвестное значение читается как `"text"`.
+   */
+  format?: "text" | "markdown";
+  binding?: string;
+  /** Ввод: пустое значение блокирует продолжение шага. Для отображения не имеет смысла. */
+  required?: boolean;
+  /** Только `dropzone`: допустимые форматы файла — расширения (".pdf") и/или MIME-типы ("application/pdf"). */
+  accept?: string[];
+  /** Только `dropzone`: максимальный размер файла в МБ. */
+  maxFileMb?: number;
+  /** Статические варианты блока `select` (текст варианта — и подпись, и значение). */
+  options?: string[];
+  /**
+   * Динамический источник вариантов `select`: выход пройденного шага
+   * (`s{idx}:{outKey}`), значения которого станут вариантами. Если поле —
+   * массив, его элементы (примитивы или поле `outKey` элементов-объектов)
+   * разворачиваются в список опций на рантайме. Задан — перекрывает `options`.
+   */
+  optionsSource?: string;
 }
 
-export type StepPage =
-  | {
-      type: "fields";
-      title: string;
-      hint?: string;
-      fields: PageField[];
-      buttonText: string;
-    }
-  | {
-      type: "file";
-      title: string;
-      hint?: string;
-      accept?: string;
-      maxMb?: number;
-      buttonText: string;
-    }
-  | {
-      type: "text";
-      title: string;
-      body: string;
-    };
+/**
+ * Ссылка на файл, загруженный со страницы шага в хранилище платформы.
+ * Значение dropzone-блока в `page:submit`; worker находит её во входах
+ * файлового шага и по `objectName` читает объект из MinIO.
+ */
+export interface UploadedFileRef {
+  objectName: string;
+  fileName: string;
+  fileSize: number;
+  fileType: string;
+}
+
+export function isUploadedFileRef(value: unknown): value is UploadedFileRef {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.objectName === "string" &&
+    v.objectName.length > 0 &&
+    typeof v.fileName === "string" &&
+    typeof v.fileSize === "number" &&
+    typeof v.fileType === "string"
+  );
+}
+
+/** Строка страницы — набор блоков на сетке из 6 колонок. */
+export interface PageRow {
+  id: string;
+  items: PageBlock[];
+}
+
+/** Страница шага — композиционная раскладка из строк и блоков. */
+export interface StepPage {
+  title: string;
+  rows: PageRow[];
+}
 
 export type MappingValue = "user" | "const" | string;
 
@@ -187,7 +270,6 @@ export interface BaseStep {
   consts?: Record<string, string>;
   /** Keyed by input field key, like `mappings`. Only meaningful for `s{idx}:{key}` mappings. */
   filters?: Record<string, StepFilter>;
-  page?: StepPage;
   /**
    * Шаг ссылался на приложение/API, которое было удалено. Проставляется
    * сервером (`AppsService.delete`) и снимается сам, когда шаг удаляют или
@@ -214,6 +296,13 @@ export interface DelayStep extends BaseStep {
   seconds: number;
 }
 
+/**
+ * @deprecated Тип выведен из употребления: загрузка файла — свойство api-шага
+ * (dropzone-привязка к файловому body-входу endpoint'а даёт multipart), опрос
+ * статуса обработки — следующий periodic-шаг. Остаётся в union только для
+ * чтения старых документов сценариев; worker завершает такой шаг доменной
+ * ошибкой с подсказкой.
+ */
 export interface FileStep extends BaseStep {
   type: "file";
   appId?: string;
@@ -232,13 +321,39 @@ export interface FileStep extends BaseStep {
 export interface PeriodicStep extends BaseStep {
   type: "periodic";
   appId: string;
+  /** Отсутствует у шагов, созданных до появления поля, — тогда endpoint ищется по pollMethod+pollPath. */
+  endpointId?: string;
   pollMethod: HttpMethod;
   pollPath: string;
   pollIntervalSec: number;
   progressField?: string;
 }
 
-export type Step = ApiStep | ScenarioStepRef | DelayStep | FileStep | PeriodicStep;
+/**
+ * Пользовательский экран как самостоятельный шаг потока. Блоки ввода страницы —
+ * выходы шага (ключ — `binding` блока либо его `id`): следующие шаги забирают
+ * значения штатным маппингом `s{idx}:{key}`. Блоки отображения привязываются к
+ * выходам любых пройденных шагов. Страница только с блоками отображения не
+ * блокирует исполнение; стоящая последним шагом — финальный экран результата.
+ */
+export interface PageStep extends BaseStep {
+  type: "page";
+  page: StepPage;
+}
+
+export type Step =
+  | ApiStep
+  | ScenarioStepRef
+  | DelayStep
+  | FileStep
+  | PeriodicStep
+  | PageStep;
+
+/** Which environment of a given provider (app) this scenario runs its steps against. */
+export interface EnvironmentSelection {
+  appId: string;
+  environmentId: string;
+}
 
 export interface Scenario {
   id: string;
@@ -250,6 +365,8 @@ export interface Scenario {
   category?: string;
   subcategory?: string;
   steps: Step[];
+  /** Per-provider environment choice; unset providers default to Prod at execution. */
+  environmentSelections?: EnvironmentSelection[];
   published: boolean;
   runCount: number;
   /**
@@ -278,6 +395,7 @@ export interface UpdateScenarioDto {
   category?: string;
   subcategory?: string;
   steps?: Step[];
+  environmentSelections?: EnvironmentSelection[];
   published?: boolean;
 }
 
@@ -302,12 +420,96 @@ export interface Run {
   stepResults: RunStepResult[];
   currentStep: number;
   error?: string;
+  /** Входы запуска по скоуп-ключам — «Повторить запуск» шлёт их как есть. */
+  inputs?: Record<string, unknown>;
+  /** Реестр файлов запуска (артефакты + загрузки пользователя). */
+  files?: UploadedFileRef[];
+  /**
+   * Финальная display-only страница запуска с разрешёнными данными блоков —
+   * отформатированный итоговый экран для показа в результате запуска.
+   */
+  finalPage?: {
+    stepIndex: number;
+    stepTitle: string;
+    page: StepPage;
+    resolved?: Record<string, unknown>;
+  };
   createdAt: string;
   updatedAt: string;
 }
 
 export interface CreateRunDto {
   scenarioId: string;
+  /** Значения ручного ввода по скоуп-ключам (`s0:inn`, `s2.s0:filter:status`). */
+  inputs?: Record<string, unknown>;
+}
+
+/**
+ * Ссылка на файл запуска в хранилище платформы: и загруженный пользователем
+ * вход (`uploads/...`), и артефакт — файловый ответ внешнего API, сохранённый
+ * воркером (`runs/{userId}/{runId}/...`). Форма совпадает с `UploadedFileRef`,
+ * поэтому клиент распознаёт оба через `isUploadedFileRef`.
+ */
+export type RunFileRef = UploadedFileRef;
+
+/** Элемент списка запусков — без тяжёлых полей (`stepResults`, `inputs`). */
+export interface RunListItem {
+  id: string;
+  scenarioId: string;
+  /** Денормализуется на лету; у удалённого сценария — плейсхолдер. */
+  scenarioTitle: string;
+  status: RunStatus;
+  currentStep: number;
+  totalSteps: number;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type NotificationType =
+  | "run_completed"
+  | "run_failed"
+  | "run_cancelled"
+  | "run_waiting_input";
+
+export interface RunNotification {
+  id: string;
+  userId: string;
+  runId: string;
+  scenarioId: string;
+  /** Денормализовано при создании — переживает удаление сценария. */
+  scenarioTitle: string;
+  type: NotificationType;
+  read: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Одно значение сценария, помеченное ручным вводом: либо сам параметр шага
+ * (`mappings[key] = "user"`), либо операнд его условия фильтрации
+ * (`filters[key].value.mode = "user"`). Считается на сервере по всем шагам —
+ * этим списком форма запуска строит поля, а воркер проверяет полноту входов.
+ */
+export interface ManualInputDescriptor {
+  /** Ключ во входах запуска: `s0:inn`, `s2.s0:filter:status`. */
+  key: string;
+  /** Путь до шага: `[3]` или `[2, 0]` для шага вложенного сценария. */
+  stepPath: number[];
+  /** Индекс шага на своём уровне вложенности. */
+  stepIndex: number;
+  stepTitle: string;
+  /** Ключ входа шага, к которому относится значение. */
+  paramKey: string;
+  kind: "param" | "filter";
+  label: string;
+  type: SchemaField["type"];
+  required: boolean;
+}
+
+export interface SubmitInputsDto {
+  stepIndex: number;
+  values: Record<string, unknown>;
 }
 
 export interface MarketplaceQuery extends PaginationQuery {

@@ -1,0 +1,115 @@
+name: Change bootstrap
+
+# Пуш ветки change/<id> заводит issue (если его ещё нет) и черновой PR в develop.
+# Идемпотентно: повторные пуши ничего не дублируют.
+
+on:
+  push:
+    branches: ['change/**']
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    env:
+      # PAT с правами Issues: RW, Pull requests: RW, Contents: Read.
+      # Штатный GITHUB_TOKEN здесь не годится: созданный им PR не запускает
+      # pull_request-воркфлоу, поэтому CI и Spec gate на нём не стартуют.
+      GH_TOKEN: ${{ secrets.FLOW_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Определить change
+        id: change
+        run: |
+          set -euo pipefail
+          id="${GITHUB_REF_NAME#change/}"
+          dir="openspec/changes/$id"
+
+          if [ -f "$dir/proposal.md" ]; then
+            echo "id=$id" >> "$GITHUB_OUTPUT"
+            echo "title=Change: $id" >> "$GITHUB_OUTPUT"
+          elif ls -d openspec/changes/archive/*-"$id" >/dev/null 2>&1; then
+            # Архивный коммит — легитимный push последнего шага. Issue и PR уже
+            # созданы на первом пуше, бутстрапить нечего. Не падаем.
+            echo "Change '$id' уже заархивирован — пропускаю бутстрап."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Ветка '$GITHUB_REF_NAME' не несёт артефактов OpenSpec: нет $dir/proposal.md."
+            echo "::error::Первым коммитом ветки change/<id> должны приехать артефакты из openspec/changes/<id>/."
+            exit 1
+          fi
+
+      - name: Убедиться, что лейбл существует
+        if: steps.change.outputs.skip != 'true'
+        run: gh label create "change:${{ steps.change.outputs.id }}" --color BFD4F2 --description "OpenSpec change" --force
+
+      - name: Найти или создать issue
+        id: issue
+        if: steps.change.outputs.skip != 'true'
+        env:
+          ID: ${{ steps.change.outputs.id }}
+          TITLE: ${{ steps.change.outputs.title }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          num=$(gh issue list --label "change:$ID" --state all --limit 1 --json number --jq '.[0].number // empty')
+
+          if [ -n "$num" ]; then
+            echo "Issue уже есть: #$num"
+          else
+            # Тело issue — только «зачем» и ссылка. Источник истины остаётся в proposal.md,
+            # обратной синхронизации нет и не должно быть.
+            {
+              awk '/^## Why/{f=1;next} /^## /{f=0} f' "openspec/changes/$ID/proposal.md"
+              echo
+              echo "---"
+              echo "Спецификация: [\`openspec/changes/$ID/proposal.md\`]($REPO_URL/blob/change/$ID/openspec/changes/$ID/proposal.md)"
+            } > /tmp/issue-body.md
+
+            num=$(gh issue create --title "$TITLE" --body-file /tmp/issue-body.md --label "change:$ID" | sed 's#.*/##')
+            echo "Создан issue #$num"
+          fi
+
+          echo "number=$num" >> "$GITHUB_OUTPUT"
+
+      - name: Найти или открыть черновой PR
+        if: steps.change.outputs.skip != 'true'
+        env:
+          ID: ${{ steps.change.outputs.id }}
+          TITLE: ${{ steps.change.outputs.title }}
+          ISSUE: ${{ steps.issue.outputs.number }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          pr=$(gh pr list --head "change/$ID" --state open --limit 1 --json number --jq '.[0].number // empty')
+
+          if [ -n "$pr" ]; then
+            echo "PR уже открыт: #$pr"
+            exit 0
+          fi
+
+          # Ключевое слово Closes здесь не сработает: PR вливается в develop, а не в
+          # дефолтную ветку. Issue закрывает workflow change-complete.yml после мержа.
+          cat > /tmp/pr-body.md <<EOF
+          Change: \`$ID\` — [\`proposal.md\`]($REPO_URL/blob/change/$ID/openspec/changes/$ID/proposal.md)
+          Related: #$ISSUE
+
+          ## Чеклист
+
+          - [ ] Артефакты OpenSpec приехали первым коммитом ветки
+          - [ ] Задачи в \`tasks.md\` отмечены
+          - [ ] \`openspec archive $ID\` выполнен последним коммитом (дельты влиты в \`openspec/specs/\`)
+          EOF
+
+          gh pr create \
+            --draft \
+            --base develop \
+            --head "change/$ID" \
+            --title "$TITLE" \
+            --body-file /tmp/pr-body.md \
+            --label "change:$ID"

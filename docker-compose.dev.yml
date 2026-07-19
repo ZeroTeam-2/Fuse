@@ -1,23 +1,41 @@
-# Инфраструктура для локальной разработки: MongoDB, MinIO, LocalStack (SQS).
-# Для production-деплоя используется отдельный compose (переменные окружения
-# задают подключение к внешним сервисам).
+# Инфраструктура для локальной разработки: MongoDB, LocalStack (SQS), MinIO.
 #
-# Единая точка входа — caddy (http://localhost:${HTTP_PORT:-8081}):
-#   /api/* проксируется в backend, остальное — во frontend.
+# Здесь ТОЛЬКО инфраструктура. Фронтенд и бэкенд запускаются на хосте
+# (`pnpm dev`) с hot-reload и ходят в эти контейнеры через localhost:
+#
+#   pnpm infra                        # поднять инфраструктуру
+#   cp .env.local.example .env.local  # включить локальный профиль окружения
+#   pnpm dev                          # фронт и бэк на хосте
+#
+# Полный стек в докере (backend + frontend + caddy) — это docker-compose.yml.
+#
+# Порты на хосте: mongo 27018, sqs 4566, s3 9000, консоль minio 9001.
+#
+# ВАЖНО: значения ниже намеренно захардкожены и НЕ берутся из ${...}.
+# Docker Compose автоматически читает корневой .env (но не .env.local), а там
+# лежат БОЕВЫЕ креды и имя прод-бакета — при интерполяции локальный MinIO
+# поднимался с прод-ключами и прод-именем бакета. Это локальная инфраструктура:
+# креды фиксированные и должны совпадать с .env.local.example.
 services:
-  # ─── Infrastructure ──────────────────────────────────────────────────────
   mongo:
     image: mongo:7
     container_name: fuse-mongo
     restart: unless-stopped
     environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-fuse}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-fusepassword}
-      MONGO_INITDB_DATABASE: ${MONGO_DB:-fuse}
+      MONGO_INITDB_ROOT_USERNAME: fuse
+      MONGO_INITDB_ROOT_PASSWORD: fusepassword
+      MONGO_INITDB_DATABASE: fuse
     ports:
+      # 27018 на хосте, чтобы не конфликтовать с системным mongod на 27017.
       - "27018:27017"
     volumes:
       - fuse-mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   localstack:
     # latest (2026.x) требует LOCALSTACK_AUTH_TOKEN; 4.7 — последний community-образ
@@ -30,6 +48,13 @@ services:
       SERVICES: sqs
     volumes:
       - ./docker/localstack/init-sqs.sh:/etc/localstack/init/ready.d/init-sqs.sh
+    healthcheck:
+      # Готовность = очередь реально создана init-скриптом, а не "контейнер поднялся".
+      test: ["CMD-SHELL", "awslocal sqs get-queue-url --queue-name scenario-execution || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
 
   minio:
     image: minio/minio:latest
@@ -37,98 +62,44 @@ services:
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
-      S3_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
-      S3_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
     ports:
       - "9000:9000"
       - "9001:9001"
     volumes:
       - fuse-minio-data:/data
-
-  # ─── Application ─────────────────────────────────────────────────────────
-  caddy:
-    build:
-      context: .
-      dockerfile: apps/proxy/Dockerfile
-    container_name: fuse-caddy
-    restart: unless-stopped
-    ports:
-      - "${HTTP_PORT:-8081}:8081"
-    depends_on:
-      backend:
-        condition: service_healthy
-      frontend:
-        condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-
-  backend:
-    build:
-      context: .
-      dockerfile: apps/backend/Dockerfile
-    container_name: fuse-backend
-    restart: unless-stopped
-    environment:
-      NODE_ENV: ${NODE_ENV:-production}
-      PORT: 3001
-      MONGODB_URL: mongodb://${MONGO_USER:-fuse}:${MONGO_PASSWORD:-fusepassword}@mongo:27017/${MONGO_DB:-fuse}?authSource=admin
-      AWS_REGION: ${AWS_REGION:-us-east-1}
-      AWS_SQS_QUEUE_URL: ${AWS_SQS_QUEUE_URL:-http://localstack:4566/000000000000/scenario-execution}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
-      AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL:-http://localstack:4566}
-      S3_URL: ${S3_URL:-minio}
-      S3_PORT: "9000"
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
-      S3_BUCKET: ${S3_BUCKET:-fuse}
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
-      YANDEX_CLIENT_ID: ${YANDEX_CLIENT_ID:-}
-      YANDEX_CLIENT_SECRET: ${YANDEX_CLIENT_SECRET:-}
-      YANDEX_REDIRECT_URI: ${YANDEX_REDIRECT_URI:-}
-      APP_URL: ${APP_URL:-http://localhost:${HTTP_PORT:-8081}}
-    expose:
-      - "3001"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    depends_on:
-      mongo:
-        condition: service_started
-      localstack:
-        condition: service_started
-      minio:
-        condition: service_started
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3001/"]
-      interval: 15s
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 40s
+      start_period: 15s
 
-  frontend:
-    build:
-      context: .
-      dockerfile: apps/frontend/Dockerfile
-    container_name: fuse-frontend
+  # Мок внешнего API: на него смотрит baseUrl сид-приложения, чтобы api-шаги
+  # сценариев исполнялись против локального эндпоинта, а не чужого сервиса.
+  mock-api:
+    image: mccutchen/go-httpbin:v2.15.0
+    container_name: fuse-mock-api
     restart: unless-stopped
-    environment:
-      NUXT_PUBLIC_API_BASE_URL: /
-      NUXT_SESSION_SECRET: ${NUXT_SESSION_SECRET:?NUXT_SESSION_SECRET is required}
-    expose:
-      - "5173"
+    ports:
+      - "8085:8080"
+
+  # Одноразовый бутстрап: создаёт бакет и завершается. Идемпотентен.
+  minio-init:
+    image: minio/mc:latest
+    container_name: fuse-minio-init
+    restart: "no"
     depends_on:
-      backend:
+      minio:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:5173/"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
+    environment:
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_BUCKET: fuse
+    entrypoint: ["/bin/sh", "/init-bucket.sh"]
+    volumes:
+      - ./docker/minio/init-bucket.sh:/init-bucket.sh:ro
 
 volumes:
   fuse-mongo-data:

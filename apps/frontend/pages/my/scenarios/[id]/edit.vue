@@ -133,8 +133,57 @@
         </div>
       </Card>
 
+      <!-- Окружения -->
+      <div v-else-if="tab === 'environments'">
+        <div
+          v-if="!store.distinctAppCount"
+          class="border border-dashed border-zinc-300 rounded-2xl px-6 py-14 flex flex-col items-center text-center"
+        >
+          <span
+            class="w-12 h-12 rounded-2xl bg-violet-50 text-violet-600 inline-flex items-center justify-center mb-4"
+          >
+            <Icon name="server" :size="22" />
+          </span>
+          <div class="font-sans text-[0.9375rem] text-zinc-600 max-w-[420px]">
+            Добавьте шаг с endpoint — и здесь можно будет выбрать окружение для каждого
+            поставщика. По умолчанию используется Prod.
+          </div>
+        </div>
+
+        <Card v-else padding="xl" class="flex flex-col gap-5">
+          <p class="font-sans text-[0.9375rem] text-zinc-500">
+            Для каждого поставщика выберите окружение, в котором будут исполняться его шаги.
+          </p>
+          <div
+            v-for="appId in store.distinctAppIds"
+            :key="appId"
+            class="flex flex-col sm:flex-row sm:items-center gap-3 border-b border-zinc-100 pb-4 last:border-0 last:pb-0"
+          >
+            <div class="flex items-center gap-2.5 sm:w-[220px] shrink-0">
+              <span
+                class="w-8 h-8 rounded-lg inline-flex items-center justify-center font-sans font-bold text-[0.8125rem] text-white shrink-0"
+                :style="{ background: '#6366f1' }"
+              >
+                {{ (appNames[appId] ?? "API").charAt(0) }}
+              </span>
+              <span class="font-sans text-[0.9375rem] font-semibold text-zinc-900 min-w-0 truncate">
+                {{ appNames[appId] ?? "API" }}
+              </span>
+            </div>
+            <div class="flex-1 min-w-0">
+              <Select
+                :model-value="selectedEnv(appId)"
+                :options="envOptions(appId)"
+                placeholder="Prod"
+                @update:model-value="setEnv(appId, $event ?? '')"
+              />
+            </div>
+          </div>
+        </Card>
+      </div>
+
       <!-- Настройка шагов -->
-      <div v-else>
+      <div v-else-if="tab === 'steps'">
         <div
           v-if="!store.stepCount"
           class="border border-dashed border-zinc-300 rounded-2xl px-6 py-14 flex flex-col items-center text-center"
@@ -212,15 +261,24 @@
     <ScenarioPageEditor
       v-if="pageIndex !== null && steps[pageIndex]"
       :step="steps[pageIndex]"
+      :step-index="pageIndex"
+      :steps="steps"
+      :schemas="schemas"
       @save="savePage"
-      @close="pageIndex = null"
+      @close="closePageEditor"
     />
   </div>
 </template>
 
 <script setup lang="ts">
-import { CATEGORIES } from "@fuse/shared";
-import type { Step, StepFilter, StepPage, StepSchema, StepType } from "@fuse/shared";
+import {
+  CATEGORIES,
+  blockOutputName,
+  isInputBlock,
+  pageBlockCount,
+  pageBlocks,
+} from "@fuse/shared";
+import type { Environment, Step, StepFilter, StepPage, StepSchema, StepType } from "@fuse/shared";
 
 const { $api } = useNuxtApp() as any;
 const route = useRoute();
@@ -231,6 +289,7 @@ const scenarioId = route.params.id as string;
 const TABS = [
   { value: "main", label: "Основная" },
   { value: "steps", label: "Настройка шагов" },
+  { value: "environments", label: "Окружения" },
 ];
 
 const TYPE_LABELS: Record<string, string> = {
@@ -239,6 +298,7 @@ const TYPE_LABELS: Record<string, string> = {
   delay: "Задержка",
   file: "Файл",
   periodic: "Периодический запрос",
+  page: "Страница",
 };
 
 const DOT_COLORS = ["#8b5cf6", "#6366f1", "#10b981", "#f59e0b", "#0ea5e9", "#ec4899"];
@@ -253,10 +313,17 @@ const form = reactive({ title: "", description: "", category: "", subcategory: "
 
 const appNames = ref<Record<string, string>>({});
 const schemas = ref<StepSchema[]>([]);
+const appEnvironments = ref<Record<string, Environment[]>>({});
 
 const pickedType = ref<{ key: StepType; title: string } | null>(null);
 const configIndex = ref<number | null>(null);
 const pageIndex = ref<number | null>(null);
+/**
+ * Индекс только что добавленного page-шага, ещё не сохранённого: сервер
+ * отклоняет пустую страницу, поэтому шаг persist'ится по «Готово» конструктора,
+ * а закрытие без сохранения убирает черновик.
+ */
+const draftPageIndex = ref<number | null>(null);
 const dragIndex = ref<number | null>(null);
 const overIndex = ref<number | null>(null);
 
@@ -297,6 +364,7 @@ function pathOf(step: Step) {
   if (step.type === "api") return step.path;
   if (step.type === "periodic") return step.pollPath;
   if (step.type === "delay") return `${step.seconds} с`;
+  if (step.type === "page") return `${pageBlockCount(step.page)} элем.`;
   return "";
 }
 
@@ -324,8 +392,31 @@ function filterSummary(filter?: StepFilter): string {
   return `, где ${filter.field} ${OPERATOR_LABELS[filter.op] ?? filter.op} ${value}`;
 }
 
+/**
+ * Имя поля источника в сводке: у шага-страницы ключ по умолчанию — это id
+ * блока, вместо него показываем отображаемое имя (кастомный ключ либо лейбл).
+ */
+function refFieldName(idx: number, key: string): string {
+  if (steps.value[idx]?.type !== "page") return key;
+  return schemas.value[idx]?.outputs.find((o) => o.key === key)?.label || key;
+}
+
 function stepParams(i: number) {
   const step = steps.value[i];
+
+  // У шага-страницы входов нет — сводка показывает его выходы: видно, какие
+  // значения страница отдаёт следующим шагам. Имя — кастомный ключ, иначе
+  // лейбл блока; лейбл дублируем рядом, когда показан кастомный ключ.
+  if (step.type === "page") {
+    return pageBlocks(step.page)
+      .filter(isInputBlock)
+      .map((b) => ({
+        kind: "ВЫХОД",
+        name: blockOutputName(b),
+        source: b.binding && b.label ? b.label : "Ввод на странице",
+      }));
+  }
+
   const mappings = step.mappings ?? {};
   const consts = step.consts ?? {};
   const filters = step.filters ?? {};
@@ -336,7 +427,7 @@ function stepParams(i: number) {
       kind: (f.loc ?? "body").toUpperCase(),
       name: f.key,
       source: ref
-        ? `Шаг ${Number(ref[1]) + 1} · ${ref[2]}${filterSummary(filters[f.key])}`
+        ? `Шаг ${Number(ref[1]) + 1} · ${refFieldName(Number(ref[1]), ref[2])}${filterSummary(filters[f.key])}`
         : source === "const"
           ? `Константа: ${consts[f.key] || "—"}`
           : "Ввод пользователя",
@@ -378,11 +469,16 @@ async function loadSchemas() {
 }
 
 // Steps are persisted on every change, then schemas are re-resolved because the
-// backend derives them from the saved order.
+// backend derives them from the saved order. Environment choices ride along so
+// providers dropped with their last step lose their stale selection too.
 async function persistSteps() {
   if (!store.scenario) return;
+  store.pruneEnvironmentSelections();
   const { error: apiError } = await $api.PATCH(`/api/scenarios/${scenarioId}`, {
-    body: { steps: store.scenario.steps },
+    body: {
+      steps: store.scenario.steps,
+      environmentSelections: store.scenario.environmentSelections ?? [],
+    },
   });
   if (apiError) {
     error.value = "Не удалось сохранить шаги";
@@ -390,6 +486,42 @@ async function persistSteps() {
   }
   error.value = "";
   await loadSchemas();
+  await loadEnvironmentsForApps();
+}
+
+// Environments of every provider used in the scenario. Fetched per app (GET by
+// id also seeds a legacy app's Prod), so the tab can offer them in a Select.
+async function loadEnvironmentsForApps() {
+  await Promise.all(
+    store.distinctAppIds.map(async (id) => {
+      if (appEnvironments.value[id]) return;
+      const { data } = await $api.GET(`/api/apps/${id}`, {});
+      if (data) appEnvironments.value[id] = data.environments ?? [];
+    }),
+  );
+}
+
+function envOptions(appId: string) {
+  return (appEnvironments.value[appId] ?? []).map((e) => ({
+    value: e.id,
+    label: e.name,
+    description: e.variables.find((v) => v.key === "baseUrl")?.value,
+  }));
+}
+
+function selectedEnv(appId: string): string {
+  const sel = store.scenario?.environmentSelections?.find((s) => s.appId === appId);
+  if (sel) return sel.environmentId;
+  const prod = (appEnvironments.value[appId] ?? []).find((e) => e.name === "Prod");
+  return prod?.id ?? "";
+}
+
+async function setEnv(appId: string, environmentId: string) {
+  store.setEnvironmentSelection(appId, environmentId);
+  if (!store.scenario) return;
+  await $api.PATCH(`/api/scenarios/${scenarioId}`, {
+    body: { environmentSelections: store.scenario.environmentSelections },
+  });
 }
 
 function pickType(t: { key: StepType; title: string }) {
@@ -399,6 +531,15 @@ function pickType(t: { key: StepType; title: string }) {
 async function addStep(step: Step) {
   store.addStep(step);
   pickedType.value = null;
+
+  // Page-шаг рождается с пустой раскладкой, которую сервер не примет, —
+  // сразу открываем конструктор, сохранение произойдёт по «Готово».
+  if (step.type === "page") {
+    draftPageIndex.value = store.stepCount - 1;
+    pageIndex.value = draftPageIndex.value;
+    return;
+  }
+
   await persistSteps();
 }
 
@@ -419,8 +560,23 @@ function openStep(index: number) {
 
 async function savePage(page: StepPage) {
   if (pageIndex.value === null) return;
-  const step = steps.value[pageIndex.value];
-  if (step) await updateStep(pageIndex.value, { ...step, page } as Step);
+  const index = pageIndex.value;
+  const step = steps.value[index];
+  // Черновик снимается ДО await: конструктор вслед за `save` эмитит `close`,
+  // и обработчик закрытия не должен принять сохранённый шаг за черновик.
+  draftPageIndex.value = null;
+  pageIndex.value = null;
+  // Раскладка — единственная настройка page-шага: блоки ввода сами объявляют
+  // его выходы, никакие маппинги при сохранении не переписываются.
+  if (step) await updateStep(index, { ...step, page } as Step);
+}
+
+/** Закрытие конструктора без сохранения: черновик page-шага не оставляем. */
+function closePageEditor() {
+  if (draftPageIndex.value !== null) {
+    store.removeStep(draftPageIndex.value);
+    draftPageIndex.value = null;
+  }
   pageIndex.value = null;
 }
 
@@ -494,6 +650,7 @@ onMounted(async () => {
   try {
     await Promise.all([loadScenario(), loadApps()]);
     await loadSchemas();
+    await loadEnvironmentsForApps();
   } finally {
     loading.value = false;
   }
