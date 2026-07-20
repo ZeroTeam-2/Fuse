@@ -24,8 +24,9 @@ const rootDir = resolve(import.meta.dirname, "../../..");
 const localEnv = resolve(rootDir, ".env.local");
 if (existsSync(localEnv)) {
   process.loadEnvFile(localEnv);
+} else {
+  process.loadEnvFile(resolve(rootDir, ".env"));
 }
-process.loadEnvFile(resolve(rootDir, ".env"));
 
 const mongoUrl = process.env.MONGODB_URL;
 if (!mongoUrl) {
@@ -55,7 +56,13 @@ const API_SCENARIO_TITLE = "Демо: запрос к API";
 const PAGE_SCENARIO_TITLE = "Демо: страницы";
 
 const endpointInputs: SchemaField[] = [
-  { key: "query", label: "Запрос", type: "string", loc: "body", required: true },
+  {
+    key: "query",
+    label: "Запрос",
+    type: "string",
+    loc: "body",
+    required: true,
+  },
 ];
 const endpointOutputs: SchemaField[] = [
   { key: "method", label: "HTTP-метод", type: "string" },
@@ -73,7 +80,11 @@ await db.collection("users").updateOne(
   { email: SEED_USER_EMAIL },
   {
     $set: { firstName: "Seed", lastName: "User", updatedAt: now },
-    $setOnInsert: { email: SEED_USER_EMAIL, yandexId: "seed-local-user", createdAt: now },
+    $setOnInsert: {
+      email: SEED_USER_EMAIL,
+      yandexId: "seed-local-user",
+      createdAt: now,
+    },
   },
   { upsert: true },
 );
@@ -107,7 +118,9 @@ await db.collection("apps").updateOne(
   },
   { upsert: true },
 );
-const app = await db.collection("apps").findOne({ ownerId, name: SEED_APP_NAME });
+const app = await db
+  .collection("apps")
+  .findOne({ ownerId, name: SEED_APP_NAME });
 const appId = String(app!._id);
 
 // ─── Сценарии ────────────────────────────────────────────────────────────────
@@ -221,13 +234,29 @@ const pageResultStep: PageStep = {
   },
 };
 
-async function upsertScenario(title: string, description: string, steps: unknown[]) {
+async function upsertScenario(
+  title: string,
+  description: string,
+  steps: unknown[],
+) {
   await db!.collection("scenarios").updateOne(
     { ownerId, title },
     {
       // published: сценарий доступен карточкой — с неё его и запускают из UI.
-      $set: { description, steps, category: "Прочее", published: true, updatedAt: now },
-      $setOnInsert: { ownerId, title, runCount: 0, blocked: false, createdAt: now },
+      $set: {
+        description,
+        steps,
+        category: "Прочее",
+        published: true,
+        updatedAt: now,
+      },
+      $setOnInsert: {
+        ownerId,
+        title,
+        runCount: 0,
+        blocked: false,
+        createdAt: now,
+      },
     },
     { upsert: true },
   );
@@ -256,14 +285,23 @@ const pageScenarioId = await upsertScenario(
 await writeFile(
   resolve(rootDir, ".seed.json"),
   `${JSON.stringify(
-    { userId: ownerId, email: SEED_USER_EMAIL, appId, delayScenarioId, apiScenarioId, pageScenarioId },
+    {
+      userId: ownerId,
+      email: SEED_USER_EMAIL,
+      appId,
+      delayScenarioId,
+      apiScenarioId,
+      pageScenarioId,
+    },
     null,
     2,
   )}\n`,
 );
 
 const counts = {
-  users: await db.collection("users").countDocuments({ email: SEED_USER_EMAIL }),
+  users: await db
+    .collection("users")
+    .countDocuments({ email: SEED_USER_EMAIL }),
   apps: await db.collection("apps").countDocuments({ ownerId }),
   scenarios: await db.collection("scenarios").countDocuments({ ownerId }),
 };
@@ -274,7 +312,9 @@ console.log(`  приложение:   ${SEED_APP_NAME} → ${MOCK_API_URL}`);
 console.log(
   `  сценарии:     «${DELAY_SCENARIO_TITLE}», «${API_SCENARIO_TITLE}», «${PAGE_SCENARIO_TITLE}»`,
 );
-console.log(`  всего: users=${counts.users} apps=${counts.apps} scenarios=${counts.scenarios}`);
+console.log(
+  `  всего: users=${counts.users} apps=${counts.apps} scenarios=${counts.scenarios}`,
+);
 console.log("  id сущностей записаны в .seed.json (нужны e2e-тестам)");
 
 await mongoose.disconnect();
