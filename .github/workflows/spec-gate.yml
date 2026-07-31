@@ -1,0 +1,112 @@
+name: Spec gate
+
+# Следит за тем, что документация приезжает первой, а архив — последним.
+# Задание всегда доходит до конца (в том числе на не-change ветках), чтобы его
+# можно было сделать обязательной проверкой: пропущенный job не рапортует статус.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+    branches: [develop]
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    env:
+      HEAD_REF: ${{ github.head_ref }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      IS_DRAFT: ${{ github.event.pull_request.draft }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Определить change
+        id: change
+        run: |
+          set -euo pipefail
+          case "$HEAD_REF" in
+            change/*)
+              id="${HEAD_REF#change/}"
+              echo "id=$id" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Ветка '$HEAD_REF' — не change/*, гейт спеки неприменим."
+              echo "id=" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: Документация — первым коммитом
+        if: steps.change.outputs.id != ''
+        run: |
+          set -euo pipefail
+          first=$(git rev-list --reverse "$BASE_SHA..$HEAD_SHA" | head -1)
+
+          if [ -z "$first" ]; then
+            echo "::error::В ветке нет коммитов относительно develop."
+            exit 1
+          fi
+
+          # Локальный squash всей ветки в один коммит эту проверку ломает: в нём
+          # окажутся и доки, и код. Squash при мерже безопасен, локальный — нет.
+          stray=$(git show --name-only --pretty=format: "$first" | grep -v '^$' | grep -v '^openspec/' || true)
+
+          if [ -n "$stray" ]; then
+            echo "::error::Первый коммит ветки ($first) трогает не только openspec/:"
+            echo "$stray" | sed 's/^/  /'
+            echo "::error::Артефакты спеки должны приехать отдельным первым коммитом, до кода."
+            exit 1
+          fi
+
+          echo "Первый коммит ($first) — только openspec/. Порядок соблюдён."
+
+      - name: Валидация change
+        id: validate
+        if: steps.change.outputs.id != ''
+        env:
+          ID: ${{ steps.change.outputs.id }}
+        run: |
+          set -euo pipefail
+          if [ -d "openspec/changes/$ID" ]; then
+            npx -y @fission-ai/openspec@1.6.0 change validate "$ID" --strict
+          else
+            echo "Change '$ID' уже заархивирован — валидировать активную папку нечего."
+          fi
+
+      - name: Архив — последним коммитом
+        # Пока PR в черновике, требовать архив рано: работа идёт.
+        # Снятие с черновика = заявка «готово к мержу», вот тут и спрашиваем.
+        if: steps.change.outputs.id != '' && env.IS_DRAFT == 'false'
+        env:
+          ID: ${{ steps.change.outputs.id }}
+        run: |
+          set -euo pipefail
+          fail=0
+
+          if [ -d "openspec/changes/$ID" ]; then
+            echo "::error::Папка openspec/changes/$ID ещё на месте — change не заархивирован."
+            echo "::error::Выполните 'openspec archive $ID' и добавьте результат последним коммитом."
+            fail=1
+          fi
+
+          if ! ls -d openspec/changes/archive/*-"$ID" >/dev/null 2>&1; then
+            echo "::error::В openspec/changes/archive/ нет записи для '$ID'."
+            fail=1
+          fi
+
+          if ! git diff --name-only "$BASE_SHA..$HEAD_SHA" -- openspec/specs | grep -q .; then
+            echo "::error::openspec/specs/ не изменился — дельта-спеки не влиты в капабилити."
+            fail=1
+          fi
+
+          [ "$fail" -eq 0 ] || exit 1
+          echo "Change заархивирован, дельты влиты в openspec/specs/."

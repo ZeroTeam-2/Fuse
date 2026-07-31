@@ -27,6 +27,7 @@ Thumbs.db
 # IDE
 .vscode/settings.json
 .idea/
+.claude/settings.local.json
 
 # TypeScript
 *.tsbuildinfo
@@ -40,3 +41,5 @@ CHANGELOG.md
 # Design system reference material at the repo root (мокапы, исходники иконок).
 # Ведущий слэш обязателен: без него паттерн ловит и apps/frontend/assets.
 /assets/
+# Локальные сид-данные (id сущностей для e2e)
+.seed.json

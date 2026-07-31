@@ -132,7 +132,9 @@ describe("MarketplaceService", () => {
         };
       }),
     };
-    service = new MarketplaceService(mockScenarioModel, mockAppModel);
+    service = new MarketplaceService(mockScenarioModel, mockAppModel, {
+      forSteps: vi.fn().mockResolvedValue([]),
+    } as any);
   });
 
   describe("getCatalog", () => {

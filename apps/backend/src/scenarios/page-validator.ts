@@ -1,5 +1,15 @@
-import type { StepPage } from "@fuse/shared";
+import type { PageBlockType, StepPage } from "@fuse/shared";
+import { PAGE_BLOCK_TYPES } from "@fuse/shared";
 
+const VALID_TYPES = new Set<string>(PAGE_BLOCK_TYPES);
+
+/**
+ * Валидация раскладки страницы: непустой заголовок, строки с хотя бы одним
+ * блоком, известный тип и ширина 1–4 у каждого блока. Корректность привязок
+ * (существование шага-источника/поля) здесь не проверяется: она требует
+ * контекста остальных шагов и решается предупреждением на рантайме, а не
+ * жёсткой ошибкой сохранения.
+ */
 export function validatePage(page: unknown): string[] {
   const errors: string[] = [];
 
@@ -9,37 +19,37 @@ export function validatePage(page: unknown): string[] {
 
   const p = page as Record<string, unknown>;
 
-  switch (p.type) {
-    case "fields":
-      if (!p.title || typeof p.title !== "string") {
-        errors.push("fields page must have a title");
-      }
-      if (!p.buttonText || typeof p.buttonText !== "string") {
-        errors.push("fields page must have buttonText");
-      }
-      break;
-
-    case "file":
-      if (!p.title || typeof p.title !== "string") {
-        errors.push("file page must have a title");
-      }
-      if (typeof p.maxMb !== "number" || p.maxMb <= 0) {
-        errors.push("file page must have maxMb > 0");
-      }
-      break;
-
-    case "text":
-      if (!p.title || typeof p.title !== "string") {
-        errors.push("text page must have a title");
-      }
-      if (!p.body || typeof p.body !== "string" || p.body.trim() === "") {
-        errors.push("text page must have a non-empty body");
-      }
-      break;
-
-    default:
-      errors.push("unknown page type");
+  if (typeof p.title !== "string" || !p.title.trim()) {
+    errors.push("page must have a title");
   }
+
+  if (!Array.isArray(p.rows)) {
+    errors.push("page must have rows");
+    return errors;
+  }
+
+  p.rows.forEach((row, ri) => {
+    const r = (row ?? {}) as Record<string, unknown>;
+    if (!Array.isArray(r.items) || r.items.length === 0) {
+      errors.push(`row ${ri} must have at least one block`);
+      return;
+    }
+
+    r.items.forEach((item, bi) => {
+      const b = (item ?? {}) as Record<string, unknown>;
+      if (typeof b.type !== "string" || !VALID_TYPES.has(b.type)) {
+        errors.push(`row ${ri} block ${bi} has unknown type`);
+      }
+      if (
+        typeof b.span !== "number" ||
+        !Number.isInteger(b.span) ||
+        b.span < 1 ||
+        b.span > 6
+      ) {
+        errors.push(`row ${ri} block ${bi} span must be 1..6`);
+      }
+    });
+  });
 
   return errors;
 }
@@ -48,33 +58,9 @@ export function isValidPage(page: unknown): boolean {
   return validatePage(page).length === 0;
 }
 
-export function createDefaultPage(
-  type: StepPage["type"],
-  title = "",
-): StepPage {
-  switch (type) {
-    case "fields":
-      return {
-        type: "fields",
-        title,
-        hint: "",
-        fields: [],
-        buttonText: "Продолжить",
-      };
-    case "file":
-      return {
-        type: "file",
-        title,
-        hint: "",
-        accept: "",
-        maxMb: 10,
-        buttonText: "Загрузить",
-      };
-    case "text":
-      return {
-        type: "text",
-        title,
-        body: "",
-      };
-  }
+/** Пустая страница-заготовка: заголовок без блоков. Строки добавит конструктор. */
+export function createDefaultPage(title = ""): StepPage {
+  return { title, rows: [] };
 }
+
+export type { PageBlockType };

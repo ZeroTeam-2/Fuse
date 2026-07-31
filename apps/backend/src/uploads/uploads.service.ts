@@ -10,12 +10,17 @@ import { Model } from "mongoose";
 import { randomUUID } from "node:crypto";
 import { MinioService } from "../minio/minio.service";
 import {
+  DEFAULT_SINGLE_UPLOAD_MAX_MB,
+  DEFAULT_UPLOAD_PART_SIZE_MB,
+  mbToBytes,
+} from "../config/file-limits.constants";
+import {
   UploadSession,
   UploadSessionDocument,
   UploadStatus,
 } from "./upload-session.schema";
 
-const DEFAULT_PART_SIZE = 5 * 1024 * 1024;
+const DEFAULT_PART_SIZE = mbToBytes(DEFAULT_UPLOAD_PART_SIZE_MB);
 
 const ALLOWED_CONTENT_TYPES = [
   "text/csv",
@@ -46,11 +51,13 @@ export class UploadsService {
     private readonly minioService: MinioService,
     private readonly configService: ConfigService,
   ) {
-    this.maxSingleMb = this.configService.get<number>("FILE_SINGLE_UPLOAD_MAX_MB") ?? 10;
+    this.maxSingleMb =
+      this.configService.get<number>("FILE_SINGLE_UPLOAD_MAX_MB") ??
+      DEFAULT_SINGLE_UPLOAD_MAX_MB;
   }
 
   getMaxSingleUploadBytes(): number {
-    return this.maxSingleMb * 1024 * 1024;
+    return mbToBytes(this.maxSingleMb);
   }
 
   isAllowedContentType(contentType: string): boolean {

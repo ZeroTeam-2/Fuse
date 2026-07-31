@@ -7,16 +7,27 @@ import {
 import { ConfigService } from "@nestjs/config";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
+import { randomUUID } from "node:crypto";
 import { Consumer } from "sqs-consumer";
 import { SQSClient } from "@aws-sdk/client-sqs";
-import { RunStatus } from "@fuse/shared";
+import {
+  RunStatus,
+  isUploadedFileRef,
+  isInputBlock,
+  pageBlocks,
+  blockOutputKey,
+} from "@fuse/shared";
 import type {
   Step,
   ApiStep,
   DelayStep,
+  PageStep,
   PeriodicStep,
   ScenarioStepRef,
-  FileStep,
+  UploadedFileRef,
+  EnvironmentSelection,
+  ManualInputDescriptor,
+  RunFileRef,
   RunStepResult,
   SchemaField,
   ServerWsEvent,
@@ -25,14 +36,38 @@ import { Run, RunDocument } from "./run.schema";
 import { Scenario, ScenarioDocument } from "../scenarios/scenario.schema";
 import { App, AppDocument } from "../apps/app.schema";
 import { SsrfGuard } from "../apps/ssrf-guard";
-import { joinBaseUrl } from "../apps/base-url";
+import { joinBaseUrl, resolveAppBaseUrl } from "../apps/base-url";
 import { RunGateway } from "../websocket/run.gateway";
+import { MinioService } from "../minio/minio.service";
+import { NotificationsService } from "../notifications/notifications.service";
 import { resolveMappings, groupInputsByLocation } from "./mapping-resolver";
 import type { LocatedInputs } from "./mapping-resolver";
-import { StepExecutionError, RunCancelledError } from "./execution-errors";
+import { ManualInputsService } from "./manual-inputs.service";
+import {
+  isBlank,
+  localKeyOf,
+  mapPageDataToOutputs,
+  resolvePageBindings,
+  sliceInputsForStep,
+} from "./manual-inputs";
+import {
+  StepExecutionError,
+  RunCancelledError,
+  RunPausedError,
+} from "./execution-errors";
+import {
+  artifactExt,
+  artifactFileName,
+  baseMime,
+  isFileResponse,
+} from "./response-artifacts";
+import {
+  BYTES_PER_MB,
+  DEFAULT_RUN_ARTIFACT_MAX_MB,
+  mbToBytes,
+} from "../config/file-limits.constants";
 
 const POLL_TIMEOUT_MS = 5 * 60 * 1000;
-const PAGE_INPUT_TIMEOUT_MS = 30 * 60 * 1000;
 
 const TERMINAL_STATUSES: RunStatus[] = [
   RunStatus.COMPLETED,
@@ -40,14 +75,32 @@ const TERMINAL_STATUSES: RunStatus[] = [
   RunStatus.CANCELLED,
 ];
 
+function samePath(a: number[], b: number[]): boolean {
+  return a.length === b.length && a.every((value, i) => value === b[i]);
+}
+
 interface StepContext {
   runId: string;
+  /** Владелец запуска — под его префиксом сохраняются артефакты в S3. */
+  userId: string;
   stepIndex: number;
+  /** Путь до шага от корня запуска: `[3]` либо `[2, 0]` для шага вложенного сценария. */
+  stepPath: number[];
   stepResults: RunStepResult[];
   /** Кэш приложений на время одного запуска: N шагов к одному API — один запрос в БД. */
   appCache: Map<string, AppDocument>;
-  /** Данные пользователя: входы запуска + то, что он ввёл на странице шага. */
+  /** Выбор окружения по поставщику (из сценария): по нему резолвится базовый URL. */
+  environmentSelections: EnvironmentSelection[];
+  /**
+   * Ввод шага по ЛОКАЛЬНЫМ ключам (`inn`, `filter:orgId`) — ровно то, что ищет
+   * резолвер: срез входов запуска, адресованных этому шагу, поверх накопленного
+   * по предыдущим шагам, и поверх всего — данные страницы шага.
+   */
   userInput?: Record<string, unknown>;
+  /** Входы запуска целиком, по скоуп-ключам. Обновляются при доборе значений. */
+  runInputs: Record<string, unknown>;
+  /** Ручные значения всего сценария: по ним видно, чего шагу не хватает. */
+  descriptors: ManualInputDescriptor[];
   /** Некритичные замечания резолвера (неоднозначный фильтр) — уходят в результат шага. */
   warnings: string[];
 }
@@ -67,6 +120,9 @@ export class WorkerService
     private readonly configService: ConfigService,
     private readonly gateway: RunGateway,
     private readonly ssrfGuard: SsrfGuard,
+    private readonly manualInputsService: ManualInputsService,
+    private readonly minioService: MinioService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -202,6 +258,20 @@ export class WorkerService
     const steps = (scenario.steps ?? []) as Step[];
     const startStep = run.currentStep ?? 0;
     const appCache = new Map<string, AppDocument>();
+    const environmentSelections = (scenario.environmentSelections ??
+      []) as EnvironmentSelection[];
+
+    // Считается один раз на запуск: этим же списком форма запуска строила поля.
+    const descriptors = await this.manualInputsService.forSteps(
+      steps,
+      run.scenarioId,
+    );
+    const runInputs = (run.inputs ?? {}) as Record<string, unknown>;
+
+    // Ввод, накопленный по ходу (данные страниц шагов), переживает переход к
+    // следующему шагу: раньше `StepContext` пересоздавался пустым, и введённое
+    // на шаге 1 не видел уже шаг 2.
+    let accumulatedInput: Record<string, unknown> = {};
 
     await this.initStepResults(
       runId,
@@ -248,13 +318,25 @@ export class WorkerService
       try {
         const ctx: StepContext = {
           runId,
+          userId: run.userId,
           stepIndex: i,
+          stepPath: [i],
           stepResults: reloadedRun.stepResults as unknown as RunStepResult[],
           appCache,
+          environmentSelections,
+          // Свой срез входов запуска важнее значения, принесённого с прошлых
+          // шагов: одноимённые ключи разных шагов не должны склеиваться.
+          userInput: {
+            ...accumulatedInput,
+            ...sliceInputsForStep(runInputs, [i]),
+          },
+          runInputs,
+          descriptors,
           warnings: [],
         };
 
         const result = await this.executeStep(step, ctx);
+        accumulatedInput = { ...accumulatedInput, ...(ctx.userInput ?? {}) };
 
         const finishedAt = new Date().toISOString();
         const durationMs =
@@ -283,6 +365,13 @@ export class WorkerService
           timestamp: new Date().toISOString(),
         });
       } catch (err) {
+        if (err instanceof RunPausedError) {
+          // Шаг ждёт ввода: обработчик освобождаем, сообщение подтверждается.
+          // Продолжение придёт отдельным сообщением при submit'е.
+          this.logger.log(`Run ${runId} paused for input at step ${i}`);
+          return;
+        }
+
         if (err instanceof RunCancelledError) {
           this.logger.log(`Run ${runId} cancelled during step ${i}`);
           return;
@@ -363,19 +452,14 @@ export class WorkerService
       timestamp: new Date().toISOString(),
     });
 
+    // Пользователь мог давно уйти со страницы — о завершении скажет колокольчик.
+    await this.notificationsService.notifyRunEvent(runId, "run_completed");
+
     this.logger.log(`Run ${runId} completed successfully`);
   }
 
   private async executeStep(step: Step, ctx: StepContext): Promise<unknown> {
-    if (step.page) {
-      // То, что пользователь ввёл на странице, — это и есть входные данные шага:
-      // раньше результат ожидания отбрасывался, и ветка «Ручной ввод» в маппингах
-      // (а с ней и ручное значение условия фильтра) была мертва.
-      const pageData = await this.waitForPageInput(ctx.runId, step, ctx.stepIndex);
-      if (pageData && typeof pageData === "object") {
-        ctx.userInput = { ...ctx.userInput, ...(pageData as Record<string, unknown>) };
-      }
-    }
+    await this.ensureManualInputs(step, ctx);
 
     switch (step.type) {
       case "api":
@@ -390,8 +474,15 @@ export class WorkerService
       case "scenario":
         return this.executeScenarioStep(step, ctx);
 
+      case "page":
+        return this.executePageStep(step, ctx);
+
       case "file":
-        return this.executeFileStep(step, ctx);
+        // Тип выведен из употребления: функционал поглощён api-шагом
+        // (multipart при файловом входе) + periodic-шагом (опрос статуса).
+        throw new StepExecutionError(
+          `Шаг «${step.title}»: тип шага «Файл» устарел — используйте шаг «Endpoint API» с файловым входом (dropzone) и, при необходимости, «Периодический запрос» для опроса статуса`,
+        );
 
       default:
         return {
@@ -434,7 +525,14 @@ export class WorkerService
   ): Promise<string> {
     const app = await this.loadApp(appId, ctx);
 
-    if (!app.baseUrl) {
+    // Базовый URL берётся из окружения, выбранного для этого поставщика в
+    // сценарии (по умолчанию — Prod, крайний фолбэк — app.baseUrl).
+    const environmentId = ctx.environmentSelections?.find(
+      (s) => s.appId === appId,
+    )?.environmentId;
+    const baseUrl = resolveAppBaseUrl(app, environmentId);
+
+    if (!baseUrl) {
       throw new StepExecutionError(
         `У приложения «${app.name}» не задан базовый URL — переимпортируйте спецификацию OpenAPI`,
       );
@@ -444,10 +542,10 @@ export class WorkerService
 
     let url: string;
     try {
-      url = joinBaseUrl(app.baseUrl, withPathParams);
+      url = joinBaseUrl(baseUrl, withPathParams);
     } catch {
       throw new StepExecutionError(
-        `Некорректный базовый URL приложения «${app.name}»: ${app.baseUrl}`,
+        `Некорректный базовый URL приложения «${app.name}»: ${baseUrl}`,
       );
     }
 
@@ -463,31 +561,79 @@ export class WorkerService
     return url;
   }
 
-  private async executeApiStep(
-    step: ApiStep,
+  /**
+   * Общая для api- и periodic-шага сборка вызова endpoint'а: входы раскладываются
+   * по местам согласно схеме endpoint (path/query/header/body), из них собираются
+   * абсолютный URL и опции запроса. Без `endpointId` (легаси periodic-шаги)
+   * endpoint ищется по методу и пути; не нашёлся — работаем без схемы: путь
+   * спасают плейсхолдеры, остальные входы уезжают в тело.
+   */
+  private async buildEndpointRequest(
+    step: { appId: string; endpointId?: string },
+    method: string,
+    path: string,
+    resolved: Record<string, unknown>,
     ctx: StepContext,
-  ): Promise<unknown> {
-    const resolved = resolveMappings(step, ctx.stepResults, ctx.userInput, ctx.warnings);
-
+  ): Promise<{
+    url: string;
+    options: RequestInit;
+    located: LocatedInputs;
+    inputs: SchemaField[];
+  }> {
     const app = await this.loadApp(step.appId, ctx);
-    const endpoint = (app.endpoints ?? []).find((ep) => ep.id === step.endpointId);
+    const endpoints = app.endpoints ?? [];
+    const endpoint = step.endpointId
+      ? endpoints.find((ep) => ep.id === step.endpointId)
+      : endpoints.find((ep) => ep.method === method && ep.path === path);
     const inputs = (endpoint?.inputs ?? []) as unknown as SchemaField[];
-    const located = groupInputsByLocation(resolved, inputs, step.path);
+    const located = groupInputsByLocation(resolved, inputs, path);
 
-    const url = await this.resolveStepUrl(step.appId, step.path, located, ctx);
+    const url = await this.resolveStepUrl(step.appId, path, located, ctx);
 
     const options: RequestInit = {
-      method: step.method,
+      method,
       headers: {
         "Content-Type": "application/json",
         ...this.toStringRecord(located.header),
       },
     };
 
-    if (step.method !== "GET" && step.method !== "DELETE") {
+    if (method !== "GET" && method !== "DELETE") {
       if (Object.keys(located.body).length > 0) {
         options.body = JSON.stringify(located.body);
       }
+    }
+
+    return { url, options, located, inputs };
+  }
+
+  private async executeApiStep(
+    step: ApiStep,
+    ctx: StepContext,
+  ): Promise<unknown> {
+    const resolved = resolveMappings(step, ctx.stepResults, ctx.userInput, ctx.warnings);
+
+    // Файловая ссылка среди входов (dropzone-привязка) переключает тело на
+    // multipart: сам файл едет частью формы, а не JSON-объектом ссылки.
+    const fileEntry = Object.entries(resolved).find(([, v]) =>
+      isUploadedFileRef(v),
+    ) as [string, UploadedFileRef] | undefined;
+    const textInputs = fileEntry
+      ? Object.fromEntries(
+          Object.entries(resolved).filter(([, v]) => !isUploadedFileRef(v)),
+        )
+      : resolved;
+
+    const { url, options, located, inputs } = await this.buildEndpointRequest(
+      step,
+      step.method,
+      step.path,
+      textInputs,
+      ctx,
+    );
+
+    if (fileEntry) {
+      await this.attachMultipartBody(fileEntry, located, inputs, options);
     }
 
     let response: Response;
@@ -505,11 +651,86 @@ export class WorkerService
       );
     }
 
-    const contentType = response.headers.get("content-type") ?? "";
-    if (contentType.includes("application/json")) {
+    return this.readApiResponse(response, ctx, step.title);
+  }
+
+  /**
+   * Тело ответа API-шага по типу содержимого: JSON — как объект, текст — как
+   * строку, файловое (не json/не text либо attachment) — бинарно в S3 как
+   * артефакт запуска; результатом шага становится `RunFileRef`. Раньше бинарный
+   * ответ проходил через `response.text()` и оседал испорченной строкой в Mongo.
+   */
+  private async readApiResponse(
+    response: Response,
+    ctx: StepContext,
+    stepTitle: string,
+  ): Promise<unknown> {
+    const contentType = response.headers.get("content-type");
+    const contentDisposition = response.headers.get("content-disposition");
+
+    if (isFileResponse(contentType, contentDisposition)) {
+      return this.saveFileResponse(response, ctx, stepTitle);
+    }
+
+    if (baseMime(contentType).includes("json")) {
       return response.json();
     }
     return response.text();
+  }
+
+  /** Файловый ответ → S3 (`runs/{userId}/{runId}/...`) + реестр `run.files`. */
+  private async saveFileResponse(
+    response: Response,
+    ctx: StepContext,
+    stepTitle: string,
+  ): Promise<RunFileRef> {
+    const contentType = response.headers.get("content-type");
+    const contentDisposition = response.headers.get("content-disposition");
+    const mime = baseMime(contentType) || "application/octet-stream";
+
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(await response.arrayBuffer());
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new StepExecutionError(
+        `Не удалось прочитать файловый ответ API: ${reason}`,
+      );
+    }
+
+    const maxMb =
+      this.configService.get<number>("RUN_ARTIFACT_MAX_MB") ??
+      DEFAULT_RUN_ARTIFACT_MAX_MB;
+    if (buffer.length > mbToBytes(maxMb)) {
+      throw new StepExecutionError(
+        `Файловый ответ API (${Math.ceil(buffer.length / BYTES_PER_MB)} МБ) превышает лимит ${maxMb} МБ`,
+      );
+    }
+
+    const fileName = artifactFileName(
+      contentDisposition,
+      contentType,
+      stepTitle,
+    );
+    const objectName = `runs/${ctx.userId}/${ctx.runId}/${ctx.stepPath.join("-")}-${randomUUID()}${artifactExt(fileName, contentType)}`;
+
+    await this.minioService.uploadFile(objectName, buffer, mime);
+
+    const fileRef: RunFileRef = {
+      objectName,
+      fileName,
+      fileSize: buffer.length,
+      fileType: mime,
+    };
+
+    // Объект уже в S3 — регистрация делает его видимым каскадному удалению.
+    // Упавший между upload и $push воркер оставит сироту в S3, но не битую
+    // запись в реестре.
+    await this.runModel
+      .updateOne({ _id: ctx.runId }, { $push: { files: fileRef } })
+      .exec();
+
+    return fileRef;
   }
 
   private applyPathParams(path: string, pathParams: Record<string, unknown>): string {
@@ -558,12 +779,37 @@ export class WorkerService
     ctx: StepContext,
   ): Promise<unknown> {
     const resolved = resolveMappings(step, ctx.stepResults, ctx.userInput, ctx.warnings);
-    // У периодического шага нет ссылки на эндпоинт, значит и схемы входов нет —
-    // раскладку спасают плейсхолдеры пути.
-    const located = groupInputsByLocation(resolved, [], step.pollPath);
-    const url = await this.resolveStepUrl(step.appId, step.pollPath, located, ctx);
-    const intervalMs = (step.pollIntervalSec ?? 5) * 1000;
-    const progressField = step.progressField;
+    // Входы между итерациями не меняются — URL и опции собираются один раз до цикла.
+    const { url, options } = await this.buildEndpointRequest(
+      step,
+      step.pollMethod,
+      step.pollPath,
+      resolved,
+      ctx,
+    );
+    return this.pollUntilComplete(
+      url,
+      options,
+      step.pollIntervalSec,
+      step.progressField,
+      ctx,
+      step.title,
+    );
+  }
+
+  /**
+   * Общий цикл опроса endpoint'а до признака завершения — периодический шаг и
+   * стадия обработки файлового шага отличаются только тем, как собран запрос.
+   */
+  private async pollUntilComplete(
+    url: string,
+    options: RequestInit,
+    intervalSec: number | undefined,
+    progressField: string | undefined,
+    ctx: StepContext,
+    stepTitle: string,
+  ): Promise<unknown> {
+    const intervalMs = (intervalSec ?? 5) * 1000;
     const startTime = Date.now();
 
     let lastResult: unknown = null;
@@ -576,7 +822,7 @@ export class WorkerService
 
       let response: Response;
       try {
-        response = await fetch(url, { method: step.pollMethod });
+        response = await fetch(url, options);
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         throw new StepExecutionError(`Не удалось опросить ${url}: ${reason}`);
@@ -586,6 +832,17 @@ export class WorkerService
         throw new StepExecutionError(
           `Poll failed: ${response.status} ${response.statusText}`,
         );
+      }
+
+      // Провайдер может отдать готовый файл прямо в ответе на опрос —
+      // это и есть завершение: сохраняем артефакт и выходим из цикла.
+      if (
+        isFileResponse(
+          response.headers.get("content-type"),
+          response.headers.get("content-disposition"),
+        )
+      ) {
+        return this.saveFileResponse(response, ctx, stepTitle);
       }
 
       const data = await response.json().catch(() => null);
@@ -607,6 +864,13 @@ export class WorkerService
         }
       }
 
+      // Статус ошибки терминален: ждать таймаут бессмысленно, задача уже упала.
+      if (this.isPollFailed(data)) {
+        throw new StepExecutionError(
+          `Провайдер сообщил об ошибке задачи: ${JSON.stringify(data)}`,
+        );
+      }
+
       if (this.isPollComplete(data)) {
         return data;
       }
@@ -615,6 +879,14 @@ export class WorkerService
     }
 
     return { timedOut: true, lastResult };
+  }
+
+  private isPollFailed(data: unknown): boolean {
+    if (!data || typeof data !== "object") {
+      return false;
+    }
+    const status = (data as Record<string, unknown>).status;
+    return status === "error" || status === "failed";
   }
 
   private isPollComplete(data: unknown): boolean {
@@ -646,15 +918,30 @@ export class WorkerService
 
     const refSteps = (refScenario.steps ?? []) as Step[];
     const nestedResults: RunStepResult[] = [];
+    // Окружения вложенного сценария — его собственные: поставщики его шагов
+    // резолвятся по выбору, сделанному в этом сценарии, а не в объемлющем.
+    const nestedEnvironmentSelections = (refScenario.environmentSelections ??
+      []) as EnvironmentSelection[];
 
     for (let i = 0; i < refSteps.length; i++) {
       const refStep = refSteps[i];
+      // Путь от корня запуска: по нему вложенный шаг находит адресованные
+      // именно ему входы (`s2.s0:inn`), а не значения объемлющего сценария.
+      const nestedPath = [...ctx.stepPath, i];
       const nestedCtx: StepContext = {
         runId: ctx.runId,
+        userId: ctx.userId,
         stepIndex: i,
+        stepPath: nestedPath,
         stepResults: nestedResults,
         appCache: ctx.appCache,
-        userInput: ctx.userInput,
+        environmentSelections: nestedEnvironmentSelections,
+        userInput: {
+          ...ctx.userInput,
+          ...sliceInputsForStep(ctx.runInputs, nestedPath),
+        },
+        runInputs: ctx.runInputs,
+        descriptors: ctx.descriptors,
         // Замечания вложенных шагов всплывают в результат объемлющего шага.
         warnings: ctx.warnings,
       };
@@ -674,70 +961,268 @@ export class WorkerService
     return { nestedScenario: step.refScenarioId };
   }
 
-  // Шаг «файл» пока заглушка (загрузка в MinIO — отдельная задача). Когда он
-  // появится, адрес выгрузки берётся тем же `resolveStepUrl(step.appId, step.uploadPath, ...)`.
-  private async executeFileStep(
-    _step: FileStep,
-    _ctx: StepContext,
+  /**
+   * Шаг «Страница». Блоки ввода собирают значения — они и есть результат шага
+   * (ключ — `binding` блока либо его `id`): следующие шаги читают их обычным
+   * маппингом `s{idx}:{key}`. Страница без блоков ввода не блокирует поток:
+   * публикуется для показа (стоящая последней — финальный экран результата)
+   * и завершается пустым результатом.
+   */
+  private async executePageStep(
+    step: PageStep,
+    ctx: StepContext,
   ): Promise<unknown> {
-    return { placeholder: true, message: "File step not yet implemented" };
+    const inputBlocks = pageBlocks(step.page).filter(isInputBlock);
+
+    // Блоки отображения и динамические варианты select берут данные пройденных
+    // шагов: клиент их сам не видит, поэтому значения разрешаются здесь.
+    const resolved = resolvePageBindings(step.page, ctx.stepResults);
+
+    const event: ServerWsEvent = {
+      type: "page:required",
+      runId: ctx.runId,
+      payload: {
+        stepIndex: ctx.stepIndex,
+        stepTitle: step.title,
+        page: step.page,
+        resolved,
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    if (inputBlocks.length === 0) {
+      // Display-only страница — итоговый экран результата. Сохраняем её с уже
+      // разрешёнными данными: живого `page:required` при просмотре из истории
+      // или повторном открытии уже не будет. Последняя такая страница
+      // перезаписывает предыдущую — она и есть финальный экран.
+      await this.runModel
+        .updateOne(
+          { _id: ctx.runId },
+          {
+            $set: {
+              finalPage: {
+                stepIndex: ctx.stepIndex,
+                stepTitle: step.title,
+                page: step.page,
+                resolved,
+              },
+            },
+          },
+        )
+        .exec();
+      await this.publish(ctx.runId, event);
+      return {};
+    }
+
+    const { data } = await this.requestUserInput(
+      ctx.runId,
+      ctx.stepIndex,
+      step.title,
+      event,
+    );
+
+    const result = mapPageDataToOutputs(step.page, data ?? {});
+
+    // PageRunner валидирует обязательность у себя, но программный сабмит
+    // (POST без UI) мог прислать что угодно — пустые обязательные ключи
+    // роняют шаг здесь, а не пустым значением тремя шагами позже.
+    const emptyRequired = inputBlocks
+      .filter((block) => block.required)
+      .filter((block) => isBlank(result[blockOutputKey(block)]));
+
+    if (emptyRequired.length > 0) {
+      throw new StepExecutionError(
+        `Шаг «${step.title}»: не заполнены обязательные поля страницы — ${emptyRequired
+          .map((block) => `«${block.label || blockOutputKey(block)}»`)
+          .join(", ")}`,
+      );
+    }
+
+    return result;
   }
 
-  private async waitForPageInput(
+  /**
+   * Подменяет JSON-тело собранного запроса на `multipart/form-data`: файл
+   * читается из MinIO по ссылке dropzone-блока, остальные body-входы уезжают
+   * текстовыми полями рядом. Имя файловой части: body-вход типа `file` из
+   * схемы endpoint'а → ключ привязки блока, если он совпадает с body-входом
+   * (спеки, импортированные до маппинга `format: binary`, хранят файловое поле
+   * строкой) → единственный незанятый body-вход → "file".
+   */
+  private async attachMultipartBody(
+    fileEntry: [string, UploadedFileRef],
+    located: LocatedInputs,
+    inputs: SchemaField[],
+    options: RequestInit,
+  ): Promise<void> {
+    const [boundKey, fileRef] = fileEntry;
+
+    let buffer: Buffer;
+    try {
+      buffer = await this.minioService.getObjectBuffer(fileRef.objectName);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new StepExecutionError(
+        `Не удалось прочитать файл «${fileRef.fileName}» из хранилища: ${reason}`,
+      );
+    }
+
+    const bodyInputs = inputs.filter((f) => (f.loc ?? "body") === "body");
+    const fileField =
+      bodyInputs.find((f) => f.type === "file")?.key ??
+      bodyInputs.find((f) => f.key === boundKey)?.key ??
+      (bodyInputs.length === 1 && located.body[bodyInputs[0].key] === undefined
+        ? bodyInputs[0].key
+        : "file");
+
+    const form = new FormData();
+    form.append(
+      fileField,
+      new Blob([new Uint8Array(buffer)], {
+        type: fileRef.fileType || "application/octet-stream",
+      }),
+      fileRef.fileName,
+    );
+    for (const [key, value] of Object.entries(located.body)) {
+      if (key === fileField || value === undefined || value === null) continue;
+      form.append(
+        key,
+        typeof value === "object" ? JSON.stringify(value) : String(value),
+      );
+    }
+
+    // Content-Type не выставляем руками: boundary впишет fetch.
+    const headers = { ...(options.headers as Record<string, string>) };
+    delete headers["Content-Type"];
+    options.headers = headers;
+    options.body = form;
+  }
+
+  /**
+   * Обязательного ручного значения нет во входах запуска — спрашиваем его,
+   * а не отправляем параметр пустым и не падаем на фильтре, который ничего не
+   * отобрал. Страховка на случаи, которых форма запуска знать не могла:
+   * программный запуск, отредактированный после создания запуска сценарий,
+   * вложенный сценарий.
+   */
+  private async ensureManualInputs(step: Step, ctx: StepContext): Promise<void> {
+    const missing = ctx.descriptors.filter(
+      (d) =>
+        d.required &&
+        samePath(d.stepPath, ctx.stepPath) &&
+        isBlank(ctx.userInput?.[localKeyOf(d.paramKey, d.kind)]),
+    );
+
+    if (missing.length === 0) {
+      return;
+    }
+
+    const { inputs } = await this.requestUserInput(
+      ctx.runId,
+      ctx.stepIndex,
+      step.title,
+      {
+        type: "input:required",
+        runId: ctx.runId,
+        payload: {
+          stepIndex: ctx.stepIndex,
+          stepTitle: step.title,
+          fields: missing,
+        },
+        timestamp: new Date().toISOString(),
+      },
+    );
+
+    // Добранное лежит в `Run.inputs` — переживёт перезапуск воркера и не будет
+    // спрошено повторно.
+    ctx.runInputs = inputs;
+    ctx.userInput = {
+      ...ctx.userInput,
+      ...sliceInputsForStep(inputs, ctx.stepPath),
+    };
+
+    const stillMissing = missing.filter((d) =>
+      isBlank(ctx.userInput?.[localKeyOf(d.paramKey, d.kind)]),
+    );
+
+    if (stillMissing.length > 0) {
+      throw new StepExecutionError(
+        `Шаг «${step.title}»: не заданы обязательные значения ручного ввода — ${stillMissing
+          .map((d) => `«${d.label}»`)
+          .join(", ")}`,
+      );
+    }
+  }
+
+  /**
+   * Один запрос ввода на два случая: страница шага и добор ручных значений.
+   * НЕ блокирует обработчик: если ввод уже пришёл (submit положил `pendingInput`
+   * и до-ставил сообщение-продолжение) — возвращает его; иначе переводит запуск
+   * в `waiting_input`, публикует запрос и бросает `RunPausedError`, по которому
+   * `executeRun` штатно завершается и подтверждает сообщение SQS. Так ожидание
+   * не держит слот консьюмера — одна непросабмиченная страница больше не морозит
+   * весь воркер.
+   */
+  private async requestUserInput(
     runId: string,
-    step: Step,
     stepIndex: number,
-  ): Promise<Record<string, unknown>> {
+    _stepTitle: string,
+    request: ServerWsEvent,
+  ): Promise<{ data: Record<string, unknown>; inputs: Record<string, unknown> }> {
+    const run = await this.runModel.findById(runId).exec();
+    if (!run) {
+      throw new StepExecutionError("Run disappeared while waiting for input");
+    }
+    if (run.status === RunStatus.CANCELLED) {
+      throw new RunCancelledError("Run was cancelled while waiting for input");
+    }
+
+    // Ввод для ЭТОГО шага уже пришёл? `pageData` — ящик запусков, созданных до
+    // появления `pendingInput` (легаси), читаем его как запасной вариант.
+    const pending =
+      run.pendingInput?.stepIndex === stepIndex
+        ? run.pendingInput?.data
+        : (run.pageData as Record<string, unknown> | undefined);
+
+    if (pending) {
+      await this.runModel
+        .updateOne({ _id: runId }, { $unset: { pendingInput: "", pageData: "" } })
+        .exec();
+
+      return {
+        data: pending,
+        inputs: (run.inputs ?? {}) as Record<string, unknown>,
+      };
+    }
+
+    // Ввода ещё нет — спрашиваем и ОСВОБОЖДАЕМ обработчик. Продолжение придёт
+    // отдельным сообщением, когда `ExecutionService` обработает submit.
     await this.runModel
       .updateOne(
         { _id: runId },
-        {
-          $set: {
-            status: RunStatus.WAITING_INPUT,
-            currentStep: stepIndex,
-          },
-        },
+        { $set: { status: RunStatus.WAITING_INPUT, currentStep: stepIndex } },
       )
       .exec();
 
-    await this.publish(runId, {
-      type: "page:required",
+    await this.publish(runId, request);
+
+    // Запуск встал и ждёт человека — это событие колокольчика не хуже
+    // завершения: пользователь мог уйти со страницы задолго до остановки.
+    await this.notificationsService.notifyRunEvent(
       runId,
-      payload: {
-        stepIndex,
-        stepTitle: step.title,
-        page: step.page,
-      },
-      timestamp: new Date().toISOString(),
-    });
+      "run_waiting_input",
+      stepIndex,
+    );
 
-    const deadline = Date.now() + PAGE_INPUT_TIMEOUT_MS;
-
-    while (Date.now() < deadline) {
-      const run = await this.runModel.findById(runId).exec();
-      if (!run) {
-        throw new StepExecutionError("Run disappeared while waiting for input");
-      }
-      if (run.status === RunStatus.CANCELLED) {
-        throw new RunCancelledError("Run was cancelled while waiting for input");
-      }
-      if (run.status === RunStatus.RUNNING && run.pageData) {
-        const data = run.pageData as Record<string, unknown>;
-        await this.runModel
-          .updateOne({ _id: runId }, { $unset: { pageData: "" } })
-          .exec();
-        return data;
-      }
-      await this.sleep(1000);
-    }
-
-    throw new StepExecutionError("Timed out waiting for page input");
+    throw new RunPausedError(`Шаг «${_stepTitle}» ждёт ввода пользователя`);
   }
 
   private async failRun(runId: string, error: string): Promise<void> {
     await this.runModel
       .updateOne({ _id: runId }, { $set: { status: RunStatus.FAILED, error } })
       .exec();
+
+    await this.notificationsService.notifyRunEvent(runId, "run_failed");
 
     const run = await this.runModel.findById(runId).exec();
 

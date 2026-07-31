@@ -208,7 +208,17 @@ export function resolveMappings(
 
   for (const [field, source] of Object.entries(mappings)) {
     if (source === "user") {
-      resolved[field] = userInput?.[field] ?? userInput;
+      // Прежде отсутствующий ключ подставлял в параметр ВЕСЬ объект входов —
+      // молча уезжавший в запрос суррогат. Обязательные значения до сюда не
+      // доходят (воркер спросит их раньше), а необязательные остаются пустыми.
+      if (!(field in (userInput ?? {}))) {
+        warnings.push(
+          `Параметр «${field}»: значение ручного ввода не задано — параметр отправлен пустым`,
+        );
+        continue;
+      }
+
+      resolved[field] = userInput?.[field];
       continue;
     }
 

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-// Right-side drawer: configure where each input of a step comes from, review the
-// outputs it hands to later steps, and attach an input page.
+// Right-side drawer: configure where each input of a step comes from and review
+// the outputs it hands to later steps. A page step opens the page builder here.
 import type { FilterOperator, SchemaField, Step, StepFilter, StepSchema } from "@fuse/shared";
+import { pageBlockCount } from "@fuse/shared";
 
 const props = defineProps<{
   step: Step;
@@ -23,6 +24,7 @@ const TYPE_LABELS: Record<string, string> = {
   delay: "Задержка",
   file: "Файл",
   periodic: "Периодический запрос",
+  page: "Страница",
 };
 
 const GROUPS = [
@@ -32,11 +34,6 @@ const GROUPS = [
   { loc: "body", title: "Тело запроса · Body", dot: "bg-emerald-500" },
 ] as const;
 
-const PAGE_LABELS: Record<string, string> = {
-  fields: "Ввод полей",
-  file: "Загрузка файла",
-  text: "Отображение текста",
-};
 
 const OPERATORS: { value: FilterOperator; label: string }[] = [
   { value: "eq", label: "=" },
@@ -95,13 +92,37 @@ const path = computed(() =>
 const inputs = computed(() => schema.value.inputs ?? []);
 const outputs = computed(() => schema.value.outputs ?? []);
 
+/**
+ * Строки списка «Выходные данные». У шага-страницы ключ по умолчанию — id
+ * блока: вместо него показываем отображаемое имя (label схемы — кастомный ключ
+ * либо лейбл блока), без технического подзаголовка. У остальных шагов главное —
+ * ключ, лейбл — подписью, когда отличается.
+ */
+const outputRows = computed(() =>
+  outputs.value.map((o) => ({
+    ...o,
+    display: props.step.type === "page" ? o.label || o.key : o.key,
+    sub: props.step.type !== "page" && o.label && o.label !== o.key ? o.label : "",
+  })),
+);
+
 const delaySeconds = computed(() => (props.step.type === "delay" ? props.step.seconds : 0));
 const pollInterval = computed(() =>
   props.step.type === "periodic" ? props.step.pollIntervalSec : 0,
 );
-const pageTypeLabel = computed(() =>
-  props.step.page ? (PAGE_LABELS[props.step.page.type] ?? "") : "",
-);
+const pageSummary = computed(() => {
+  if (props.step.type !== "page") return "";
+  const count = pageBlockCount(props.step.page);
+  return count ? `${count} элем. на странице` : "Пустая страница";
+});
+
+/**
+ * Ручные значения обычных шагов собирает общая форма перед запуском; ввод по
+ * ходу исполнения — это шаг «Страница», чьи значения идут в его результат.
+ */
+function manualSourceHint(_localKey: string): string {
+  return "Значение запросит форма перед запуском сценария.";
+}
 
 const CONST_HINT = "Можно подставить результат шага: {{s0:company_id}}";
 
@@ -392,11 +413,6 @@ function updateInterval(pollIntervalSec: number) {
   emit("update", { ...props.step, pollIntervalSec } as Step);
 }
 
-function removePage() {
-  const next = { ...props.step };
-  delete next.page;
-  emit("update", next as Step);
-}
 
 // Schemas are re-fetched after every save, so `inputs` is a fresh array even when
 // nothing changed. Re-hydrating on that would wipe a half-made choice: "Из шага"
@@ -433,8 +449,39 @@ watch(hydrateKey, hydrate, { immediate: true });
       </div>
 
       <div class="flex-1 overflow-y-auto px-7 py-7 flex flex-col">
+        <!-- Страница (только шаг «Страница») -->
+        <div v-if="step.type === 'page'">
+          <div class="flex items-start gap-3 mb-5">
+            <span
+              class="w-9 h-9 rounded-xl shrink-0 inline-flex items-center justify-center bg-amber-50 text-amber-600"
+            >
+              <Icon name="layout-template" :size="18" />
+            </span>
+            <div class="min-w-0">
+              <div class="font-sans text-[0.9375rem] font-bold text-zinc-900">Страница</div>
+              <div class="font-sans text-[0.8125rem] text-zinc-500 mt-0.5">
+                Экран, который увидит пользователь на этом шаге. Блоки ввода — выходы шага,
+                блоки отображения показывают данные пройденных шагов.
+              </div>
+            </div>
+          </div>
+          <div class="border border-zinc-200 rounded-2xl p-4 flex items-center gap-3.5">
+            <div class="min-w-0 flex-1">
+              <div class="font-sans text-sm font-bold text-zinc-900 truncate">
+                {{ step.type === "page" ? step.page.title : "" }}
+              </div>
+              <div class="font-sans text-[0.8125rem] text-zinc-500 mt-0.5">
+                {{ pageSummary }}
+              </div>
+            </div>
+            <Button variant="secondary" size="sm" @click="emit('edit-page')">
+              Открыть редактор
+            </Button>
+          </div>
+        </div>
+
         <!-- Входные данные -->
-        <div>
+        <div v-if="step.type !== 'page'">
           <div class="flex items-start gap-3 mb-5">
             <span
               class="w-9 h-9 rounded-xl shrink-0 inline-flex items-center justify-center bg-indigo-50 text-indigo-600"
@@ -591,13 +638,13 @@ watch(hydrateKey, hydrate, { immediate: true });
                         </div>
 
                         <div v-else class="font-sans text-[0.8125rem] text-zinc-400">
-                          Пользователь введёт значение для сравнения при запуске сценария.
+                          {{ manualSourceHint(`filter:${f.key}`) }}
                         </div>
                       </div>
                     </div>
 
                     <div v-else class="font-sans text-[0.8125rem] text-zinc-400">
-                      Пользователь введёт значение при запуске сценария.
+                      {{ manualSourceHint(f.key) }}
                     </div>
                   </div>
                 </div>
@@ -673,14 +720,14 @@ watch(hydrateKey, hydrate, { immediate: true });
               </div>
             </div>
           </div>
-          <div v-if="outputs.length" class="border border-zinc-200 rounded-2xl overflow-hidden">
+          <div v-if="outputRows.length" class="border border-zinc-200 rounded-2xl overflow-hidden">
             <div
-              v-for="(o, i) in outputs"
+              v-for="(o, i) in outputRows"
               :key="o.key"
               :class="['px-4 py-3 flex flex-col gap-1', i ? 'border-t border-zinc-100' : '']"
             >
               <div class="flex items-center gap-2">
-                <code class="font-mono text-sm font-semibold text-zinc-900">{{ o.key }}</code>
+                <code class="font-mono text-sm font-semibold text-zinc-900">{{ o.display }}</code>
                 <span
                   class="shrink-0 inline-flex items-center font-mono text-[0.6875rem] font-semibold tracking-wide text-sky-600"
                   >{{ o.type }}</span
@@ -691,8 +738,8 @@ watch(hydrateKey, hydrate, { immediate: true });
                   >{{ o.ex }}</code
                 >
               </div>
-              <div v-if="o.label && o.label !== o.key" class="font-sans text-[0.8125rem] text-zinc-400">
-                {{ o.label }}
+              <div v-if="o.sub" class="font-sans text-[0.8125rem] text-zinc-400">
+                {{ o.sub }}
               </div>
             </div>
           </div>
@@ -707,43 +754,6 @@ watch(hydrateKey, hydrate, { immediate: true });
           </div>
         </div>
 
-        <!-- Страница ввода -->
-        <div class="border-t border-zinc-200 mt-8 pt-8">
-          <div class="flex items-start gap-3 mb-5">
-            <span
-              class="w-9 h-9 rounded-xl shrink-0 inline-flex items-center justify-center bg-amber-50 text-amber-600"
-            >
-              <Icon name="layout-template" :size="18" />
-            </span>
-            <div class="min-w-0">
-              <div class="font-sans text-[0.9375rem] font-bold text-zinc-900">Страница ввода</div>
-              <div class="font-sans text-[0.8125rem] text-zinc-500 mt-0.5">
-                Экран, который увидит пользователь перед этим шагом.
-              </div>
-            </div>
-          </div>
-          <div v-if="step.page" class="border border-zinc-200 rounded-2xl p-4 flex items-center gap-3.5">
-            <div class="min-w-0 flex-1">
-              <div class="font-sans text-sm font-bold text-zinc-900 truncate">
-                {{ step.page.title }}
-              </div>
-              <div class="font-sans text-[0.8125rem] text-zinc-500 mt-0.5">
-                {{ pageTypeLabel }}
-              </div>
-            </div>
-            <Button variant="secondary" size="sm" @click="emit('edit-page')">Изменить</Button>
-            <Button variant="ghost" size="sm" @click="removePage">Удалить</Button>
-          </div>
-          <div v-else class="flex flex-col items-center gap-3 border border-dashed border-zinc-200 rounded-xl px-4 py-6">
-            <div class="font-sans text-[0.8125rem] text-zinc-400 text-center">
-              Страница не настроена — значения ручного ввода запросятся общей формой.
-            </div>
-            <Button variant="secondary" size="sm" @click="emit('edit-page')">
-              <template #left><Icon name="plus" :size="15" /></template>
-              Добавить страницу
-            </Button>
-          </div>
-        </div>
       </div>
     </div>
   </div>

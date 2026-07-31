@@ -28,8 +28,16 @@
           </p>
         </div>
         <StepProgress :steps="previewSteps" />
-        <div>
-          <Button variant="primary" :disabled="starting || scenario.blocked" @click="startRun">
+
+        <!-- Ручные значения без страницы: обязательные блокируют запуск. -->
+        <RunManualInputsForm
+          v-if="formFields.length"
+          :fields="formFields"
+          :busy="starting || scenario.blocked"
+          @submit="startRun"
+        />
+        <div v-else>
+          <Button variant="primary" :disabled="starting || scenario.blocked" @click="startRun({})">
             {{ starting ? "Запуск…" : "Получить результат" }}
             <template #right><Icon name="arrow-right" :size="18" /></template>
           </Button>
@@ -47,89 +55,30 @@
         </div>
       </template>
 
+      <!-- waiting: input:required — обязательного значения не оказалось во входах -->
+      <template v-else-if="phase === 'waiting' && pendingInputs">
+        <div>
+          <h3 class="font-sans font-bold text-[1.0625rem] tracking-tight text-zinc-900 mb-1.5">
+            Нужны данные для шага «{{ pendingInputs.stepTitle }}»
+          </h3>
+          <p class="font-sans text-sm text-zinc-500">
+            Без этих значений шаг не сможет выполниться.
+          </p>
+        </div>
+        <RunManualInputsForm
+          :fields="pendingInputs.fields"
+          submit-text="Продолжить"
+          @submit="submitPendingInputs"
+        />
+      </template>
+
       <!-- waiting: page:required -->
       <template v-else-if="phase === 'waiting' && currentPage">
-        <!-- fields -->
-        <template v-if="currentPage.page.type === 'fields'">
-          <div>
-            <h3 class="font-sans font-bold text-[1.0625rem] tracking-tight text-zinc-900 mb-1.5">
-              {{ currentPage.page.title }}
-            </h3>
-            <p v-if="currentPage.page.hint" class="font-sans text-sm text-zinc-500">
-              {{ currentPage.page.hint }}
-            </p>
-          </div>
-          <form class="flex flex-col gap-4" @submit.prevent="submitFields">
-            <Input
-              v-for="field in currentPage.page.fields"
-              :key="field.key"
-              v-model="formData[field.key]"
-              :label="field.required ? `${field.label} *` : field.label"
-              :placeholder="field.placeholder || ''"
-            />
-            <div>
-              <Button variant="primary" type="submit">{{ currentPage.page.buttonText }}</Button>
-            </div>
-          </form>
-        </template>
-
-        <!-- file -->
-        <template v-else-if="currentPage.page.type === 'file'">
-          <div>
-            <h3 class="font-sans font-bold text-[1.0625rem] tracking-tight text-zinc-900 mb-1.5">
-              {{ currentPage.page.title }}
-            </h3>
-            <p v-if="currentPage.page.hint" class="font-sans text-sm text-zinc-500">
-              {{ currentPage.page.hint }}
-            </p>
-          </div>
-          <div
-            :class="[
-              'rounded-2xl border-2 border-dashed p-8 text-center cursor-pointer transition-colors',
-              isDragOver ? 'border-rose-600 bg-rose-50' : 'border-zinc-300 hover:border-rose-400 hover:bg-zinc-50',
-            ]"
-            @click="triggerFileInput"
-            @dragover.prevent="isDragOver = true"
-            @dragleave.prevent="isDragOver = false"
-            @drop.prevent="onFileDrop"
-          >
-            <span v-if="!selectedFile" class="font-sans text-sm text-zinc-500">
-              Перетащите файл сюда или нажмите для выбора
-              <span v-if="currentPage.page.maxMb">(макс. {{ currentPage.page.maxMb }} МБ)</span>
-            </span>
-            <span v-else class="font-sans text-sm font-semibold text-zinc-900">
-              {{ selectedFile.name }} ({{ formatFileSize(selectedFile.size) }})
-            </span>
-          </div>
-          <input
-            ref="fileInput"
-            type="file"
-            class="hidden"
-            :accept="currentPage.page.accept || undefined"
-            @change="onFileSelect"
-          />
-          <p v-if="fileError" class="font-sans text-[0.8125rem] text-rose-600">{{ fileError }}</p>
-          <div>
-            <Button variant="primary" :disabled="!selectedFile || !!fileError" @click="submitFile">
-              {{ currentPage.page.buttonText }}
-            </Button>
-          </div>
-        </template>
-
-        <!-- text -->
-        <template v-else-if="currentPage.page.type === 'text'">
-          <div>
-            <h3 class="font-sans font-bold text-[1.0625rem] tracking-tight text-zinc-900 mb-1.5">
-              {{ currentPage.page.title }}
-            </h3>
-            <div class="font-sans text-[0.9375rem] text-zinc-700 leading-relaxed whitespace-pre-wrap">
-              {{ currentPage.page.body }}
-            </div>
-          </div>
-          <div>
-            <Button variant="primary" @click="submitText">Продолжить</Button>
-          </div>
-        </template>
+        <RunPageRunner
+          :page="currentPage.page"
+          :resolved="currentPage.resolved"
+          @submit="submitPage"
+        />
       </template>
 
       <!-- done -->
@@ -145,6 +94,11 @@
         <p v-if="totalDurationMs > 0" class="font-sans text-sm text-zinc-500 -mt-2">
           Общее время: {{ totalDurationMs }} мс
         </p>
+
+        <!-- Финальный экран: display-only страница последнего шага «Страница». -->
+        <Card v-if="currentPage" padding="lg">
+          <RunPageRunner :page="currentPage.page" :resolved="currentPage.resolved" />
+        </Card>
 
         <!-- Данные результата: коллекция -->
         <template v-if="resultView?.kind === 'list'">
@@ -169,7 +123,19 @@
           <p class="font-sans text-[0.9375rem] text-zinc-900">{{ resultView.value }}</p>
         </Card>
 
-        <CodeBlock v-if="lastResult != null" :code="lastResult" label="Полный ответ" />
+        <!-- Данные результата: файл из S3 -->
+        <RunFileCard
+          v-else-if="resultView?.kind === 'file'"
+          :file="resultView.file"
+          :run-id="runId"
+          kind="output"
+        />
+
+        <CodeBlock
+          v-if="lastResult != null && resultView?.kind !== 'file'"
+          :code="lastResult"
+          label="Полный ответ"
+        />
 
         <Card v-if="stepTimings.length" padding="lg">
           <KeyValueGrid :items="stepTimings" :columns="1" />
@@ -224,12 +190,15 @@
 // RunPanel — the scenario execution flow (WS-driven), reused by the scenario
 // view "Запуск" tab and the standalone /cards/[id]/run route.
 import type {
+  ManualInputDescriptor,
   Step,
   StepPage,
   ServerWsEvent,
   RunStatusPayload,
   RunStepResult,
+  UploadedFileRef,
 } from "@fuse/shared";
+import { blockCategory, isUploadedFileRef } from "@fuse/shared";
 
 const props = defineProps<{ scenarioId: string }>();
 const emit = defineEmits<{
@@ -253,6 +222,15 @@ interface PageState {
   stepIndex: number;
   stepTitle: string;
   page: StepPage;
+  /** Значения блоков отображения, разрешённые воркером из результатов пройденных шагов. */
+  resolved?: Record<string, unknown>;
+}
+
+/** Значения, которых воркер не нашёл во входах и просит по ходу выполнения. */
+interface PendingInputsState {
+  stepIndex: number;
+  stepTitle: string;
+  fields: ManualInputDescriptor[];
 }
 
 type Phase = "idle" | "starting" | "running" | "waiting" | "done" | "error" | "cancelled";
@@ -269,17 +247,27 @@ const starting = ref(false);
 const phase = ref<Phase>("idle");
 const stepProgress = ref<StepProgress[]>([]);
 const currentPage = ref<PageState | null>(null);
+/**
+ * Ручные значения сценария. Шаги «Страница» дескрипторов не порождают — их
+ * значения собирает сама страница по ходу исполнения, поэтому форма перед
+ * запуском спрашивает весь список.
+ */
+const manualInputs = ref<ManualInputDescriptor[]>([]);
+const formFields = computed(() => manualInputs.value);
+const pendingInputs = ref<PendingInputsState | null>(null);
 const totalDurationMs = ref(0);
 const errorMessage = ref("");
-const formData = ref<Record<string, string>>({});
-const selectedFile = ref<File | null>(null);
-const fileError = ref("");
-const isDragOver = ref(false);
-const fileInput = ref<HTMLInputElement | null>(null);
 
 const runId = ref("");
 const socketApi = shallowRef<ReturnType<typeof useRunSocket> | null>(null);
 let processedCount = 0;
+
+/** Есть ли на странице блоки ввода — display-only страницы исполнение не ждёт. */
+function pageHasInputs(page: StepPage): boolean {
+  return page.rows.some((row) =>
+    row.items.some((b) => blockCategory(b.type) === "input"),
+  );
+}
 
 // Map internal step status → DS StepProgress status (done/active/pending).
 function dsStatus(s: StepProgress["status"]): "done" | "active" | "pending" {
@@ -331,6 +319,7 @@ type ResultView =
   | { kind: "list"; count: number; items: ReturnType<typeof toItems>[] }
   | { kind: "object"; items: ReturnType<typeof toItems> }
   | { kind: "scalar"; value: string }
+  | { kind: "file"; file: UploadedFileRef }
   | null;
 
 const PREVIEW_LIMIT = 5;
@@ -338,6 +327,12 @@ const PREVIEW_LIMIT = 5;
 const resultView = computed<ResultView>(() => {
   const raw = lastResult.value;
   if (raw == null) return null;
+
+  // Файловый ответ API: воркер сохранил файл в S3 и оставил в результате
+  // ссылку — показываем карточку файла со скачиванием, а не JSON ссылки.
+  if (isUploadedFileRef(raw)) {
+    return { kind: "file", file: raw };
+  }
 
   if (Array.isArray(raw)) {
     const rows = raw
@@ -365,6 +360,13 @@ const stepTimings = computed(() =>
     .filter((s) => s.durationMs != null)
     .map((s) => ({ label: s.title, value: `${s.durationMs} мс` })),
 );
+
+// Запуск завершился — сторожить тишину больше нечего.
+watch(phase, (value) => {
+  if (value === "done" || value === "error" || value === "cancelled") {
+    socketApi.value?.stopWatchdog();
+  }
+});
 
 watch(
   () => socketApi.value?.events.value.length ?? 0,
@@ -401,7 +403,21 @@ async function fetchScenario() {
   }
 }
 
-async function startRun() {
+/**
+ * Что спросить у пользователя перед стартом, считает сервер: тем же
+ * перечислением воркер потом проверяет полноту входов. Список приходит
+ * без значений, которые спросит страница ввода своего шага.
+ */
+async function fetchManualInputs() {
+  try {
+    const { data } = await $api.GET(`/api/marketplace/${props.scenarioId}/manual-inputs`, {});
+    manualInputs.value = (data ?? []) as ManualInputDescriptor[];
+  } catch {
+    manualInputs.value = [];
+  }
+}
+
+async function startRun(inputs: Record<string, unknown> = {}) {
   // Запуск создаёт run под пользователем — гостя сначала просим войти.
   if (!useAuthStore().isAuthenticated) {
     useLoginModal().openLogin("Войдите, чтобы запустить сценарий.");
@@ -411,7 +427,7 @@ async function startRun() {
   phase.value = "starting";
   try {
     const { data, error: apiError } = await $api.POST("/api/runs", {
-      body: { scenarioId: props.scenarioId },
+      body: { scenarioId: props.scenarioId, inputs },
     });
     if (apiError || !data) {
       starting.value = false;
@@ -447,8 +463,42 @@ async function startRun() {
 function attachToRun(id: string) {
   runId.value = id;
   processedCount = 0;
-  socketApi.value = useRunSocket(id);
+  socketApi.value = useRunSocket(id, { onSilence: resyncRun });
   socketApi.value.connect();
+}
+
+/**
+ * Поток событий молчит дольше положенного — перечитываем состояние запуска из
+ * БД и применяем его тем же кодом, что и снапшот сокета. Без этого потерянный
+ * поток (запуск исполнил другой процесс, воркер умер, gateway моргнул)
+ * оставляет пользователя в вечном «Выполняем сценарий…».
+ */
+async function resyncRun() {
+  if (!runId.value) return;
+  // В фазе ожидания ввода тишина нормальна — ждём пользователя. Перечитывание
+  // здесь ещё и затёрло бы уже набранные в форме значения.
+  if (phase.value !== "running" && phase.value !== "starting") return;
+
+  try {
+    const { data } = await $api.GET(`/api/runs/${runId.value}`, {});
+    if (!data) return;
+
+    const run = data as {
+      status: RunStatusPayload["status"];
+      currentStep?: number;
+      stepResults?: unknown[];
+      error?: string;
+    };
+
+    applySnapshot({
+      status: run.status,
+      currentStep: run.currentStep ?? 0,
+      stepResults: run.stepResults ?? [],
+      error: run.error,
+    });
+  } catch {
+    // Сеть моргнула — следующая проверка сторожа попробует снова.
+  }
 }
 
 /**
@@ -487,27 +537,50 @@ function handleWsEvent(event: ServerWsEvent) {
       break;
     }
     case "page:required": {
-      phase.value = "waiting";
+      const page = event.payload.page as StepPage;
       currentPage.value = {
         stepIndex: event.payload.stepIndex,
         stepTitle: event.payload.stepTitle,
-        page: event.payload.page as StepPage,
+        page,
+        resolved: event.payload.resolved,
       };
-      formData.value = {};
-      selectedFile.value = null;
-      fileError.value = "";
+      // Display-only страницу worker публикует и продолжает сам: исполнение не
+      // ждёт, поэтому и панель остаётся в «running» — страница покажется по
+      // завершении (финальный экран) либо сменится следующей.
+      if (pageHasInputs(page)) {
+        phase.value = "waiting";
+        pendingInputs.value = null;
+      }
+      break;
+    }
+    // Обязательного значения не оказалось во входах запуска — воркер остановился
+    // и просит его: спрашиваем теми же полями, что и форма перед запуском.
+    case "input:required": {
+      phase.value = "waiting";
+      currentPage.value = null;
+      pendingInputs.value = {
+        stepIndex: event.payload.stepIndex,
+        stepTitle: event.payload.stepTitle,
+        fields: event.payload.fields,
+      };
       break;
     }
     case "run:done": {
       totalDurationMs.value = event.payload.totalDurationMs ?? 0;
       phase.value = "done";
-      currentPage.value = null;
+      // Display-only страница последнего шага остаётся финальным экраном —
+      // run:done её не скрывает; страница с вводом к этому моменту отработала.
+      if (currentPage.value && pageHasInputs(currentPage.value.page)) {
+        currentPage.value = null;
+      }
+      pendingInputs.value = null;
       break;
     }
     case "run:error": {
       errorMessage.value = event.payload.error;
       phase.value = "error";
       currentPage.value = null;
+      pendingInputs.value = null;
       break;
     }
     // Снапшот состояния: сервер шлёт его сразу при подключении к комнате, потому
@@ -553,7 +626,14 @@ function applySnapshot(payload: RunStatusPayload) {
   switch (payload.status) {
     case "completed":
       phase.value = "done";
-      currentPage.value = null;
+      // Финальный display-only экран не сбрасываем и по снапшоту.
+      if (currentPage.value && pageHasInputs(currentPage.value.page)) {
+        currentPage.value = null;
+      }
+      // Запуск открыт уже завершённым (из истории, по `?run=`) — живого
+      // `page:required` не было, финальную страницу берём из сохранённой.
+      if (!currentPage.value) void restoreFinalPage();
+      pendingInputs.value = null;
       if (!totalDurationMs.value) {
         totalDurationMs.value = stepProgress.value.reduce(
           (sum, s) => sum + (s.durationMs ?? 0),
@@ -570,15 +650,22 @@ function applySnapshot(payload: RunStatusPayload) {
         "Выполнение завершилось ошибкой";
       phase.value = "error";
       currentPage.value = null;
+      pendingInputs.value = null;
       break;
     case "cancelled":
       phase.value = "cancelled";
       currentPage.value = null;
+      pendingInputs.value = null;
       break;
     case "waiting_input":
-      // Определение страницы в снапшот не входит — берём его из сценария,
-      // который уже загружен на клиенте.
-      restoreWaitingPage(payload.currentStep);
+      // Ни страницы, ни списка запрошенных значений в снапшоте нет — шаг ждёт
+      // либо своей страницы (шаг типа «Страница»), либо добора (тогда считаем,
+      // чего именно не хватает, по входам запуска).
+      if (scenario.value?.steps?.[payload.currentStep]?.type === "page") {
+        restoreWaitingPage(payload.currentStep);
+      } else {
+        void restoreWaitingInputs(payload.currentStep);
+      }
       break;
     case "pending":
     case "running":
@@ -587,81 +674,89 @@ function applySnapshot(payload: RunStatusPayload) {
   }
 }
 
+/**
+ * Финальный экран уже завершённого запуска: display-only страница с
+ * разрешёнными данными сохранена воркером в `Run.finalPage` — в снапшоте
+ * сокета её нет, поэтому дочитываем из БД. Живой запуск сюда не заходит: там
+ * `currentPage` уже выставлен событием `page:required`.
+ */
+async function restoreFinalPage() {
+  if (currentPage.value || !runId.value) return;
+  try {
+    const { data } = await $api.GET(`/api/runs/${runId.value}`, {});
+    const fp = (data as { finalPage?: PageState })?.finalPage;
+    if (fp?.page && !pageHasInputs(fp.page)) {
+      currentPage.value = {
+        stepIndex: fp.stepIndex,
+        stepTitle: fp.stepTitle,
+        page: fp.page,
+        resolved: fp.resolved,
+      };
+    }
+  } catch {
+    // Финальная страница — украшение результата; без неё показываем данные шага.
+  }
+}
+
 function restoreWaitingPage(stepIndex: number) {
   const step = scenario.value?.steps?.[stepIndex];
-  if (!step?.page) return;
+  if (step?.type !== "page") return;
+  // Данные блоков отображения при восстановлении взять неоткуда (событие уже
+  // прошло) — блоки покажутся пустыми, ввод по-прежнему собирается.
   currentPage.value = {
     stepIndex,
     stepTitle: step.title,
     page: step.page,
   };
-  formData.value = {};
-  selectedFile.value = null;
-  fileError.value = "";
+  pendingInputs.value = null;
   phase.value = "waiting";
 }
 
-function submitFields() {
-  if (!currentPage.value || !socketApi.value) return;
-  socketApi.value.submitPage(currentPage.value.stepIndex, { ...formData.value });
-  currentPage.value = null;
-  phase.value = "running";
-}
+/**
+ * После перезагрузки страницы список запрошенных значений взять неоткуда:
+ * пересобираем его сами — обязательные значения шага, которых нет во входах
+ * запуска. Иначе пользователь остался бы на бесконечном «Выполняем сценарий…».
+ */
+async function restoreWaitingInputs(stepIndex: number) {
+  const stepFields = formFields.value.filter(
+    (field) => field.required && field.stepPath[0] === stepIndex,
+  );
+  if (!stepFields.length) return;
 
-function submitText() {
-  if (!currentPage.value || !socketApi.value) return;
-  socketApi.value.submitPage(currentPage.value.stepIndex, {});
-  currentPage.value = null;
-  phase.value = "running";
-}
-
-function triggerFileInput() {
-  fileInput.value?.click();
-}
-
-function onFileSelect(e: Event) {
-  const target = e.target as HTMLInputElement;
-  if (target.files && target.files.length > 0) {
-    validateAndSetFile(target.files[0]);
+  let inputs: Record<string, unknown> = {};
+  try {
+    const { data } = await $api.GET(`/api/runs/${runId.value}`, {});
+    inputs = ((data as { inputs?: Record<string, unknown> })?.inputs ?? {});
+  } catch {
+    inputs = {};
   }
-}
 
-function onFileDrop(e: DragEvent) {
-  isDragOver.value = false;
-  const files = e.dataTransfer?.files;
-  if (files && files.length > 0) {
-    validateAndSetFile(files[0]);
-  }
-}
-
-function validateAndSetFile(file: File) {
-  fileError.value = "";
-  const page = currentPage.value?.page;
-  if (page && page.type === "file") {
-    if (page.maxMb && file.size > page.maxMb * 1024 * 1024) {
-      fileError.value = `Файл превышает максимальный размер ${page.maxMb} МБ`;
-      return;
-    }
-    if (page.accept) {
-      const accepted = page.accept.split(",").map((a) => a.trim());
-      const ext = "." + (file.name.split(".").pop() || "");
-      if (!accepted.includes(file.type) && !accepted.includes(ext)) {
-        fileError.value = `Неподдерживаемый формат. Допустимо: ${page.accept}`;
-        return;
-      }
-    }
-  }
-  selectedFile.value = file;
-}
-
-function submitFile() {
-  if (!currentPage.value || !socketApi.value || !selectedFile.value) return;
-  socketApi.value.submitPage(currentPage.value.stepIndex, {
-    fileName: selectedFile.value.name,
-    fileSize: selectedFile.value.size,
-    fileType: selectedFile.value.type,
+  const missing = stepFields.filter((field) => {
+    const value = inputs[field.key];
+    return value === undefined || value === null || value === "";
   });
+  if (!missing.length) return;
+
   currentPage.value = null;
+  pendingInputs.value = {
+    stepIndex,
+    stepTitle: missing[0].stepTitle,
+    fields: missing,
+  };
+  phase.value = "waiting";
+}
+
+function submitPage(data: Record<string, unknown>) {
+  if (!currentPage.value || !socketApi.value) return;
+  socketApi.value.submitPage(currentPage.value.stepIndex, data);
+  currentPage.value = null;
+  phase.value = "running";
+}
+
+function submitPendingInputs(values: Record<string, unknown>) {
+  if (!pendingInputs.value || !socketApi.value) return;
+  socketApi.value.submitInputs(pendingInputs.value.stepIndex, values);
+  pendingInputs.value = null;
   phase.value = "running";
 }
 
@@ -681,22 +776,14 @@ function reset() {
   phase.value = "idle";
   stepProgress.value = [];
   currentPage.value = null;
+  pendingInputs.value = null;
   totalDurationMs.value = 0;
   errorMessage.value = "";
-  formData.value = {};
-  selectedFile.value = null;
-  fileError.value = "";
   runId.value = "";
 }
 
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} Б`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} КБ`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
-}
-
 onMounted(async () => {
-  await fetchScenario();
+  await Promise.all([fetchScenario(), fetchManualInputs()]);
   resumeFromUrl();
 });
 

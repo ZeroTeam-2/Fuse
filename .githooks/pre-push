@@ -1,0 +1,39 @@
+#!/bin/sh
+# Сеть безопасности: ловит несоответствие имени ветки change/<id> и наличия
+# change ДО пуша, пока ошибку легко исправить локально. Happy path
+# (pnpm change:start) сюда не упирается — имя ветки там выводится из папки.
+#
+# Проверяем СОДЕРЖИМОЕ пушимого коммита (local_sha), а не рабочее дерево:
+# ветку можно пушить, не находясь на ней (git push origin <branch>), и тогда
+# рабочее дерево к ней отношения не имеет.
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  # Удаление ветки (local_sha из одних нулей) не проверяем.
+  case "$local_sha" in
+    *[!0]*) ;;
+    *) continue ;;
+  esac
+
+  case "$remote_ref" in
+    refs/heads/change/*)
+      id=${remote_ref#refs/heads/change/}
+
+      # Активная change в пушимом коммите?
+      if git cat-file -e "$local_sha:openspec/changes/$id/proposal.md" 2>/dev/null; then
+        continue
+      fi
+
+      # Либо уже заархивированная (openspec/changes/archive/<дата>-<id>/)?
+      if git ls-tree -r --name-only "$local_sha" -- "openspec/changes/archive" 2>/dev/null \
+        | grep -q "^openspec/changes/archive/[^/]*-$id/"; then
+        continue
+      fi
+
+      echo "pre-push: коммит ветки 'change/$id' не содержит соответствующей change." >&2
+      echo "  Нет ни openspec/changes/$id/proposal.md, ни записи в openspec/changes/archive/." >&2
+      echo "  Имя ветки должно совпадать с именем папки change." >&2
+      echo "  Проще всего заводить ветку через: pnpm change:start <id>" >&2
+      exit 1
+      ;;
+  esac
+done

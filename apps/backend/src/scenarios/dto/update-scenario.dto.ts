@@ -33,6 +33,14 @@ export class UpdateScenarioDto {
   @IsArray()
   steps?: unknown[];
 
+  @ApiPropertyOptional({
+    type: "array",
+    description: "Per-provider environment choice: { appId, environmentId }[]",
+  })
+  @IsOptional()
+  @IsArray()
+  environmentSelections?: { appId: string; environmentId: string }[];
+
   @ApiPropertyOptional({ default: false })
   @IsOptional()
   @IsBoolean()
