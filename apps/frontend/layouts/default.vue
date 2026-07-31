@@ -19,7 +19,8 @@
         </NuxtLink>
       </nav>
 
-      <div class="ml-auto flex items-center">
+      <div class="ml-auto flex items-center gap-2 lg:gap-3">
+        <NotificationsBell v-if="authStore.isAuthenticated" />
         <div v-if="authStore.user" ref="menuRef" class="relative">
           <button
             type="button"
@@ -90,6 +91,7 @@ const navItems = [
   { to: "/", label: "Маркетплейс", exact: true, private: false },
   { to: "/my/scenarios", label: "Мои сценарии", private: true },
   { to: "/my/apps", label: "Мои API", private: true },
+  { to: "/my/runs", label: "Запуски", private: true },
 ];
 
 // Личные разделы гостю не показываем — вести ему туда некуда.

@@ -1,0 +1,319 @@
+import type {
+  ManualInputDescriptor,
+  RunStepResult,
+  SchemaField,
+  Step,
+  StepPage,
+  StepSchema,
+} from "@fuse/shared";
+import {
+  blockOutputKey,
+  isDisplayBlock,
+  isInputBlock,
+  pageBlocks,
+} from "@fuse/shared";
+
+/**
+ * Перечисление значений сценария, помеченных ручным вводом, — параметров
+ * (`mappings[key] = "user"`) и операндов условий фильтрации
+ * (`filters[key].value.mode = "user"`).
+ *
+ * Один и тот же список строит форму запуска и проверяет полноту входов в
+ * воркере: разъехаться «что спросили» и «что нужно при исполнении» не должны.
+ */
+
+/** Глубже вложенные сценарии не разворачиваем: недостающее спросим по ходу. */
+const MAX_DEPTH = 5;
+
+/** Ключ, под которым операнд условия приходит во входных данных шага. */
+export function filterLocalKey(paramKey: string): string {
+  return `filter:${paramKey}`;
+}
+
+/** Локальный ключ значения — то, что ищет `mapping-resolver` во входах шага. */
+export function localKeyOf(paramKey: string, kind: "param" | "filter"): string {
+  return kind === "filter" ? filterLocalKey(paramKey) : paramKey;
+}
+
+/** Префикс пути шага: `[2, 0]` → `s2.s0`. */
+export function stepPathPrefix(stepPath: number[]): string {
+  return stepPath.map((index) => `s${index}`).join(".");
+}
+
+/** Ключ во входах запуска: `s0:inn`, `s2.s0:filter:status`. */
+export function manualInputKey(stepPath: number[], localKey: string): string {
+  return `${stepPathPrefix(stepPath)}:${localKey}`;
+}
+
+/**
+ * Входы, адресованные шагу: срез по префиксу пути со срезанным префиксом.
+ * На выходе — плоская карта локальных ключей, ровно та, что ждёт резолвер.
+ */
+export function sliceInputsForStep(
+  inputs: Record<string, unknown> | undefined,
+  stepPath: number[],
+): Record<string, unknown> {
+  if (!inputs) return {};
+
+  const prefix = `${stepPathPrefix(stepPath)}:`;
+  const slice: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(inputs)) {
+    if (key.startsWith(prefix)) {
+      slice[key.slice(prefix.length)] = value;
+    }
+  }
+
+  return slice;
+}
+
+/**
+ * Данные сабмита страницы (по id блоков) — в результат шага-страницы: значение
+ * блока ввода кладётся под его ключ выхода (`binding` либо собственный `id`).
+ * Ключи, не узнанные по блокам, сохраняются как есть.
+ */
+export function mapPageDataToOutputs(
+  page: StepPage | undefined,
+  data: Record<string, unknown>,
+): Record<string, unknown> {
+  const outputKeys = new Map(
+    pageBlocks(page)
+      .filter(isInputBlock)
+      .map((block) => [block.id, blockOutputKey(block)]),
+  );
+
+  const mapped: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(data)) {
+    mapped[outputKeys.get(key) ?? key] = value;
+  }
+
+  return mapped;
+}
+
+/** Поле результата шага; массивный выход сводится к первому элементу. */
+function readResultField(result: unknown, key: string): unknown {
+  const source = Array.isArray(result) ? result[0] : result;
+  if (!source || typeof source !== "object") return undefined;
+  return (source as Record<string, unknown>)[key];
+}
+
+function isPrimitive(value: unknown): value is string | number | boolean {
+  return (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  );
+}
+
+/** Разбор `s{idx}:{outKey}` в индекс шага и ключ поля. */
+function parseStepRef(ref: string): { index: number; key: string } | null {
+  const match = ref.match(/^s(\d+):(.+)$/);
+  return match ? { index: Number(match[1]), key: match[2] } : null;
+}
+
+/**
+ * Разворот результата шага-источника в список вариантов `select`. Покрывает обе
+ * формы массива, как и резолвер условий: результат-объект с массивным полем
+ * (`{ cars: [...] }` → берём `cars`) и результат-массив объектов (собираем поле
+ * `key` каждого элемента). Оставляем только примитивы, приводим к строке.
+ */
+function collectOptionValues(result: unknown, key: string): string[] {
+  let list: unknown[] = [];
+
+  if (Array.isArray(result)) {
+    // Массив объектов — поле `key` каждого; массив примитивов — сами элементы.
+    list = result.map((el) =>
+      el && typeof el === "object" ? (el as Record<string, unknown>)[key] : el,
+    );
+  } else if (result && typeof result === "object") {
+    const field = (result as Record<string, unknown>)[key];
+    if (Array.isArray(field)) list = field;
+  }
+
+  return list.filter(isPrimitive).map((v) => String(v));
+}
+
+/**
+ * Данные блоков страницы, разрешённые из результатов пройденных шагов, по
+ * `blockId`:
+ * - блок отображения (`paragraph`) с `binding = s{idx}:{outKey}` → скалярное
+ *   значение поля результата шага-источника;
+ * - блок `select` с `optionsSource = s{idx}:{outKey}` → массив строк-вариантов,
+ *   развёрнутый из массивного поля/результата шага-источника.
+ * Недоступный источник (нет шага/поля/результата) блок не роняет: отображение
+ * покажется пустым, у select останутся статические `options`.
+ */
+export function resolvePageBindings(
+  page: StepPage | undefined,
+  stepResults: RunStepResult[],
+): Record<string, unknown> {
+  const resolved: Record<string, unknown> = {};
+
+  for (const block of pageBlocks(page)) {
+    if (isDisplayBlock(block) && block.binding) {
+      const ref = parseStepRef(block.binding);
+      if (!ref) continue;
+      const value = readResultField(stepResults[ref.index]?.result, ref.key);
+      if (value !== undefined) resolved[block.id] = value;
+      continue;
+    }
+
+    if (block.type === "select" && block.optionsSource) {
+      const ref = parseStepRef(block.optionsSource);
+      if (!ref) continue;
+      const options = collectOptionValues(stepResults[ref.index]?.result, ref.key);
+      if (options.length) resolved[block.id] = options;
+    }
+  }
+
+  return resolved;
+}
+
+export interface ManualInputDeps {
+  /** Шаги сценария по id. Бросать не должен: недоступный сценарий — пустой список. */
+  loadSteps(scenarioId: string): Promise<Step[]>;
+  /** Схема шага; `null`, если шаг сломан (нет приложения или эндпоинта). */
+  loadStepSchema(step: Step): Promise<StepSchema | null>;
+}
+
+/**
+ * Тип и подпись операнда условия берутся из схемы ЭЛЕМЕНТА массива шага-источника:
+ * сравнение идёт по полю элемента (`filter.field`), а не по выходу шага целиком.
+ */
+async function describeFilterField(
+  step: Step,
+  paramKey: string,
+  siblings: Step[],
+  deps: ManualInputDeps,
+): Promise<SchemaField | undefined> {
+  const filter = step.filters?.[paramKey];
+  const source = step.mappings?.[paramKey];
+  if (!filter || typeof source !== "string") return undefined;
+
+  const match = source.match(/^s(\d+):(.+)$/);
+  if (!match) return undefined;
+
+  const sourceStep = siblings[Number(match[1])];
+  if (!sourceStep) return undefined;
+
+  const schema = await deps.loadStepSchema(sourceStep);
+  if (!schema) return undefined;
+
+  // arrayPath задан — массив лежит в поле результата, его элемент описан `items`.
+  // Иначе массивом является сам результат, и `outputs` уже описывают элемент.
+  const elementFields = filter.arrayPath
+    ? (schema.outputs.find((f) => f.key === filter.arrayPath)?.items ?? [])
+    : schema.outputs;
+
+  return elementFields.find((f) => f.key === filter.field);
+}
+
+async function collectFromSteps(
+  steps: Step[],
+  stepPath: number[],
+  visited: Set<string>,
+  deps: ManualInputDeps,
+  out: ManualInputDescriptor[],
+): Promise<void> {
+  for (let index = 0; index < steps.length; index++) {
+    const step = steps[index];
+    const path = [...stepPath, index];
+
+    // Шаг-страница значения собирает сам по ходу исполнения: форме запуска
+    // спрашивать нечего, дескрипторов он не порождает.
+    if (step.type === "page") continue;
+
+    if (step.type === "scenario") {
+      if (visited.has(step.refScenarioId) || path.length >= MAX_DEPTH) {
+        // Цикл между сценариями или слишком глубокая вложенность: обход обязан
+        // быть конечным. Недостающие значения воркер спросит по ходу.
+        continue;
+      }
+
+      const nested = await deps.loadSteps(step.refScenarioId);
+      await collectFromSteps(
+        nested,
+        path,
+        new Set([...visited, step.refScenarioId]),
+        deps,
+        out,
+      );
+      continue;
+    }
+
+    const mappings = step.mappings ?? {};
+    const filters = step.filters ?? {};
+
+    const hasManual =
+      Object.values(mappings).some((source) => source === "user") ||
+      Object.values(filters).some((filter) => filter.value?.mode === "user");
+
+    if (!hasManual) continue;
+
+    // Сломанный шаг (нет приложения/эндпоинта) не должен ронять экран запуска.
+    const schema = await deps.loadStepSchema(step);
+    const inputs = schema?.inputs ?? [];
+
+    for (const [paramKey, source] of Object.entries(mappings)) {
+      if (source !== "user") continue;
+
+      const field = inputs.find((f) => f.key === paramKey);
+      out.push({
+        key: manualInputKey(path, paramKey),
+        stepPath: path,
+        stepIndex: index,
+        stepTitle: step.title,
+        paramKey,
+        kind: "param",
+        label: field?.label || paramKey,
+        type: field?.type ?? "string",
+        required: field?.required ?? false,
+      });
+    }
+
+    for (const [paramKey, filter] of Object.entries(filters)) {
+      if (filter.value?.mode !== "user") continue;
+
+      const localKey = filterLocalKey(paramKey);
+      const field = await describeFilterField(step, paramKey, steps, deps);
+
+      out.push({
+        key: manualInputKey(path, localKey),
+        stepPath: path,
+        stepIndex: index,
+        stepTitle: step.title,
+        paramKey,
+        kind: "filter",
+        label: field?.label || filter.field,
+        type: field?.type ?? "string",
+        // Без операнда условие не отберёт ни одного элемента и шаг упадёт.
+        required: true,
+      });
+    }
+  }
+}
+
+export async function enumerateManualInputs(
+  steps: Step[],
+  deps: ManualInputDeps,
+  scenarioId?: string,
+): Promise<ManualInputDescriptor[]> {
+  const out: ManualInputDescriptor[] = [];
+  const visited = new Set<string>(scenarioId ? [scenarioId] : []);
+  await collectFromSteps(steps, [], visited, deps, out);
+  return out;
+}
+
+/** Обязательные значения формы, которых нет во входах запуска. */
+export function missingRequiredKeys(
+  descriptors: ManualInputDescriptor[],
+  inputs: Record<string, unknown> | undefined,
+): string[] {
+  return descriptors
+    .filter((d) => d.required && isBlank(inputs?.[d.key]))
+    .map((d) => d.key);
+}
+
+export function isBlank(value: unknown): boolean {
+  return value === undefined || value === null || value === "";
+}

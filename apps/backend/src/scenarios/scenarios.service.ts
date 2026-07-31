@@ -8,11 +8,13 @@ import { Model } from "mongoose";
 import type {
   ApiStep,
   PaginatedResponse,
+  PeriodicStep,
   SchemaField,
   ScenarioStepRef,
   Step,
   StepSchema,
 } from "@fuse/shared";
+import { duplicateOutputKeys, pageBlockCount, pageStepSchema } from "@fuse/shared";
 import { Scenario, ScenarioDocument } from "./scenario.schema";
 import { detectCycle } from "./cycle-guard";
 import { AppsService } from "../apps/apps.service";
@@ -59,8 +61,9 @@ export class ScenariosService {
     };
   }
 
-  async findById(id: string): Promise<ScenarioDocument> {
-    const scenario = await this.scenarioModel.findById(id).exec();
+  async findById(id: string, ownerId?: string): Promise<ScenarioDocument> {
+    const filter = ownerId ? { _id: id, ownerId } : { _id: id };
+    const scenario = await this.scenarioModel.findOne(filter).exec();
     if (!scenario) {
       throw new NotFoundException(`Scenario #${id} not found`);
     }
@@ -85,11 +88,14 @@ export class ScenariosService {
 
   async update(
     id: string,
+    ownerId: string,
     dto: UpdateScenarioDto,
   ): Promise<ScenarioDocument> {
-    const scenario = await this.findById(id);
+    const scenario = await this.findById(id, ownerId);
 
     if (dto.steps) {
+      this.assertValidPageSteps(dto.steps as Step[]);
+
       const refSteps = (dto.steps as Step[]).filter(
         (s): s is ScenarioStepRef => s.type === "scenario",
       );
@@ -138,7 +144,7 @@ export class ScenariosService {
     }
 
     const updated = await this.scenarioModel
-      .findByIdAndUpdate(id, updateQuery, { new: true })
+      .findOneAndUpdate({ _id: id, ownerId }, updateQuery, { new: true })
       .exec();
 
     if (!updated) {
@@ -147,8 +153,32 @@ export class ScenariosService {
     return updated;
   }
 
-  async togglePublish(id: string): Promise<ScenarioDocument> {
-    const scenario = await this.findById(id);
+  /**
+   * Шаг «Страница» обязан нести хотя бы один блок (пустая страница при
+   * запуске — пустой экран без смысла), а ключи выходов его блоков ввода не
+   * должны повторяться: маппинг `s{idx}:{key}` стал бы неоднозначным.
+   */
+  private assertValidPageSteps(steps: Step[]): void {
+    for (const step of steps) {
+      if (step.type !== "page") continue;
+
+      if (pageBlockCount(step.page) === 0) {
+        throw new BadRequestException(
+          `Шаг «${step.title}»: страница пуста — добавьте хотя бы один блок`,
+        );
+      }
+
+      const dupes = duplicateOutputKeys(step.page);
+      if (dupes.length > 0) {
+        throw new BadRequestException(
+          `Шаг «${step.title}»: ключи выходов страницы повторяются — ${dupes.join(", ")}`,
+        );
+      }
+    }
+  }
+
+  async togglePublish(id: string, ownerId: string): Promise<ScenarioDocument> {
+    const scenario = await this.findById(id, ownerId);
 
     if (!scenario.published && scenario.steps.length === 0) {
       throw new BadRequestException(
@@ -164,8 +194,8 @@ export class ScenariosService {
     }
 
     const updated = await this.scenarioModel
-      .findByIdAndUpdate(
-        id,
+      .findOneAndUpdate(
+        { _id: id, ownerId },
         { $set: { published: !scenario.published } },
         { new: true },
       )
@@ -177,13 +207,18 @@ export class ScenariosService {
     return updated;
   }
 
-  async delete(id: string): Promise<ScenarioDocument> {
+  async delete(id: string, ownerId: string): Promise<ScenarioDocument> {
+    // Проверяем владение перед отменой ранов и удалением
+    await this.findById(id, ownerId);
+
     // Уже запущенные `Run`ы этого сценария иначе продолжат исполняться в
     // воркере даже после удаления самого сценария — их нужно остановить
     // до (а не после) удаления, чтобы не проверять статус гонкой.
     await this.executionService.cancelActiveRunsForScenarios([id]);
 
-    const deleted = await this.scenarioModel.findByIdAndDelete(id).exec();
+    const deleted = await this.scenarioModel
+      .findOneAndDelete({ _id: id, ownerId })
+      .exec();
     if (!deleted) {
       throw new NotFoundException(`Scenario #${id} not found`);
     }
@@ -196,8 +231,12 @@ export class ScenariosService {
       .exec();
   }
 
-  async getStepSchema(scenarioId: string, stepIndex: number): Promise<StepSchema> {
-    const scenario = await this.findById(scenarioId);
+  async getStepSchema(
+    scenarioId: string,
+    stepIndex: number,
+    ownerId?: string,
+  ): Promise<StepSchema> {
+    const scenario = await this.findById(scenarioId, ownerId);
 
     const steps = (scenario.steps ?? []) as Step[];
 
@@ -209,16 +248,7 @@ export class ScenariosService {
 
     const step = steps[stepIndex];
 
-    switch (step.type) {
-      case "api":
-        return this.getApiStepSchema(step);
-
-      case "scenario":
-        return this.getScenarioRefStepSchema(step);
-
-      default:
-        return EMPTY_SCHEMA;
-    }
+    return this.getStepSchemaForStep(step);
   }
 
   async getUpstreamSchemas(
@@ -279,11 +309,45 @@ export class ScenariosService {
       case "api":
         return this.getApiStepSchema(step);
 
+      case "periodic":
+        return this.getPeriodicStepSchema(step);
+
       case "scenario":
         return this.getScenarioRefStepSchema(step);
+
+      case "page":
+        // Выходы — блоки ввода страницы: их значения следующие шаги забирают
+        // обычным маппингом «Из шага».
+        return pageStepSchema(step.page);
 
       default:
         return EMPTY_SCHEMA;
     }
+  }
+
+  /**
+   * Периодический запрос — тот же вызов endpoint, что и api-шаг, поэтому схема
+   * берётся из endpoint. Легаси-шаги ссылки не хранят — их endpoint ищется по
+   * методу и пути опроса. Не нашли (endpoint удалён, спека переимпортирована) —
+   * отдаём пустую схему, а не 404: сломанность шага показывает флаг `broken`,
+   * а редактор должен продолжать работать.
+   */
+  private async getPeriodicStepSchema(step: PeriodicStep): Promise<StepSchema> {
+    const app = await this.appsService.findById(step.appId);
+    const endpoint = step.endpointId
+      ? app.endpoints.find((ep) => ep.id === step.endpointId)
+      : app.endpoints.find(
+          (ep) => ep.method === step.pollMethod && ep.path === step.pollPath,
+        );
+
+    if (!endpoint) {
+      return EMPTY_SCHEMA;
+    }
+
+    return {
+      inputs: endpoint.inputs as unknown as SchemaField[],
+      outputs: endpoint.outputs as unknown as SchemaField[],
+      outputIsArray: endpoint.outputIsArray ?? false,
+    };
   }
 }

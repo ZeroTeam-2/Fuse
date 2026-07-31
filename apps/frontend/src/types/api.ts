@@ -47,7 +47,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** List current user's runs (paginated) */
+        get: operations["ExecutionController_list"];
         put?: never;
         /** Create a new scenario run */
         post: operations["ExecutionController_create"];
@@ -66,6 +67,24 @@ export interface paths {
         };
         /** Get run status and results */
         get: operations["ExecutionController_findById"];
+        put?: never;
+        post?: never;
+        /** Delete a finished run with all its stored files */
+        delete: operations["ExecutionController_remove"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{id}/file-link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a presigned download URL for a file of the run */
+        get: operations["ExecutionController_getFileLink"];
         put?: never;
         post?: never;
         delete?: never;
@@ -108,6 +127,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/runs/{id}/input-submit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Submit manual input values the worker asked for mid-run */
+        post: operations["ExecutionController_submitInputs"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List current user's notifications (paginated) */
+        get: operations["NotificationsController_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/notifications/unread-count": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get unread notifications count */
+        get: operations["NotificationsController_unreadCount"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/notifications/{id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark a notification as read */
+        post: operations["NotificationsController_markRead"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/notifications/read-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark all notifications as read */
+        post: operations["NotificationsController_markAllRead"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/apps": {
         parameters: {
             query?: never;
@@ -115,7 +219,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List user's apps (paginated) */
+        /** List apps (paginated): by default the caller's own apps, or — with published=true — any published app from any owner */
         get: operations["AppsController_findByOwner"];
         put?: never;
         /** Create a new app from an OpenAPI spec */
@@ -162,6 +266,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/apps/import-preview-file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview an OpenAPI spec import from an uploaded file */
+        post: operations["AppsController_importPreviewFile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/apps/from-file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create a new app from an uploaded OpenAPI spec file */
+        post: operations["AppsController_createFromFile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/apps/{id}/reimport": {
         parameters: {
             query?: never;
@@ -173,6 +311,57 @@ export interface paths {
         put?: never;
         /** Reimport an app's spec and return a diff */
         post: operations["AppsController_reimport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/apps/{id}/reimport/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Apply a reimport: re-parse the spec and merge endpoints */
+        post: operations["AppsController_applyReimport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/apps/{id}/reimport-file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reimport an app's spec from an uploaded file and return a diff */
+        post: operations["AppsController_reimportFile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/apps/{id}/reimport-file/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Apply a reimport from an uploaded file: merge endpoints */
+        post: operations["AppsController_applyReimportFile"];
         delete?: never;
         options?: never;
         head?: never;
@@ -194,6 +383,41 @@ export interface paths {
         head?: never;
         /** Toggle app published status */
         patch: operations["AppsController_togglePublish"];
+        trace?: never;
+    };
+    "/api/apps/{id}/environments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add an environment to an app */
+        post: operations["AppsController_addEnvironment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/apps/{id}/environments/{envId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete an app environment (Prod cannot be deleted) */
+        delete: operations["AppsController_deleteEnvironment"];
+        options?: never;
+        head?: never;
+        /** Update an app environment (name / Base URL) */
+        patch: operations["AppsController_updateEnvironment"];
         trace?: never;
     };
     "/api/scenarios": {
@@ -267,6 +491,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/scenarios/{id}/manual-inputs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List every value marked as manual input across all steps */
+        get: operations["ScenariosController_getManualInputs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/marketplace": {
         parameters: {
             query?: never;
@@ -310,6 +551,23 @@ export interface paths {
         };
         /** Get a marketplace card detail */
         get: operations["MarketplaceController_getCard"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/marketplace/{id}/manual-inputs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Values the run form must collect for this card */
+        get: operations["MarketplaceController_getManualInputs"];
         put?: never;
         post?: never;
         delete?: never;
@@ -452,6 +710,18 @@ export interface components {
             /** @example https://api.example.com/openapi.json */
             openapiUrl?: string;
         };
+        CreateEnvironmentDto: {
+            /** @example Staging */
+            name: string;
+            /** @example https://staging.api.example.com */
+            baseUrl: string;
+        };
+        UpdateEnvironmentDto: {
+            /** @example Staging */
+            name?: string;
+            /** @example https://staging.api.example.com */
+            baseUrl?: string;
+        };
         CreateScenarioDto: {
             /** @example Deploy to Production */
             title: string;
@@ -474,6 +744,8 @@ export interface components {
             /** @example deploy */
             subcategory?: string;
             steps?: unknown[];
+            /** @description Per-provider environment choice: { appId, environmentId }[] */
+            environmentSelections?: unknown[];
             /** @default false */
             published: boolean;
         };
@@ -566,6 +838,27 @@ export interface operations {
             };
         };
     };
+    ExecutionController_list: {
+        parameters: {
+            query?: {
+                page?: number;
+                limit?: number;
+                status?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     ExecutionController_create: {
         parameters: {
             query?: never;
@@ -586,6 +879,46 @@ export interface operations {
     ExecutionController_findById: {
         parameters: {
             query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    ExecutionController_remove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    ExecutionController_getFileLink: {
+        parameters: {
+            query: {
+                objectName: string;
+            };
             header?: never;
             path: {
                 id: string;
@@ -628,6 +961,98 @@ export interface operations {
             path: {
                 id: string;
             };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    ExecutionController_submitInputs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    NotificationsController_list: {
+        parameters: {
+            query?: {
+                page?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    NotificationsController_unreadCount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    NotificationsController_markRead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    NotificationsController_markAllRead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
@@ -765,6 +1190,67 @@ export interface operations {
             };
         };
     };
+    AppsController_importPreviewFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file?: string;
+                    /**
+                     * Format: url
+                     * @description Required when the spec has no absolute servers[0].url
+                     */
+                    baseUrl?: string;
+                };
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AppsController_createFromFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                    /** @example My API */
+                    name: string;
+                    description?: string;
+                    /**
+                     * Format: url
+                     * @description Required when the spec has no absolute servers[0].url
+                     */
+                    baseUrl?: string;
+                };
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     AppsController_reimport: {
         parameters: {
             query?: never;
@@ -784,6 +1270,87 @@ export interface operations {
             };
         };
     };
+    AppsController_applyReimport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AppsController_reimportFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                    /**
+                     * Format: url
+                     * @description Override when the spec has no absolute servers[0].url
+                     */
+                    baseUrl?: string;
+                };
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AppsController_applyReimportFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                    /**
+                     * Format: url
+                     * @description Override when the spec has no absolute servers[0].url
+                     */
+                    baseUrl?: string;
+                };
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     AppsController_togglePublish: {
         parameters: {
             query?: never;
@@ -794,6 +1361,73 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AppsController_addEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateEnvironmentDto"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AppsController_deleteEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AppsController_updateEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateEnvironmentDto"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -944,6 +1578,25 @@ export interface operations {
             };
         };
     };
+    ScenariosController_getManualInputs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     MarketplaceController_getCatalog: {
         parameters: {
             query?: {
@@ -988,6 +1641,25 @@ export interface operations {
         };
     };
     MarketplaceController_getCard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    MarketplaceController_getManualInputs: {
         parameters: {
             query?: never;
             header?: never;

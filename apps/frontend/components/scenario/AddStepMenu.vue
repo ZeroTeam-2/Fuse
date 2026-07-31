@@ -21,8 +21,10 @@ const STEP_TYPES: StepTypeOption[] = [
   { key: "api", icon: "braces", title: "Endpoint API", desc: "Вызов метода стороннего API" },
   { key: "scenario", icon: "copy", title: "Другой сценарий", desc: "Вложить готовый use-case" },
   { key: "delay", icon: "clock", title: "Задержка", desc: "Пауза между шагами" },
-  { key: "file", icon: "upload", title: "Файл", desc: "Загрузка файла пользователем" },
+  // Тип «Файл» удалён: загрузка файла — dropzone-блок шага «Страница»,
+  // стадия обработки — следующий «Периодический запрос».
   { key: "periodic", icon: "refresh-cw", title: "Периодический запрос", desc: "Опрос endpoint по интервалу" },
+  { key: "page", icon: "layout", title: "Страница", desc: "Экран ввода или показа данных" },
 ];
 
 const open = ref(false);

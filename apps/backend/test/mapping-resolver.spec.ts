@@ -27,7 +27,7 @@ describe("MappingResolver", () => {
       expect(result.apiKey).toBe("secret-key");
     });
 
-    it("falls back to entire userInput when field is absent", () => {
+    it("leaves an absent value empty and warns instead of injecting the whole userInput", () => {
       const step = {
         id: "s1",
         title: "Test",
@@ -39,8 +39,12 @@ describe("MappingResolver", () => {
         mappings: { token: "user" },
       } as Step;
 
-      const result = resolveMappings(step, [], { foo: "bar" });
-      expect(result.token).toEqual({ foo: "bar" });
+      const warnings: string[] = [];
+      const result = resolveMappings(step, [], { foo: "bar" }, warnings);
+
+      expect(result).not.toHaveProperty("token");
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("token");
     });
   });
 

@@ -48,11 +48,13 @@ export function deriveBaseUrl(
   spec: SpecLike | null | undefined,
   openapiUrl: string,
 ): string | undefined {
-  let specOrigin: URL;
+  // Пустой/невалидный URL спеки — случай импорта из файла: абсолютный
+  // servers[0].url всё ещё выводим, относительному не от чего резолвиться.
+  let specOrigin: URL | undefined;
   try {
     specOrigin = new URL(openapiUrl);
   } catch {
-    return undefined;
+    specOrigin = undefined;
   }
 
   const server = spec?.servers?.[0];
@@ -67,7 +69,7 @@ export function deriveBaseUrl(
     }
   }
 
-  if (spec?.host) {
+  if (spec?.host && specOrigin) {
     try {
       const base = new URL(`${specOrigin.protocol}//${spec.host}`);
       if (spec.basePath) {
@@ -81,7 +83,64 @@ export function deriveBaseUrl(
 
   // Спецификации без `servers` (типично для FastAPI: документ отдаётся по
   // https://host/openapi.json, а API живёт на том же origin).
-  return specOrigin.origin;
+  return specOrigin?.origin;
+}
+
+/** Имя окружения по умолчанию — обязательное и неудаляемое. */
+export const PROD_ENV_NAME = "Prod";
+/** Ключ базовой переменной окружения — абсолютного адреса API. */
+export const BASE_URL_VAR_KEY = "baseUrl";
+
+interface VariableLike {
+  key: string;
+  value: string;
+}
+interface EnvironmentLike {
+  id?: string;
+  name?: string;
+  variables?: VariableLike[];
+}
+interface AppLike {
+  baseUrl?: string;
+  environments?: EnvironmentLike[];
+}
+
+/** Абсолютный ли это http(s)-URL с хостом (localhost допускается). */
+export function isAbsoluteHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") && !!url.host;
+  } catch {
+    return false;
+  }
+}
+
+/** Значение переменной `baseUrl` окружения, если задано. */
+export function environmentBaseUrl(env: EnvironmentLike | undefined): string | undefined {
+  return env?.variables?.find((v) => v.key === BASE_URL_VAR_KEY)?.value || undefined;
+}
+
+/**
+ * Базовый URL приложения для исполнения: выбранное окружение → Prod → `baseUrl`
+ * приложения (обратная совместимость с приложениями без окружений).
+ */
+export function resolveAppBaseUrl(
+  app: AppLike,
+  environmentId?: string,
+): string | undefined {
+  const envs = app.environments ?? [];
+
+  if (environmentId) {
+    const chosen = envs.find((e) => e.id === environmentId);
+    const url = environmentBaseUrl(chosen);
+    if (url) return url;
+  }
+
+  const prod = envs.find((e) => e.name === PROD_ENV_NAME);
+  const prodUrl = environmentBaseUrl(prod);
+  if (prodUrl) return prodUrl;
+
+  return app.baseUrl;
 }
 
 /**

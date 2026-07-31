@@ -27,4 +27,10 @@ export class MarketplaceController {
   getCard(@Param("id") id: string) {
     return this.marketplaceService.getCard(id);
   }
+
+  @Get(":id/manual-inputs")
+  @ApiOperation({ summary: "Values the run form must collect for this card" })
+  getManualInputs(@Param("id") id: string) {
+    return this.marketplaceService.getManualInputs(id);
+  }
 }

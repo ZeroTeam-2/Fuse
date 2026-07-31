@@ -2,8 +2,7 @@ import "dotenv/config";
 import { connect, disconnect } from "mongoose";
 import { randomUUID } from "node:crypto";
 
-const MONGODB_URL =
-  process.env.MONGODB_URL ?? "mongodb://localhost:27017/fuse";
+const MONGODB_URL = process.env.MONGODB_URL ?? "mongodb://localhost:27017/fuse";
 
 interface SeedApp {
   _id: string;
@@ -13,7 +12,6 @@ interface SeedApp {
   openapiUrl: string;
   host: string;
   apiVersion: string;
-  specSnapshot: unknown;
   endpoints: unknown[];
   published: boolean;
   syncedAt: Date;
@@ -44,14 +42,24 @@ const apps: SeedApp[] = [
     _id: randomUUID(),
     ownerId: DEMO_USER_ID,
     name: "DataHub",
-    description: "Платформа обогащения данных: проверка контрагентов, очистка и нормализация адресов.",
+    description:
+      "Платформа обогащения данных: проверка контрагентов, очистка и нормализация адресов.",
     openapiUrl: "https://api.datahub.example.com/openapi.json",
     host: "api.datahub.example.com",
     apiVersion: "1.0",
-    specSnapshot: {},
     endpoints: [
-      { id: "dh-1", method: "POST", path: "/v1/enrich", summary: "Обогащение данных контрагента" },
-      { id: "dh-2", method: "GET", path: "/v1/verify/{inn}", summary: "Проверка ИНН" },
+      {
+        id: "dh-1",
+        method: "POST",
+        path: "/v1/enrich",
+        summary: "Обогащение данных контрагента",
+      },
+      {
+        id: "dh-2",
+        method: "GET",
+        path: "/v1/verify/{inn}",
+        summary: "Проверка ИНН",
+      },
     ],
     published: true,
     syncedAt: new Date(),
@@ -62,14 +70,24 @@ const apps: SeedApp[] = [
     _id: randomUUID(),
     ownerId: DEMO_USER_ID,
     name: "VisionText",
-    description: "OCR и распознавание текста на изображениях с поддержкой русского и английского языков.",
+    description:
+      "OCR и распознавание текста на изображениях с поддержкой русского и английского языков.",
     openapiUrl: "https://api.visiontext.example.com/openapi.json",
     host: "api.visiontext.example.com",
     apiVersion: "2.1",
-    specSnapshot: {},
     endpoints: [
-      { id: "vt-1", method: "POST", path: "/v2/ocr", summary: "Распознать текст на изображении" },
-      { id: "vt-2", method: "POST", path: "/v2/extract-tables", summary: "Извлечь таблицы из документа" },
+      {
+        id: "vt-1",
+        method: "POST",
+        path: "/v2/ocr",
+        summary: "Распознать текст на изображении",
+      },
+      {
+        id: "vt-2",
+        method: "POST",
+        path: "/v2/extract-tables",
+        summary: "Извлечь таблицы из документа",
+      },
     ],
     published: true,
     syncedAt: new Date(),
@@ -80,14 +98,24 @@ const apps: SeedApp[] = [
     _id: randomUUID(),
     ownerId: DEMO_USER_ID,
     name: "SpeechLab",
-    description: "Расшифровка речи в текст (ASR) и синтез речи (TTS) с поддержкой 40+ языков.",
+    description:
+      "Расшифровка речи в текст (ASR) и синтез речи (TTS) с поддержкой 40+ языков.",
     openapiUrl: "https://api.speechlab.example.com/openapi.json",
     host: "api.speechlab.example.com",
     apiVersion: "3.0",
-    specSnapshot: {},
     endpoints: [
-      { id: "sl-1", method: "POST", path: "/v3/transcribe", summary: "Транскрибация аудио" },
-      { id: "sl-2", method: "POST", path: "/v3/synthesize", summary: "Синтез речи из текста" },
+      {
+        id: "sl-1",
+        method: "POST",
+        path: "/v3/transcribe",
+        summary: "Транскрибация аудио",
+      },
+      {
+        id: "sl-2",
+        method: "POST",
+        path: "/v3/synthesize",
+        summary: "Синтез речи из текста",
+      },
     ],
     published: true,
     syncedAt: new Date(),
@@ -98,14 +126,24 @@ const apps: SeedApp[] = [
     _id: randomUUID(),
     ownerId: DEMO_USER_ID,
     name: "GeoPin",
-    description: "Геокодирование, обратное геокодирование и маршрутизация для России и СНГ.",
+    description:
+      "Геокодирование, обратное геокодирование и маршрутизация для России и СНГ.",
     openapiUrl: "https://api.geopin.example.com/openapi.json",
     host: "api.geopin.example.com",
     apiVersion: "1.4",
-    specSnapshot: {},
     endpoints: [
-      { id: "gp-1", method: "GET", path: "/v1/geocode", summary: "Геокодирование адреса" },
-      { id: "gp-2", method: "GET", path: "/v1/route", summary: "Построение маршрута" },
+      {
+        id: "gp-1",
+        method: "GET",
+        path: "/v1/geocode",
+        summary: "Геокодирование адреса",
+      },
+      {
+        id: "gp-2",
+        method: "GET",
+        path: "/v1/route",
+        summary: "Построение маршрута",
+      },
     ],
     published: true,
     syncedAt: new Date(),
@@ -140,11 +178,20 @@ function makeScenario(opts: {
         appId: opts.appId,
         fileMode: "single",
         page: {
-          type: "file",
           title: "Загрузите данные",
-          accept: "*/*",
-          maxMb: 10,
-          buttonText: "Продолжить",
+          rows: [
+            {
+              id: randomUUID(),
+              items: [
+                {
+                  id: randomUUID(),
+                  type: "dropzone",
+                  span: 6,
+                  label: "Загрузка файла",
+                },
+              ],
+            },
+          ],
         },
       },
       {
@@ -167,8 +214,10 @@ function makeScenario(opts: {
 const scenarios: SeedScenario[] = [
   makeScenario({
     title: "Обогащение базы клиентов",
-    tagline: "Дополните контакты компаний реквизитами, статусами и риск-факторами",
-    description: "Загрузите CSV со списком ИНН — получите обогащённый файл с реквизитами, статусами регистрации и риск-факторами.",
+    tagline:
+      "Дополните контакты компаний реквизитами, статусами и риск-факторами",
+    description:
+      "Загрузите CSV со списком ИНН — получите обогащённый файл с реквизитами, статусами регистрации и риск-факторами.",
     category: "Данные",
     subcategory: "Обогащение данных",
     appId: apps[0]._id,
@@ -178,7 +227,8 @@ const scenarios: SeedScenario[] = [
   makeScenario({
     title: "Проверка контрагентов на благонадёжность",
     tagline: "Массовая проверка контрагентов по ИНН",
-    description: "Пакетная проверка контрагентов: ликвидность, долги, лицензии, связи.",
+    description:
+      "Пакетная проверка контрагентов: ликвидность, долги, лицензии, связи.",
     category: "Данные",
     subcategory: "Проверка и комплаенс",
     appId: apps[0]._id,
@@ -188,7 +238,8 @@ const scenarios: SeedScenario[] = [
   makeScenario({
     title: "Распознавание текста со сканов",
     tagline: "Извлеките текст и таблицы из PDF и фотографий",
-    description: "OCR-обработка сканированных документов с извлечением структурированных данных и таблиц.",
+    description:
+      "OCR-обработка сканированных документов с извлечением структурированных данных и таблиц.",
     category: "Документы",
     subcategory: "Распознавание",
     appId: apps[1]._id,
@@ -198,7 +249,8 @@ const scenarios: SeedScenario[] = [
   makeScenario({
     title: "Извлечение таблиц из PDF",
     tagline: "Превратите PDF-отчёты в Excel-таблицы",
-    description: "Автоматическое извлечение табличных данных из PDF-документов с сохранением структуры.",
+    description:
+      "Автоматическое извлечение табличных данных из PDF-документов с сохранением структуры.",
     category: "Документы",
     subcategory: "Извлечение и структура",
     appId: apps[1]._id,
@@ -208,7 +260,8 @@ const scenarios: SeedScenario[] = [
   makeScenario({
     title: "Транскрибация аудиозаписей",
     tagline: "Превратите голосовые сообщения и интервью в текст",
-    description: "Расшифровка аудиозаписей любой длительности с разделением по спикерам и тайм-кодами.",
+    description:
+      "Расшифровка аудиозаписей любой длительности с разделением по спикерам и тайм-кодами.",
     category: "Аудио",
     subcategory: "Расшифровка речи",
     appId: apps[2]._id,
@@ -218,7 +271,8 @@ const scenarios: SeedScenario[] = [
   makeScenario({
     title: "Синтез речи для подкастов",
     tagline: "Создайте профессиональную озвучку текста",
-    description: "Генерация естественной речи из текста с выбором голоса и интонации.",
+    description:
+      "Генерация естественной речи из текста с выбором голоса и интонации.",
     category: "Аудио",
     subcategory: "Анализ и синтез",
     appId: apps[2]._id,
