@@ -39,6 +39,15 @@ const APP = {
   ],
 };
 
+const APP_WITH_ENVS = {
+  ...APP,
+  baseUrl: undefined,
+  environments: [
+    { id: "env-prod", name: "Prod", variables: [{ key: "baseUrl", value: "https://api.example.com" }] },
+    { id: "env-test", name: "Test", variables: [{ key: "baseUrl", value: "https://test.example.com" }] },
+  ],
+};
+
 function apiStep(extra: Record<string, unknown> = {}): Step {
   return {
     id: "s1",
@@ -67,6 +76,10 @@ function harness(
   run: Record<string, unknown>,
   steps: Step[],
   authConfig: ScenarioAuthEntry[] = [],
+  options: {
+    app?: unknown;
+    environmentSelections?: { appId: string; environmentId: string }[];
+  } = {},
 ) {
   const runModel: any = {
     findById: vi.fn(() => ({ exec: () => Promise.resolve(run) })),
@@ -83,11 +96,17 @@ function harness(
     runModel,
     {
       findById: vi.fn(() => ({
-        exec: () => Promise.resolve({ steps, authConfig, _id: "sc1" }),
+        exec: () =>
+          Promise.resolve({
+            steps,
+            authConfig,
+            environmentSelections: options.environmentSelections ?? [],
+            _id: "sc1",
+          }),
       })),
       updateOne: vi.fn(() => ({ exec: () => Promise.resolve({}) })),
     } as any,
-    { findById: vi.fn(() => ({ exec: () => Promise.resolve(APP) })) } as any,
+    { findById: vi.fn(() => ({ exec: () => Promise.resolve(options.app ?? APP) })) } as any,
     { get: vi.fn().mockReturnValue("http://queue") } as any,
     { publish: vi.fn() } as any,
     { assertSafeUrl: vi.fn().mockResolvedValue(undefined) } as any,
@@ -245,5 +264,55 @@ describe("WorkerService — scenario auth injection", () => {
     expect(fetchMock).toHaveBeenCalled();
     expect(lastHeaders().Authorization).toBeUndefined();
     expect(run.status).toBe(RunStatus.COMPLETED);
+  });
+
+  describe("per-environment keys", () => {
+    it("uses the key of the environment explicitly selected for the provider", async () => {
+      const steps = [apiStep({ authEnabled: true })];
+      const { worker } = harness(
+        baseRun(),
+        steps,
+        [
+          { appId: "a1", environmentId: "env-prod", headerName: "Authorization", valueFormat: "bearer", value: "prod-secret" },
+          { appId: "a1", environmentId: "env-test", headerName: "Authorization", valueFormat: "bearer", value: "test-secret" },
+        ],
+        { app: APP_WITH_ENVS, environmentSelections: [{ appId: "a1", environmentId: "env-test" }] },
+      );
+
+      await (worker as any).executeRun("run-1");
+
+      expect(lastHeaders().Authorization).toBe("Bearer test-secret");
+    });
+
+    it("falls back to the Prod environment's key when nothing is explicitly selected", async () => {
+      const steps = [apiStep({ authEnabled: true })];
+      const { worker } = harness(
+        baseRun(),
+        steps,
+        [
+          { appId: "a1", environmentId: "env-prod", headerName: "Authorization", valueFormat: "bearer", value: "prod-secret" },
+          { appId: "a1", environmentId: "env-test", headerName: "Authorization", valueFormat: "bearer", value: "test-secret" },
+        ],
+        { app: APP_WITH_ENVS },
+      );
+
+      await (worker as any).executeRun("run-1");
+
+      expect(lastHeaders().Authorization).toBe("Bearer prod-secret");
+    });
+
+    it("falls back to a key without environmentId when the selected environment has none", async () => {
+      const steps = [apiStep({ authEnabled: true })];
+      const { worker } = harness(
+        baseRun(),
+        steps,
+        [{ appId: "a1", headerName: "Authorization", valueFormat: "bearer", value: "legacy-secret" }],
+        { app: APP_WITH_ENVS, environmentSelections: [{ appId: "a1", environmentId: "env-test" }] },
+      );
+
+      await (worker as any).executeRun("run-1");
+
+      expect(lastHeaders().Authorization).toBe("Bearer legacy-secret");
+    });
   });
 });

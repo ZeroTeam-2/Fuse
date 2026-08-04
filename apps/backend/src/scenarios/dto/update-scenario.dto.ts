@@ -45,7 +45,9 @@ export class UpdateScenarioDto {
   @ApiPropertyOptional({
     type: "array",
     description:
-      "Ключи доступа к API поставщиков: { appId, headerName, valueFormat, value }[]. Владелец шлёт полный value; пустой value очищает ключ.",
+      "Ключи доступа к API поставщиков: { appId, environmentId?, headerName, valueFormat, value }[]. " +
+      "environmentId делает ключ специфичным для одного окружения поставщика; без него — общий для всех. " +
+      "Владелец шлёт полный value; пустой value очищает ключ.",
   })
   @IsOptional()
   @IsArray()

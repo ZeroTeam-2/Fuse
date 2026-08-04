@@ -387,9 +387,17 @@ export interface EnvironmentSelection {
  * поставщиков — производный от api/periodic-шагов, как и `EnvironmentSelection`.
  * `value` MUST отсутствовать в ответах не-владельцу (см. `redactScenarioAuth`);
  * `configured` заменяет его, сообщая только факт наличия ключа.
+ *
+ * `environmentId` делает ключ специфичным для одного окружения поставщика
+ * (Prod/Test/…) — на исполнении воркер берёт ключ того окружения, что реально
+ * выбрано для `appId` (см. `EnvironmentSelection`), и только если такого
+ * ключа нет, падает на запись без `environmentId` (легаси/один ключ на все
+ * окружения). Пара (`appId`, `environmentId`) уникальна в списке.
  */
 export interface ScenarioAuthEntry {
   appId: string;
+  /** Окружение поставщика, к которому привязан ключ. Без него — ключ общий для всех окружений. */
+  environmentId?: string;
   /** Authorization, X-Api-Key или свой заголовок. */
   headerName: string;
   /** `bearer` → `Bearer ${value}`; `raw` → значение как есть. */
@@ -463,6 +471,7 @@ export function redactScenarioAuth(
   if (viewerUserId !== undefined && viewerUserId === ownerId) return authConfig;
   return authConfig.map((entry) => ({
     appId: entry.appId,
+    environmentId: entry.environmentId,
     headerName: entry.headerName,
     valueFormat: entry.valueFormat,
     configured: !!entry.value,

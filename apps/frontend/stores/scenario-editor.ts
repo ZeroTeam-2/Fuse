@@ -82,10 +82,15 @@ export const useScenarioEditorStore = defineStore("scenarioEditor", {
       );
     },
 
+    // Ключ уникален по паре (appId, environmentId) — один и тот же поставщик
+    // может иметь разные ключи для разных окружений (Prod/Test/…). Запись без
+    // environmentId (легаси/общий ключ) матчится отдельно от записей с ним.
     setAuthConfig(entry: ScenarioAuthEntry) {
       if (!this.scenario) return;
       const list = this.scenario.authConfig ?? [];
-      const existing = list.find((e) => e.appId === entry.appId);
+      const existing = list.find(
+        (e) => e.appId === entry.appId && e.environmentId === entry.environmentId,
+      );
       if (existing) Object.assign(existing, entry);
       else list.push(entry);
       this.scenario.authConfig = list;

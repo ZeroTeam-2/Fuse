@@ -1,13 +1,17 @@
 <script setup lang="ts">
-// Scenario editor «Авторизация» tab — one card per provider (appId) used by
-// api/periodic steps. Header field defaults from the app's OpenAPI auth hint,
-// falls back to Authorization/X-Api-Key/custom. Saved explicitly, per card.
+// Scenario editor «Авторизация» tab — one card per (appId, environmentId) used
+// by api/periodic steps: a provider with several environments (Prod/Test/…)
+// gets one independent card per environment, so each can carry its own key.
+// Header field defaults from the app's OpenAPI auth hint, falls back to
+// Authorization/X-Api-Key/custom. Saved explicitly, per card.
 import { computed, ref } from "vue";
 import type { AppAuthHint, ScenarioAuthEntry } from "@fuse/shared";
 
 const props = defineProps<{
   appId: string;
   providerName: string;
+  environmentId: string;
+  environmentName: string;
   hint?: AppAuthHint;
   entry?: ScenarioAuthEntry;
 }>();
@@ -65,6 +69,7 @@ function save() {
   if (!canSave.value) return;
   emit("save", {
     appId: props.appId,
+    environmentId: props.environmentId,
     headerName: headerName.value,
     valueFormat: valueFormat.value,
     value: value.value,
@@ -81,8 +86,15 @@ function save() {
         >{{ providerName.charAt(0).toUpperCase() }}</span
       >
       <div class="min-w-0 flex-1">
-        <div class="font-sans text-[0.9375rem] font-bold text-zinc-900 truncate">
-          {{ providerName }}
+        <div class="flex items-center gap-2 min-w-0">
+          <span class="font-sans text-[0.9375rem] font-bold text-zinc-900 truncate">
+            {{ providerName }}
+          </span>
+          <span
+            class="font-sans text-[0.6875rem] font-semibold px-2 py-0.5 rounded-full bg-violet-50 text-violet-600 shrink-0"
+          >
+            {{ environmentName }}
+          </span>
         </div>
         <div class="font-sans text-[0.8125rem] text-zinc-500">
           {{ hint?.schemeLabel ?? "API Key" }}

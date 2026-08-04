@@ -60,4 +60,18 @@ describe("redactScenarioAuth", () => {
     expect(redactScenarioAuth(undefined, "owner-1", "owner-1")).toBeUndefined();
     expect(redactScenarioAuth(undefined, "owner-1", "someone-else")).toBeUndefined();
   });
+
+  it("carries environmentId through redaction for a non-owner viewer", () => {
+    const perEnv: ScenarioAuthEntry[] = [
+      { appId: "a1", environmentId: "env-prod", headerName: "Authorization", valueFormat: "bearer", value: "prod-token" },
+      { appId: "a1", environmentId: "env-test", headerName: "Authorization", valueFormat: "bearer", value: "" },
+    ];
+
+    const result = redactScenarioAuth(perEnv, "owner-1", "someone-else");
+
+    expect(result).toEqual([
+      { appId: "a1", environmentId: "env-prod", headerName: "Authorization", valueFormat: "bearer", configured: true },
+      { appId: "a1", environmentId: "env-test", headerName: "Authorization", valueFormat: "bearer", configured: false },
+    ]);
+  });
 });

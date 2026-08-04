@@ -201,16 +201,19 @@
 
         <div v-else class="flex flex-col gap-4">
           <p class="font-sans text-[0.8125rem] text-zinc-500">
-            Ключи доступа для каждого API-сервиса, используемого в сценарии. Ключ применяется на
-            шагах, у которых включена аутентификация.
+            Ключи доступа для каждого API-сервиса и его окружения, используемых в сценарии. На
+            исполнении применяется ключ того окружения, что выбрано на вкладке «Окружения»; ключ
+            применяется только на шагах, у которых включена аутентификация.
           </p>
           <ScenarioAuthProviderCard
-            v-for="appId in store.distinctAppIds"
-            :key="appId"
-            :app-id="appId"
-            :provider-name="appNames[appId] ?? 'API'"
-            :hint="appAuthHints[appId]"
-            :entry="authEntry(appId)"
+            v-for="card in authCards"
+            :key="`${card.appId}:${card.environmentId}`"
+            :app-id="card.appId"
+            :environment-id="card.environmentId"
+            :environment-name="card.environmentName"
+            :provider-name="appNames[card.appId] ?? 'API'"
+            :hint="appAuthHints[card.appId]"
+            :entry="authEntry(card.appId, card.environmentId)"
             @save="saveAuthEntry"
           />
         </div>
@@ -559,8 +562,22 @@ async function loadEnvironmentsForApps() {
   );
 }
 
-function authEntry(appId: string): ScenarioAuthEntry | undefined {
-  return store.scenario?.authConfig?.find((e) => e.appId === appId);
+// One card per (provider, environment): a provider with several environments
+// (Prod/Test/…) gets an independent key per environment.
+const authCards = computed(() =>
+  store.distinctAppIds.flatMap((appId) =>
+    (appEnvironments.value[appId] ?? []).map((env) => ({
+      appId,
+      environmentId: env.id,
+      environmentName: env.name,
+    })),
+  ),
+);
+
+function authEntry(appId: string, environmentId: string): ScenarioAuthEntry | undefined {
+  return store.scenario?.authConfig?.find(
+    (e) => e.appId === appId && e.environmentId === environmentId,
+  );
 }
 
 async function saveAuthEntry(entry: ScenarioAuthEntry) {

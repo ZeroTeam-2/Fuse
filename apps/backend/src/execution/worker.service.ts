@@ -37,7 +37,7 @@ import { Run, RunDocument } from "./run.schema";
 import { Scenario, ScenarioDocument } from "../scenarios/scenario.schema";
 import { App, AppDocument } from "../apps/app.schema";
 import { SsrfGuard } from "../apps/ssrf-guard";
-import { joinBaseUrl, resolveAppBaseUrl } from "../apps/base-url";
+import { joinBaseUrl, resolveAppBaseUrl, resolveEffectiveEnvironmentId } from "../apps/base-url";
 import { RunGateway } from "../websocket/run.gateway";
 import { MinioService } from "../minio/minio.service";
 import { NotificationsService } from "../notifications/notifications.service";
@@ -604,7 +604,7 @@ export class WorkerService
       "Content-Type": "application/json",
       ...this.toStringRecord(located.header),
     };
-    this.applyScenarioAuth(step, headers, ctx);
+    this.applyScenarioAuth(step, headers, app, ctx);
 
     const options: RequestInit = { method, headers };
 
@@ -628,6 +628,13 @@ export class WorkerService
    *  - `true`      — явное включение: отсутствующий/пустой ключ — ошибка
    *                  конфигурации до fetch, а не тихий пропуск с последующим
    *                  малопонятным 401 от стороннего API.
+   *
+   * Ключ ищется для окружения, реально выбранного для `appId`
+   * (`resolveEffectiveEnvironmentId` — та же цепочка фолбэков, что и у
+   * `resolveAppBaseUrl`, чтобы URL и ключ всегда были из одного окружения).
+   * Нет ключа под это окружение — падаем на запись без `environmentId`
+   * (общий/легаси ключ на все окружения поставщика).
+   *
    * Явный маппинг того же заголовка (константа или ссылка на выход шага) уже
    * в `headers` после резолва входов — имеет приоритет, перезаписи не
    * происходит (сравнение без учёта регистра).
@@ -635,6 +642,7 @@ export class WorkerService
   private applyScenarioAuth(
     step: { appId: string; title: string; authEnabled?: boolean },
     headers: Record<string, string>,
+    app: AppDocument,
     ctx: StepContext,
   ): void {
     if (step.authEnabled === false) {
@@ -644,12 +652,21 @@ export class WorkerService
       return;
     }
 
-    const entry = ctx.authConfig.find((e) => e.appId === step.appId);
+    const selectedEnvironmentId = ctx.environmentSelections?.find(
+      (s) => s.appId === step.appId,
+    )?.environmentId;
+    const environmentId = resolveEffectiveEnvironmentId(app, selectedEnvironmentId);
+
+    const entry =
+      ctx.authConfig.find(
+        (e) => e.appId === step.appId && e.environmentId === environmentId,
+      ) ?? ctx.authConfig.find((e) => e.appId === step.appId && !e.environmentId);
+
     if (!entry?.value) {
       if (step.authEnabled === true) {
         this.logger.debug(
-          `[auth] "${step.title}" (appId=${step.appId}): authEnabled=true, но ключ в authConfig ` +
-            `${entry ? "пуст" : "отсутствует"} — прерываем шаг до fetch`,
+          `[auth] "${step.title}" (appId=${step.appId}, environmentId=${environmentId ?? "—"}): ` +
+            `authEnabled=true, но ключ в authConfig ${entry ? "пуст" : "отсутствует"} — прерываем шаг до fetch`,
         );
         throw new StepExecutionError(
           `Авторизация: для шага «${step.title}» включён инжект ключа, но он не задан на вкладке ` +
@@ -657,8 +674,8 @@ export class WorkerService
         );
       }
       this.logger.debug(
-        `[auth] "${step.title}" (appId=${step.appId}): authEnabled=undefined (авто), ключ в authConfig ` +
-          `${entry ? "пуст" : "отсутствует"} — пропускаем без ошибки`,
+        `[auth] "${step.title}" (appId=${step.appId}, environmentId=${environmentId ?? "—"}): ` +
+          `authEnabled=undefined (авто), ключ в authConfig ${entry ? "пуст" : "отсутствует"} — пропускаем без ошибки`,
       );
       return;
     }
@@ -677,8 +694,8 @@ export class WorkerService
     headers[entry.headerName] =
       entry.valueFormat === "bearer" ? `Bearer ${entry.value}` : entry.value;
     this.logger.debug(
-      `[auth] "${step.title}" (appId=${step.appId}): инжектирован заголовок ${entry.headerName} ` +
-        `(${entry.valueFormat}, authEnabled=${step.authEnabled ?? "undefined"}) из authConfig сценария`,
+      `[auth] "${step.title}" (appId=${step.appId}, environmentId=${entry.environmentId ?? "любое"}): ` +
+        `инжектирован заголовок ${entry.headerName} (${entry.valueFormat}, authEnabled=${step.authEnabled ?? "undefined"}) из authConfig сценария`,
     );
   }
 
