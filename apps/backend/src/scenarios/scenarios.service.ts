@@ -7,14 +7,21 @@ import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
 import type {
   ApiStep,
+  EnvironmentSelection,
   PaginatedResponse,
   PeriodicStep,
+  ScenarioAuthEntry,
   SchemaField,
   ScenarioStepRef,
   Step,
   StepSchema,
 } from "@fuse/shared";
-import { duplicateOutputKeys, pageBlockCount, pageStepSchema } from "@fuse/shared";
+import {
+  distinctProviderAppIds,
+  duplicateOutputKeys,
+  pageBlockCount,
+  pageStepSchema,
+} from "@fuse/shared";
 import { Scenario, ScenarioDocument } from "./scenario.schema";
 import { detectCycle } from "./cycle-guard";
 import { AppsService } from "../apps/apps.service";
@@ -125,6 +132,28 @@ export class ScenariosService {
     }
 
     const updateQuery: Record<string, unknown> = { $set: { ...dto } };
+
+    // Поставщик мог уйти вместе со своим последним шагом — его выбор
+    // окружения и ключ авторизации осиротели бы, если их не подчистить.
+    // Пересчитываем при изменении шагов ИЛИ самих этих полей (например,
+    // сохранение вкладки «Авторизация» шлёт только `authConfig`).
+    if (dto.steps || dto.environmentSelections || dto.authConfig) {
+      const steps = (dto.steps ?? scenario.steps) as Step[];
+      const validAppIds = new Set(distinctProviderAppIds(steps));
+
+      const envSource = (dto.environmentSelections ??
+        scenario.environmentSelections ??
+        []) as EnvironmentSelection[];
+      (updateQuery.$set as Record<string, unknown>).environmentSelections =
+        envSource.filter((s) => validAppIds.has(s.appId));
+
+      const authSource = (dto.authConfig ??
+        scenario.authConfig ??
+        []) as ScenarioAuthEntry[];
+      (updateQuery.$set as Record<string, unknown>).authConfig = authSource.filter(
+        (e) => validAppIds.has(e.appId),
+      );
+    }
 
     // Разблокировка сценария живёт здесь же: как только пользователь убирает
     // (или пересобирает) шаг с `broken: true`, следующее сохранение шагов

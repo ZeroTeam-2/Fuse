@@ -256,6 +256,27 @@ describe("MarketplaceService", () => {
 
       await expect(service.getCard("unknown")).rejects.toThrow("not found");
     });
+
+    it("redacts auth key value, keeping only `configured`", async () => {
+      mockScenarioModel.findById = vi.fn().mockReturnValue({
+        lean: vi.fn().mockReturnValue({
+          exec: vi.fn().mockResolvedValue({
+            ...scenarios[0],
+            ownerId: "owner-1",
+            authConfig: [
+              { appId: "a1", headerName: "Authorization", valueFormat: "bearer", value: "secret-token" },
+            ],
+          }),
+        }),
+      });
+
+      const card = await service.getCard("s1");
+
+      expect(card.authConfig).toEqual([
+        { appId: "a1", headerName: "Authorization", valueFormat: "bearer", configured: true },
+      ]);
+      expect(JSON.stringify(card)).not.toContain("secret-token");
+    });
   });
 
   describe("getCategoryCounts", () => {

@@ -32,6 +32,12 @@ export class Scenario {
   @Prop({ type: [MongooseSchema.Types.Mixed], default: [] })
   environmentSelections: { appId: string; environmentId: string }[];
 
+  // Ключи доступа к API поставщиков: { appId, headerName, valueFormat, value }.
+  // Plaintext — redaction для не-владельца применяется на выдаче, не в схеме.
+  // Kept as Mixed, как environmentSelections.
+  @Prop({ type: [MongooseSchema.Types.Mixed], default: [] })
+  authConfig: { appId: string; headerName: string; valueFormat: "bearer" | "raw"; value?: string }[];
+
   @Prop({ default: false })
   published: boolean;
 

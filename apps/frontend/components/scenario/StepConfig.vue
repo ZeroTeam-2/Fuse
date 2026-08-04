@@ -1,7 +1,15 @@
 <script setup lang="ts">
 // Right-side drawer: configure where each input of a step comes from and review
 // the outputs it hands to later steps. A page step opens the page builder here.
-import type { FilterOperator, SchemaField, Step, StepFilter, StepSchema } from "@fuse/shared";
+import type {
+  AppAuthHint,
+  FilterOperator,
+  SchemaField,
+  ScenarioAuthEntry,
+  Step,
+  StepFilter,
+  StepSchema,
+} from "@fuse/shared";
 import { pageBlockCount } from "@fuse/shared";
 
 const props = defineProps<{
@@ -10,6 +18,10 @@ const props = defineProps<{
   steps: Step[];
   // Input/output schema per step index, resolved by the page.
   schemas: StepSchema[];
+  /** Auth hint per provider (appId), from App.auth. */
+  authHints?: Record<string, AppAuthHint>;
+  /** Scenario's own auth keys, one per provider (appId). */
+  authConfig?: ScenarioAuthEntry[];
 }>();
 
 const emit = defineEmits<{
@@ -105,6 +117,32 @@ const outputRows = computed(() =>
     sub: props.step.type !== "page" && o.label && o.label !== o.key ? o.label : "",
   })),
 );
+
+const stepAppId = computed(() =>
+  props.step.type === "api" || props.step.type === "periodic" ? props.step.appId : undefined,
+);
+const authHint = computed(() =>
+  stepAppId.value ? props.authHints?.[stepAppId.value] : undefined,
+);
+const authEntry = computed(() =>
+  stepAppId.value ? props.authConfig?.find((e) => e.appId === stepAppId.value) : undefined,
+);
+const authKeyConfigured = computed(() => !!authEntry.value?.value);
+// ON unless the user explicitly opted out (authEnabled === false).
+// undefined means "use key if configured" — same as ON once a key exists.
+const authEnabled = computed(
+  () =>
+    (props.step.type === "api" || props.step.type === "periodic") &&
+    props.step.authEnabled !== false,
+);
+
+function toggleAuth() {
+  if (!authKeyConfigured.value) return;
+  // Toggling OFF stores explicit false; toggling back ON restores the default
+  // (undefined) so the worker injects the key automatically.
+  const next = authEnabled.value ? false : undefined;
+  emit("update", { ...props.step, authEnabled: next } as Step);
+}
 
 const delaySeconds = computed(() => (props.step.type === "delay" ? props.step.seconds : 0));
 const pollInterval = computed(() =>
@@ -703,6 +741,57 @@ watch(hydrateKey, hydrate, { immediate: true });
             label="Интервал, секунд"
             @update:model-value="updateInterval(Number($event))"
           />
+        </div>
+
+        <!-- Аутентификация (только api/periodic — есть appId) -->
+        <div v-if="stepAppId" class="border-t border-zinc-200 mt-8 pt-8">
+          <div class="flex items-start gap-3 mb-5">
+            <span
+              class="w-9 h-9 rounded-xl shrink-0 inline-flex items-center justify-center bg-amber-50 text-amber-600"
+            >
+              <Icon name="shield" :size="18" />
+            </span>
+            <div class="min-w-0">
+              <div class="font-sans text-[0.9375rem] font-bold text-zinc-900">Аутентификация</div>
+              <div class="font-sans text-[0.8125rem] text-zinc-500 mt-0.5">
+                Доступ к API сервису.
+              </div>
+            </div>
+          </div>
+
+          <div v-if="authKeyConfigured" class="border border-zinc-200 rounded-2xl p-4 flex items-center gap-3.5">
+            <div class="min-w-0 flex-1">
+              <div class="font-sans text-sm font-bold text-zinc-900">
+                {{ authHint?.schemeLabel ?? authEntry?.headerName }}
+              </div>
+              <div class="font-sans text-[0.8125rem] text-zinc-500 mt-0.5">
+                Ключ настроен на вкладке «Авторизация».
+              </div>
+            </div>
+            <Toggle :model-value="authEnabled" @update:model-value="toggleAuth" />
+          </div>
+          <div
+            v-else-if="authHint"
+            class="border border-amber-200 bg-amber-50/60 rounded-2xl p-4 flex items-center gap-3.5"
+          >
+            <div class="min-w-0 flex-1">
+              <div class="font-sans text-sm font-bold text-zinc-900">{{ authHint.schemeLabel }}</div>
+              <div class="font-sans text-[0.8125rem] text-amber-700 mt-0.5">
+                Настройте авторизацию на вкладке «Авторизация».
+              </div>
+            </div>
+            <Toggle :model-value="false" disabled />
+          </div>
+          <div
+            v-else
+            class="border border-zinc-200 bg-zinc-50/60 rounded-2xl p-4"
+          >
+            <div class="font-sans text-[0.8125rem] text-zinc-600">
+              Спецификация не описывает аутентификацию. Вы всё равно можете добавить ключ доступа
+              на вкладке <span class="font-semibold">«Авторизация»</span> — после этого здесь
+              появится переключатель.
+            </div>
+          </div>
         </div>
 
         <!-- Выходные данные -->

@@ -1,7 +1,7 @@
 import { Prop, Schema, SchemaFactory } from "@nestjs/mongoose";
 import { HydratedDocument, Schema as MongooseSchema } from "mongoose";
 import { EndpointStatus, HttpMethod, ParamLocation } from "@fuse/shared";
-import type { SchemaField } from "@fuse/shared";
+import type { AppAuthHint, SchemaField } from "@fuse/shared";
 
 @Schema({ _id: false })
 export class SchemaFieldDoc {
@@ -91,6 +91,23 @@ export class EnvironmentDoc {
 
 const EnvironmentDocSchema = SchemaFactory.createForClass(EnvironmentDoc);
 
+@Schema({ _id: false })
+export class AuthHintDoc {
+  @Prop({ required: true })
+  schemeLabel: string;
+
+  @Prop({ required: true })
+  headerName: string;
+
+  @Prop({ required: true, type: String })
+  valueFormat: AppAuthHint["valueFormat"];
+
+  @Prop({ default: true })
+  required: boolean;
+}
+
+const AuthHintDocSchema = SchemaFactory.createForClass(AuthHintDoc);
+
 @Schema({ timestamps: true, toJSON: { virtuals: true } })
 export class App {
   @Prop({ required: true })
@@ -126,6 +143,11 @@ export class App {
   // until they are opened or backfilled (execution falls back to `baseUrl`).
   @Prop({ type: [EnvironmentDocSchema], default: [] })
   environments: EnvironmentDoc[];
+
+  // Дефолты авторизации для вкладки «Авторизация» сценария, из OpenAPI
+  // security schemes. Отсутствует, если поддерживаемой схемы нет.
+  @Prop({ type: AuthHintDocSchema })
+  auth?: AuthHintDoc;
 
   @Prop({ default: false })
   published: boolean;

@@ -8,6 +8,7 @@ import { Model } from "mongoose";
 import { randomUUID } from "crypto";
 import { EndpointStatus } from "@fuse/shared";
 import type {
+  AppAuthHint,
   Endpoint,
   Environment,
   ImportPreviewResult,
@@ -131,6 +132,7 @@ export class AppsService {
       apiVersion: parsed.apiVersion,
       endpoints: parsed.endpoints,
       environments: [prodEnvironment(parsed.baseUrl)],
+      auth: parsed.auth,
       published: false,
       syncedAt: new Date(),
     }).save();
@@ -204,6 +206,7 @@ export class AppsService {
       apiVersion: parsed.apiVersion,
       endpoints: parsed.endpoints,
       environments: [prodEnvironment(parsed.baseUrl)],
+      auth: parsed.auth,
       published: false,
       syncedAt: new Date(),
     }).save();
@@ -231,6 +234,7 @@ export class AppsService {
       baseUrl: parsed.baseUrl,
       host: parsed.host,
       apiVersion: parsed.apiVersion,
+      auth: parsed.auth,
     });
   }
 
@@ -266,6 +270,7 @@ export class AppsService {
       baseUrl: parsed.baseUrl ?? app.baseUrl,
       host: parsed.host ?? app.host,
       apiVersion: parsed.apiVersion ?? app.apiVersion,
+      auth: parsed.auth,
     });
   }
 
@@ -343,12 +348,19 @@ export class AppsService {
       baseUrl?: string;
       host?: string;
       apiVersion?: string;
+      auth?: AppAuthHint;
     },
   ): Promise<AppDocument> {
+    const { auth, ...rest } = update;
+    // Спека реимпорта может перестать объявлять security — hint должен
+    // исчезнуть, а не остаться от предыдущей версии, поэтому явный $unset.
     const updated = await this.appModel
       .findOneAndUpdate(
         { _id: app._id, ownerId: app.ownerId },
-        { $set: { ...update, syncedAt: new Date() } },
+        {
+          $set: { ...rest, syncedAt: new Date(), ...(auth ? { auth } : {}) },
+          ...(auth ? {} : { $unset: { auth: "" } }),
+        },
         { new: true },
       )
       .exec();

@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
 import { IsArray, IsBoolean, IsNotEmpty, IsOptional, IsString } from "class-validator";
+import type { ScenarioAuthEntry } from "@fuse/shared";
 
 export class UpdateScenarioDto {
   @ApiPropertyOptional({ example: "Deploy to Production" })
@@ -40,6 +41,15 @@ export class UpdateScenarioDto {
   @IsOptional()
   @IsArray()
   environmentSelections?: { appId: string; environmentId: string }[];
+
+  @ApiPropertyOptional({
+    type: "array",
+    description:
+      "Ключи доступа к API поставщиков: { appId, headerName, valueFormat, value }[]. Владелец шлёт полный value; пустой value очищает ключ.",
+  })
+  @IsOptional()
+  @IsArray()
+  authConfig?: ScenarioAuthEntry[];
 
   @ApiPropertyOptional({ default: false })
   @IsOptional()

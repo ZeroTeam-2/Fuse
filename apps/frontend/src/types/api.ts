@@ -746,6 +746,8 @@ export interface components {
             steps?: unknown[];
             /** @description Per-provider environment choice: { appId, environmentId }[] */
             environmentSelections?: unknown[];
+            /** @description Ключи доступа к API поставщиков: { appId, headerName, valueFormat, value }[]. Владелец шлёт полный value; пустой value очищает ключ. */
+            authConfig?: unknown[];
             /** @default false */
             published: boolean;
         };
