@@ -2,7 +2,7 @@ import { Injectable, BadRequestException } from "@nestjs/common";
 import { dereference } from "@readme/openapi-parser";
 import { randomUUID } from "crypto";
 import { EndpointStatus, HttpMethod, ParamLocation } from "@fuse/shared";
-import type { Endpoint, SchemaField } from "@fuse/shared";
+import type { AppAuthHint, Endpoint, SchemaField } from "@fuse/shared";
 import { deriveBaseUrl } from "./base-url";
 
 interface OpenAPIParameter {
@@ -41,6 +41,9 @@ interface OpenAPIResponse {
   description?: string;
 }
 
+/** `[{ schemeName: scopes[] }]` — OR of AND'ed requirements; we only look at scheme names. */
+type OpenAPISecurityRequirement = Record<string, string[]>[];
+
 interface OpenAPIOperation {
   summary?: string;
   description?: string;
@@ -49,6 +52,17 @@ interface OpenAPIOperation {
   parameters?: OpenAPIParameter[];
   requestBody?: OpenAPIRequestBody;
   responses?: Record<string, OpenAPIResponse>;
+  security?: OpenAPISecurityRequirement;
+}
+
+interface OpenAPISecurityScheme {
+  type?: string;
+  /** Only meaningful for `type: http` — `bearer`, `basic`, etc. */
+  scheme?: string;
+  /** Only meaningful for `type: apiKey` — `header`, `query`, or `cookie`. */
+  in?: string;
+  /** Only meaningful for `type: apiKey` — the header/query/cookie name. */
+  name?: string;
 }
 
 interface OpenAPIPathItem {
@@ -68,6 +82,8 @@ interface OpenAPIDocument {
   host?: string;
   basePath?: string;
   paths?: Record<string, OpenAPIPathItem>;
+  components?: { securitySchemes?: Record<string, OpenAPISecurityScheme> };
+  security?: OpenAPISecurityRequirement;
 }
 
 export interface ParsedSpec {
@@ -75,6 +91,8 @@ export interface ParsedSpec {
   host?: string;
   apiVersion?: string;
   endpoints: Endpoint[];
+  /** Дефолты авторизации для вкладки «Авторизация» сценария. Отсутствует, если схема не поддержана. */
+  auth?: AppAuthHint;
 }
 
 const VALID_METHODS = new Set(["get", "post", "put", "delete", "patch"]);
@@ -103,6 +121,7 @@ export class OpenApiParserService {
       host: this.extractHost(baseUrl),
       apiVersion: spec.info?.version,
       endpoints: this.extractEndpoints(spec),
+      auth: this.extractAuthHint(spec),
     };
   }
 
@@ -153,6 +172,72 @@ export class OpenApiParserService {
     }
 
     return endpoints;
+  }
+
+  /**
+   * Выбирает первый поддерживаемый scheme (`http`+`bearer` или `apiKey`+`in:
+   * header`) из активного security requirement (корневого + любой операции,
+   * в порядке появления), иначе — первый поддерживаемый из `securitySchemes`
+   * целиком. Неподдержанные схемы (oauth2, openIdConnect, apiKey в query/cookie)
+   * и спеки без security schemes дают `undefined` — UI использует fallback.
+   */
+  private extractAuthHint(spec: OpenAPIDocument): AppAuthHint | undefined {
+    const schemes = spec.components?.securitySchemes ?? {};
+    const schemeNames = Object.keys(schemes);
+    if (schemeNames.length === 0) return undefined;
+
+    const referenced: string[] = [];
+    const collect = (requirement?: OpenAPISecurityRequirement) => {
+      for (const entry of requirement ?? []) {
+        for (const name of Object.keys(entry)) {
+          if (!referenced.includes(name)) referenced.push(name);
+        }
+      }
+    };
+
+    collect(spec.security);
+    for (const pathItem of Object.values(spec.paths ?? {})) {
+      if (!pathItem) continue;
+      for (const [method, operation] of Object.entries(pathItem)) {
+        if (method === "parameters") continue;
+        if (!VALID_METHODS.has(method.toLowerCase())) continue;
+        collect(operation?.security);
+      }
+    }
+
+    for (const name of referenced) {
+      const hint = this.hintFromScheme(schemes[name]);
+      if (hint) return hint;
+    }
+    for (const name of schemeNames) {
+      const hint = this.hintFromScheme(schemes[name]);
+      if (hint) return hint;
+    }
+    return undefined;
+  }
+
+  private hintFromScheme(scheme?: OpenAPISecurityScheme): AppAuthHint | undefined {
+    if (!scheme) return undefined;
+
+    if (scheme.type === "http" && scheme.scheme === "bearer") {
+      return {
+        schemeLabel: "Bearer Token",
+        headerName: "Authorization",
+        valueFormat: "bearer",
+        required: true,
+      };
+    }
+
+    if (scheme.type === "apiKey" && scheme.in === "header" && scheme.name) {
+      return {
+        schemeLabel: "API Key",
+        headerName: scheme.name,
+        valueFormat: "raw",
+        required: true,
+      };
+    }
+
+    return undefined;
   }
 
   private extractInputs(

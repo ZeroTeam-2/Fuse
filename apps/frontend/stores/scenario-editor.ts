@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
-import type { EnvironmentSelection, Step } from "@fuse/shared";
+import { distinctProviderAppIds } from "@fuse/shared";
+import type { EnvironmentSelection, ScenarioAuthEntry, Step } from "@fuse/shared";
 
 export const useScenarioEditorStore = defineStore("scenarioEditor", {
   state: () => ({
@@ -12,6 +13,7 @@ export const useScenarioEditorStore = defineStore("scenarioEditor", {
       published: boolean;
       steps: Step[];
       environmentSelections?: EnvironmentSelection[];
+      authConfig?: ScenarioAuthEntry[];
       blocked?: boolean;
       blockedReason?: string;
     },
@@ -22,19 +24,7 @@ export const useScenarioEditorStore = defineStore("scenarioEditor", {
   getters: {
     stepCount: (state) => state.scenario?.steps.length ?? 0,
     // Providers used by endpoint-bearing steps, in first-appearance order.
-    distinctAppIds: (state): string[] => {
-      const ids: string[] = [];
-      for (const step of state.scenario?.steps ?? []) {
-        if (
-          (step.type === "api" || step.type === "periodic") &&
-          step.appId &&
-          !ids.includes(step.appId)
-        ) {
-          ids.push(step.appId);
-        }
-      }
-      return ids;
-    },
+    distinctAppIds: (state): string[] => distinctProviderAppIds(state.scenario?.steps ?? []),
     distinctAppCount(): number {
       return this.distinctAppIds.length;
     },
@@ -90,6 +80,42 @@ export const useScenarioEditorStore = defineStore("scenarioEditor", {
       this.scenario.environmentSelections = this.scenario.environmentSelections.filter(
         (s) => valid.includes(s.appId),
       );
+    },
+
+    // Ключ уникален по паре (appId, environmentId) — один и тот же поставщик
+    // может иметь разные ключи для разных окружений (Prod/Test/…). Запись без
+    // environmentId (легаси/общий ключ) матчится отдельно от записей с ним.
+    setAuthConfig(entry: ScenarioAuthEntry) {
+      if (!this.scenario) return;
+      const list = this.scenario.authConfig ?? [];
+      const existing = list.find(
+        (e) => e.appId === entry.appId && e.environmentId === entry.environmentId,
+      );
+      if (existing) Object.assign(existing, entry);
+      else list.push(entry);
+      this.scenario.authConfig = list;
+    },
+
+    // When a key is saved for a provider, reset authEnabled to undefined for all
+    // matching steps. undefined means "inject if a key is configured" — the worker
+    // only skips injection when authEnabled is explicitly false (user opted out).
+    // This handles both new steps (never had a key) and existing steps whose
+    // authEnabled: false was just a default, not an intentional opt-out.
+    enableAuthForProvider(appId: string) {
+      if (!this.scenario) return;
+      for (const step of this.scenario.steps) {
+        if ((step.type === "api" || step.type === "periodic") && step.appId === appId) {
+          (step as { authEnabled?: boolean }).authEnabled = undefined;
+        }
+      }
+    },
+
+    // Mirrors pruneEnvironmentSelections: a provider dropped with its last step
+    // loses its stale key too.
+    pruneAuthConfig() {
+      if (!this.scenario?.authConfig) return;
+      const valid = this.distinctAppIds;
+      this.scenario.authConfig = this.scenario.authConfig.filter((e) => valid.includes(e.appId));
     },
   },
 });

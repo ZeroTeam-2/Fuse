@@ -182,6 +182,43 @@
         </Card>
       </div>
 
+      <!-- Авторизация -->
+      <div v-else-if="tab === 'auth'">
+        <div
+          v-if="!store.distinctAppCount"
+          class="border border-dashed border-zinc-300 rounded-2xl px-6 py-14 flex flex-col items-center text-center"
+        >
+          <span
+            class="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 inline-flex items-center justify-center mb-4"
+          >
+            <Icon name="shield" :size="22" />
+          </span>
+          <div class="font-sans text-[0.9375rem] text-zinc-600 max-w-[420px]">
+            Сначала добавьте хотя бы один шаг с endpoint — здесь можно будет задать ключ доступа
+            для каждого поставщика.
+          </div>
+        </div>
+
+        <div v-else class="flex flex-col gap-4">
+          <p class="font-sans text-[0.8125rem] text-zinc-500">
+            Ключи доступа для каждого API-сервиса и его окружения, используемых в сценарии. На
+            исполнении применяется ключ того окружения, что выбрано на вкладке «Окружения»; ключ
+            применяется только на шагах, у которых включена аутентификация.
+          </p>
+          <ScenarioAuthProviderCard
+            v-for="card in authCards"
+            :key="`${card.appId}:${card.environmentId}`"
+            :app-id="card.appId"
+            :environment-id="card.environmentId"
+            :environment-name="card.environmentName"
+            :provider-name="appNames[card.appId] ?? 'API'"
+            :hint="appAuthHints[card.appId]"
+            :entry="authEntry(card.appId, card.environmentId)"
+            @save="saveAuthEntry"
+          />
+        </div>
+      </div>
+
       <!-- Настройка шагов -->
       <div v-else-if="tab === 'steps'">
         <div
@@ -226,6 +263,7 @@
               :title="step.title"
               :params="stepParams(i)"
               :broken="!!step.broken"
+              :auth="authIndicator(step)"
               @edit="openStep(i)"
               @remove="removeStep(i)"
             />
@@ -253,6 +291,8 @@
       :step-index="configIndex"
       :steps="steps"
       :schemas="schemas"
+      :auth-hints="appAuthHints"
+      :auth-config="store.scenario?.authConfig ?? []"
       @update="updateStep(configIndex, $event)"
       @edit-page="pageIndex = configIndex"
       @close="configIndex = null"
@@ -278,7 +318,16 @@ import {
   pageBlockCount,
   pageBlocks,
 } from "@fuse/shared";
-import type { Environment, Step, StepFilter, StepPage, StepSchema, StepType } from "@fuse/shared";
+import type {
+  AppAuthHint,
+  Environment,
+  ScenarioAuthEntry,
+  Step,
+  StepFilter,
+  StepPage,
+  StepSchema,
+  StepType,
+} from "@fuse/shared";
 
 const { $api } = useNuxtApp() as any;
 const route = useRoute();
@@ -290,6 +339,7 @@ const TABS = [
   { value: "main", label: "Основная" },
   { value: "steps", label: "Настройка шагов" },
   { value: "environments", label: "Окружения" },
+  { value: "auth", label: "Авторизация" },
 ];
 
 const TYPE_LABELS: Record<string, string> = {
@@ -314,6 +364,7 @@ const form = reactive({ title: "", description: "", category: "", subcategory: "
 const appNames = ref<Record<string, string>>({});
 const schemas = ref<StepSchema[]>([]);
 const appEnvironments = ref<Record<string, Environment[]>>({});
+const appAuthHints = ref<Record<string, AppAuthHint>>({});
 
 const pickedType = ref<{ key: StepType; title: string } | null>(null);
 const configIndex = ref<number | null>(null);
@@ -352,6 +403,10 @@ function providerDot(step: Step) {
   let hash = 0;
   for (const ch of id) hash = (hash + ch.charCodeAt(0)) % DOT_COLORS.length;
   return DOT_COLORS[hash];
+}
+
+function authIndicator(step: Step): boolean {
+  return (step.type === "api" || step.type === "periodic") && !!step.authEnabled;
 }
 
 function methodOf(step: Step) {
@@ -474,10 +529,12 @@ async function loadSchemas() {
 async function persistSteps() {
   if (!store.scenario) return;
   store.pruneEnvironmentSelections();
+  store.pruneAuthConfig();
   const { error: apiError } = await $api.PATCH(`/api/scenarios/${scenarioId}`, {
     body: {
       steps: store.scenario.steps,
       environmentSelections: store.scenario.environmentSelections ?? [],
+      authConfig: store.scenario.authConfig ?? [],
     },
   });
   if (apiError) {
@@ -489,16 +546,52 @@ async function persistSteps() {
   await loadEnvironmentsForApps();
 }
 
-// Environments of every provider used in the scenario. Fetched per app (GET by
-// id also seeds a legacy app's Prod), so the tab can offer them in a Select.
+// Environments + auth hint of every provider used in the scenario. Fetched
+// per app (GET by id also seeds a legacy app's Prod), so the tabs can offer
+// them in a Select / prefill the auth card.
 async function loadEnvironmentsForApps() {
   await Promise.all(
     store.distinctAppIds.map(async (id) => {
       if (appEnvironments.value[id]) return;
       const { data } = await $api.GET(`/api/apps/${id}`, {});
-      if (data) appEnvironments.value[id] = data.environments ?? [];
+      if (data) {
+        appEnvironments.value[id] = data.environments ?? [];
+        if (data.auth) appAuthHints.value[id] = data.auth;
+      }
     }),
   );
+}
+
+// One card per (provider, environment): a provider with several environments
+// (Prod/Test/…) gets an independent key per environment.
+const authCards = computed(() =>
+  store.distinctAppIds.flatMap((appId) =>
+    (appEnvironments.value[appId] ?? []).map((env) => ({
+      appId,
+      environmentId: env.id,
+      environmentName: env.name,
+    })),
+  ),
+);
+
+function authEntry(appId: string, environmentId: string): ScenarioAuthEntry | undefined {
+  return store.scenario?.authConfig?.find(
+    (e) => e.appId === appId && e.environmentId === environmentId,
+  );
+}
+
+async function saveAuthEntry(entry: ScenarioAuthEntry) {
+  store.setAuthConfig(entry);
+  store.enableAuthForProvider(entry.appId);
+  if (!store.scenario) return;
+  const { error: apiError } = await $api.PATCH(`/api/scenarios/${scenarioId}`, {
+    body: {
+      authConfig: store.scenario.authConfig,
+      steps: store.scenario.steps,
+    },
+  });
+  if (apiError) error.value = "Не удалось сохранить ключ";
+  else error.value = "";
 }
 
 function envOptions(appId: string) {

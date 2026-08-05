@@ -260,3 +260,106 @@ describe("OpenAPI parser: endpoint tags", () => {
     expect(health?.tag).toBeUndefined();
   });
 });
+
+describe("OpenAPI parser: auth hint from security schemes", () => {
+  function specWithSecurity(
+    securitySchemes: Record<string, unknown>,
+    security?: Record<string, string[]>[],
+  ) {
+    return {
+      openapi: "3.0.0",
+      info: { title: "Demo", version: "1.0.0" },
+      servers: [{ url: "https://api.example.com" }],
+      components: { securitySchemes },
+      ...(security ? { security } : {}),
+      paths: {
+        "/orgs": {
+          get: {
+            summary: "List organizations",
+            ...(security ? { security } : {}),
+            responses: { "200": { description: "OK" } },
+          },
+        },
+      },
+    } as Record<string, unknown>;
+  }
+
+  it("extracts a Bearer hint from an http+bearer scheme", async () => {
+    const parser = new OpenApiParserService();
+
+    const parsed = await parser.parse(
+      specWithSecurity(
+        { bearerAuth: { type: "http", scheme: "bearer" } },
+        [{ bearerAuth: [] }],
+      ),
+      SPEC_URL,
+    );
+
+    expect(parsed.auth).toEqual({
+      schemeLabel: "Bearer Token",
+      headerName: "Authorization",
+      valueFormat: "bearer",
+      required: true,
+    });
+  });
+
+  it("extracts an API Key hint from an apiKey+header scheme", async () => {
+    const parser = new OpenApiParserService();
+
+    const parsed = await parser.parse(
+      specWithSecurity(
+        { apiKeyAuth: { type: "apiKey", in: "header", name: "X-Api-Key" } },
+        [{ apiKeyAuth: [] }],
+      ),
+      SPEC_URL,
+    );
+
+    expect(parsed.auth).toEqual({
+      schemeLabel: "API Key",
+      headerName: "X-Api-Key",
+      valueFormat: "raw",
+      required: true,
+    });
+  });
+
+  it("leaves auth undefined when the spec has no security schemes", async () => {
+    const parser = new OpenApiParserService();
+
+    const parsed = await parser.parse(specWith(ORG_ITEM), SPEC_URL);
+
+    expect(parsed.auth).toBeUndefined();
+  });
+
+  it("leaves auth undefined for oauth2/openIdConnect and apiKey in query/cookie", async () => {
+    const parser = new OpenApiParserService();
+
+    const parsed = await parser.parse(
+      specWithSecurity(
+        {
+          oauth2: { type: "oauth2" },
+          openId: { type: "openIdConnect" },
+          apiKeyQuery: { type: "apiKey", in: "query", name: "api_key" },
+          apiKeyCookie: { type: "apiKey", in: "cookie", name: "session" },
+        },
+        [{ oauth2: [] }],
+      ),
+      SPEC_URL,
+    );
+
+    expect(parsed.auth).toBeUndefined();
+  });
+
+  it("falls back to the first supported scheme when unreferenced by security requirements", async () => {
+    const parser = new OpenApiParserService();
+
+    const parsed = await parser.parse(
+      specWithSecurity({
+        oauth2: { type: "oauth2" },
+        apiKeyAuth: { type: "apiKey", in: "header", name: "X-Api-Key" },
+      }),
+      SPEC_URL,
+    );
+
+    expect(parsed.auth?.headerName).toBe("X-Api-Key");
+  });
+});

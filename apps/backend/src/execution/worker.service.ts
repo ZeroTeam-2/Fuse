@@ -29,6 +29,7 @@ import type {
   ManualInputDescriptor,
   RunFileRef,
   RunStepResult,
+  ScenarioAuthEntry,
   SchemaField,
   ServerWsEvent,
 } from "@fuse/shared";
@@ -36,7 +37,7 @@ import { Run, RunDocument } from "./run.schema";
 import { Scenario, ScenarioDocument } from "../scenarios/scenario.schema";
 import { App, AppDocument } from "../apps/app.schema";
 import { SsrfGuard } from "../apps/ssrf-guard";
-import { joinBaseUrl, resolveAppBaseUrl } from "../apps/base-url";
+import { joinBaseUrl, resolveAppBaseUrl, resolveEffectiveEnvironmentId } from "../apps/base-url";
 import { RunGateway } from "../websocket/run.gateway";
 import { MinioService } from "../minio/minio.service";
 import { NotificationsService } from "../notifications/notifications.service";
@@ -91,6 +92,8 @@ interface StepContext {
   appCache: Map<string, AppDocument>;
   /** Выбор окружения по поставщику (из сценария): по нему резолвится базовый URL. */
   environmentSelections: EnvironmentSelection[];
+  /** Ключи доступа к API поставщиков (из сценария) — источник инжекта auth-заголовка. */
+  authConfig: ScenarioAuthEntry[];
   /**
    * Ввод шага по ЛОКАЛЬНЫМ ключам (`inn`, `filter:orgId`) — ровно то, что ищет
    * резолвер: срез входов запуска, адресованных этому шагу, поверх накопленного
@@ -260,6 +263,7 @@ export class WorkerService
     const appCache = new Map<string, AppDocument>();
     const environmentSelections = (scenario.environmentSelections ??
       []) as EnvironmentSelection[];
+    const authConfig = (scenario.authConfig ?? []) as ScenarioAuthEntry[];
 
     // Считается один раз на запуск: этим же списком форма запуска строила поля.
     const descriptors = await this.manualInputsService.forSteps(
@@ -324,6 +328,7 @@ export class WorkerService
           stepResults: reloadedRun.stepResults as unknown as RunStepResult[],
           appCache,
           environmentSelections,
+          authConfig,
           // Свой срез входов запуска важнее значения, принесённого с прошлых
           // шагов: одноимённые ключи разных шагов не должны склеиваться.
           userInput: {
@@ -569,7 +574,12 @@ export class WorkerService
    * спасают плейсхолдеры, остальные входы уезжают в тело.
    */
   private async buildEndpointRequest(
-    step: { appId: string; endpointId?: string },
+    step: {
+      appId: string;
+      endpointId?: string;
+      title: string;
+      authEnabled?: boolean;
+    },
     method: string,
     path: string,
     resolved: Record<string, unknown>,
@@ -590,13 +600,13 @@ export class WorkerService
 
     const url = await this.resolveStepUrl(step.appId, path, located, ctx);
 
-    const options: RequestInit = {
-      method,
-      headers: {
-        "Content-Type": "application/json",
-        ...this.toStringRecord(located.header),
-      },
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.toStringRecord(located.header),
     };
+    this.applyScenarioAuth(step, headers, app, ctx);
+
+    const options: RequestInit = { method, headers };
 
     if (method !== "GET" && method !== "DELETE") {
       if (Object.keys(located.body).length > 0) {
@@ -605,6 +615,88 @@ export class WorkerService
     }
 
     return { url, options, located, inputs };
+  }
+
+  /**
+   * Инжектит заголовок из ключа сценария (`Scenario.authConfig`) для поставщика
+   * шага. Трёхзначная семантика `authEnabled` (см. `StepPicker.vue`,
+   * `StepConfig.vue`, `scenario-editor.ts#enableAuthForProvider` на фронте):
+   *  - `false`     — явный отказ пользователя, не трогаем заголовки вообще;
+   *  - `undefined` — «авто»: инжектим, если ключ настроен, молча пропускаем,
+   *                  если нет (так стор сбрасывает флаг после сохранения ключа
+   *                  на вкладке «Авторизация» — это не является ошибкой);
+   *  - `true`      — явное включение: отсутствующий/пустой ключ — ошибка
+   *                  конфигурации до fetch, а не тихий пропуск с последующим
+   *                  малопонятным 401 от стороннего API.
+   *
+   * Ключ ищется для окружения, реально выбранного для `appId`
+   * (`resolveEffectiveEnvironmentId` — та же цепочка фолбэков, что и у
+   * `resolveAppBaseUrl`, чтобы URL и ключ всегда были из одного окружения).
+   * Нет ключа под это окружение — падаем на запись без `environmentId`
+   * (общий/легаси ключ на все окружения поставщика).
+   *
+   * Явный маппинг того же заголовка (константа или ссылка на выход шага) уже
+   * в `headers` после резолва входов — имеет приоритет, перезаписи не
+   * происходит (сравнение без учёта регистра).
+   */
+  private applyScenarioAuth(
+    step: { appId: string; title: string; authEnabled?: boolean },
+    headers: Record<string, string>,
+    app: AppDocument,
+    ctx: StepContext,
+  ): void {
+    if (step.authEnabled === false) {
+      this.logger.debug(
+        `[auth] "${step.title}" (appId=${step.appId}): authEnabled=false — заголовок авторизации не инжектится`,
+      );
+      return;
+    }
+
+    const selectedEnvironmentId = ctx.environmentSelections?.find(
+      (s) => s.appId === step.appId,
+    )?.environmentId;
+    const environmentId = resolveEffectiveEnvironmentId(app, selectedEnvironmentId);
+
+    const entry =
+      ctx.authConfig.find(
+        (e) => e.appId === step.appId && e.environmentId === environmentId,
+      ) ?? ctx.authConfig.find((e) => e.appId === step.appId && !e.environmentId);
+
+    if (!entry?.value) {
+      if (step.authEnabled === true) {
+        this.logger.debug(
+          `[auth] "${step.title}" (appId=${step.appId}, environmentId=${environmentId ?? "—"}): ` +
+            `authEnabled=true, но ключ в authConfig ${entry ? "пуст" : "отсутствует"} — прерываем шаг до fetch`,
+        );
+        throw new StepExecutionError(
+          `Авторизация: для шага «${step.title}» включён инжект ключа, но он не задан на вкладке ` +
+            `«Авторизация» сценария (провайдер ${step.appId})`,
+        );
+      }
+      this.logger.debug(
+        `[auth] "${step.title}" (appId=${step.appId}, environmentId=${environmentId ?? "—"}): ` +
+          `authEnabled=undefined (авто), ключ в authConfig ${entry ? "пуст" : "отсутствует"} — пропускаем без ошибки`,
+      );
+      return;
+    }
+
+    const alreadySet = Object.keys(headers).some(
+      (name) => name.toLowerCase() === entry.headerName.toLowerCase(),
+    );
+    if (alreadySet) {
+      this.logger.debug(
+        `[auth] "${step.title}" (appId=${step.appId}): заголовок ${entry.headerName} уже задан ` +
+          `явным маппингом — authConfig не перезаписывает`,
+      );
+      return;
+    }
+
+    headers[entry.headerName] =
+      entry.valueFormat === "bearer" ? `Bearer ${entry.value}` : entry.value;
+    this.logger.debug(
+      `[auth] "${step.title}" (appId=${step.appId}, environmentId=${entry.environmentId ?? "любое"}): ` +
+        `инжектирован заголовок ${entry.headerName} (${entry.valueFormat}, authEnabled=${step.authEnabled ?? "undefined"}) из authConfig сценария`,
+    );
   }
 
   private async executeApiStep(
@@ -636,6 +728,11 @@ export class WorkerService
       await this.attachMultipartBody(fileEntry, located, inputs, options);
     }
 
+    const headerNames = Object.keys(options.headers as Record<string, string>);
+    this.logger.debug(
+      `[api] "${step.title}": ${step.method} ${url} — заголовки: [${headerNames.join(", ")}]`,
+    );
+
     let response: Response;
     try {
       response = await fetch(url, options);
@@ -646,6 +743,10 @@ export class WorkerService
 
     if (!response.ok) {
       const text = await response.text().catch(() => "");
+      this.logger.debug(
+        `[api] "${step.title}": ответ ${response.status} ${response.statusText} на ${url} ` +
+          `(отправленные заголовки: [${headerNames.join(", ")}])`,
+      );
       throw new StepExecutionError(
         `API call failed: ${response.status} ${response.statusText}${text ? ` — ${text}` : ""}`,
       );
@@ -922,6 +1023,7 @@ export class WorkerService
     // резолвятся по выбору, сделанному в этом сценарии, а не в объемлющем.
     const nestedEnvironmentSelections = (refScenario.environmentSelections ??
       []) as EnvironmentSelection[];
+    const nestedAuthConfig = (refScenario.authConfig ?? []) as ScenarioAuthEntry[];
 
     for (let i = 0; i < refSteps.length; i++) {
       const refStep = refSteps[i];
@@ -936,6 +1038,7 @@ export class WorkerService
         stepResults: nestedResults,
         appCache: ctx.appCache,
         environmentSelections: nestedEnvironmentSelections,
+        authConfig: nestedAuthConfig,
         userInput: {
           ...ctx.userInput,
           ...sliceInputsForStep(ctx.runInputs, nestedPath),

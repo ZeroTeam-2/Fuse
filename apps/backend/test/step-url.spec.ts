@@ -69,6 +69,7 @@ function runStep(worker: WorkerService, step: unknown) {
     runInputs: {},
     descriptors: [],
     warnings: [],
+    authConfig: [],
   });
 }
 

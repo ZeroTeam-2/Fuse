@@ -1,13 +1,14 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
-import { SortOrder } from "@fuse/shared";
+import { redactScenarioAuth, SortOrder } from "@fuse/shared";
 import type {
   CategoryCount,
   ManualInputDescriptor,
   MarketplaceCard,
   MarketplaceQuery,
   PaginatedResponse,
+  ScenarioAuthEntry,
   Step,
 } from "@fuse/shared";
 import { Scenario, ScenarioDocument } from "../scenarios/scenario.schema";
@@ -31,6 +32,9 @@ export interface MarketplaceCardDetail extends MarketplaceCard {
   // Шаги опубликованного сценария — публичные: по ним рисуется превью запуска
   // и playground, которые гость видит до входа.
   steps: Step[];
+  // Ключи владельца, всегда без `value` здесь: карточка публична для гостей.
+  // `configured` позволяет UI показать «ключ настроен», не раскрывая его.
+  authConfig?: ScenarioAuthEntry[];
 }
 
 function extractAppIds(steps: Step[]): Set<string> {
@@ -193,6 +197,12 @@ export class MarketplaceService {
       description: scenario.description,
       providersDetail,
       steps,
+      // Гость/чужой пользователь — без `viewerUserId`, всегда redacted.
+      authConfig: redactScenarioAuth(
+        scenario.authConfig as ScenarioAuthEntry[] | undefined,
+        scenario.ownerId,
+        undefined,
+      ),
       blocked: scenario.blocked,
       blockedReason: scenario.blockedReason,
     };

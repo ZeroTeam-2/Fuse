@@ -1,11 +1,19 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { existsSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { publicEnvSchema, serverEnvSchema } from "./config/env.schema";
 
 const rootDir = fileURLToPath(new URL(".", import.meta.url));
 const sharedSrc = resolve(rootDir, "../../packages/shared/src");
-loadEnv({ path: resolve(rootDir, "../../.env") });
+
+const envLocalPath = resolve(rootDir, "../../.env.local");
+if (existsSync(envLocalPath)) {
+  loadEnv({ path: envLocalPath });
+} else {
+  loadEnv({ path: resolve(rootDir, "../../.env") });
+}
+
 delete process.env.PORT;
 delete process.env.NITRO_PORT;
 

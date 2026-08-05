@@ -100,6 +100,22 @@ export interface StepSchema {
   outputIsArray?: boolean;
 }
 
+/**
+ * Дефолты для карточки поставщика на вкладке «Авторизация» сценария,
+ * извлечённые из `components.securitySchemes` спеки при (ре)импорте.
+ * Отсутствует, если поддерживаемой схемы нет (oauth2/openIdConnect/apiKey
+ * в query или cookie) — UI использует ручной fallback заголовков.
+ */
+export interface AppAuthHint {
+  /** Человекочитаемая метка схемы, например «Bearer Token» или «API Key». */
+  schemeLabel: string;
+  /** Имя HTTP-заголовка, в который подставляется значение. */
+  headerName: string;
+  /** `bearer` → значение оборачивается в `Bearer ${value}`; `raw` → как есть. */
+  valueFormat: "bearer" | "raw";
+  required: boolean;
+}
+
 export interface App {
   id: string;
   ownerId: string;
@@ -114,6 +130,8 @@ export interface App {
   endpoints: Endpoint[];
   /** Environments of the provider. The default `Prod` environment cannot be deleted. */
   environments?: Environment[];
+  /** Дефолты авторизации для вкладки «Авторизация» сценария, из OpenAPI security schemes. */
+  auth?: AppAuthHint;
   published: boolean;
   scenarioCount?: number;
   createdAt: string;
@@ -284,6 +302,13 @@ export interface ApiStep extends BaseStep {
   endpointId: string;
   method: HttpMethod;
   path: string;
+  /**
+   * Инжектить ли на исполнении заголовок из ключа сценария (`Scenario.authConfig`)
+   * для поставщика `appId`. При добавлении шага по умолчанию `true`, если у
+   * приложения есть `auth` hint, иначе `false`. Явный маппинг того же заголовка
+   * на шаге переопределяет инжект.
+   */
+  authEnabled?: boolean;
 }
 
 export interface ScenarioStepRef extends BaseStep {
@@ -327,6 +352,8 @@ export interface PeriodicStep extends BaseStep {
   pollPath: string;
   pollIntervalSec: number;
   progressField?: string;
+  /** См. `ApiStep.authEnabled`. */
+  authEnabled?: boolean;
 }
 
 /**
@@ -355,6 +382,32 @@ export interface EnvironmentSelection {
   environmentId: string;
 }
 
+/**
+ * Ключ доступа к API поставщика (`appId`), сохранённый на сценарии. Список
+ * поставщиков — производный от api/periodic-шагов, как и `EnvironmentSelection`.
+ * `value` MUST отсутствовать в ответах не-владельцу (см. `redactScenarioAuth`);
+ * `configured` заменяет его, сообщая только факт наличия ключа.
+ *
+ * `environmentId` делает ключ специфичным для одного окружения поставщика
+ * (Prod/Test/…) — на исполнении воркер берёт ключ того окружения, что реально
+ * выбрано для `appId` (см. `EnvironmentSelection`), и только если такого
+ * ключа нет, падает на запись без `environmentId` (легаси/один ключ на все
+ * окружения). Пара (`appId`, `environmentId`) уникальна в списке.
+ */
+export interface ScenarioAuthEntry {
+  appId: string;
+  /** Окружение поставщика, к которому привязан ключ. Без него — ключ общий для всех окружений. */
+  environmentId?: string;
+  /** Authorization, X-Api-Key или свой заголовок. */
+  headerName: string;
+  /** `bearer` → `Bearer ${value}`; `raw` → значение как есть. */
+  valueFormat: "bearer" | "raw";
+  /** Plaintext секрет. Отсутствует в ответах не-владельцу. */
+  value?: string;
+  /** Только в ответах не-владельцу: было ли задано непустое значение. */
+  configured?: boolean;
+}
+
 export interface Scenario {
   id: string;
   ownerId: string;
@@ -367,6 +420,8 @@ export interface Scenario {
   steps: Step[];
   /** Per-provider environment choice; unset providers default to Prod at execution. */
   environmentSelections?: EnvironmentSelection[];
+  /** Ключи доступа к API поставщиков (per `appId`). Redacted для не-владельца. */
+  authConfig?: ScenarioAuthEntry[];
   published: boolean;
   runCount: number;
   /**
@@ -379,6 +434,48 @@ export interface Scenario {
   blockedReason?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * Unique provider `appId`s referenced by api/periodic steps, in order of first
+ * appearance. Backs the provider list on both the «Окружения» and
+ * «Авторизация» tabs — a provider shows up with its first step and drops off
+ * once no step references it anymore.
+ */
+export function distinctProviderAppIds(steps: Step[]): string[] {
+  const ids: string[] = [];
+  for (const step of steps) {
+    if (
+      (step.type === "api" || step.type === "periodic") &&
+      step.appId &&
+      !ids.includes(step.appId)
+    ) {
+      ids.push(step.appId);
+    }
+  }
+  return ids;
+}
+
+/**
+ * Redacts `value` for anyone but the scenario owner, replacing it with
+ * `configured` so the UI can show "a key is set" without revealing it. Pass
+ * the scenario's own `ownerId`; `viewerUserId` is the caller's user id (or
+ * `undefined` for anonymous/public access, which is always redacted).
+ */
+export function redactScenarioAuth(
+  authConfig: ScenarioAuthEntry[] | undefined,
+  ownerId: string,
+  viewerUserId: string | undefined,
+): ScenarioAuthEntry[] | undefined {
+  if (!authConfig) return authConfig;
+  if (viewerUserId !== undefined && viewerUserId === ownerId) return authConfig;
+  return authConfig.map((entry) => ({
+    appId: entry.appId,
+    environmentId: entry.environmentId,
+    headerName: entry.headerName,
+    valueFormat: entry.valueFormat,
+    configured: !!entry.value,
+  }));
 }
 
 export interface CreateScenarioDto {
@@ -396,6 +493,7 @@ export interface UpdateScenarioDto {
   subcategory?: string;
   steps?: Step[];
   environmentSelections?: EnvironmentSelection[];
+  authConfig?: ScenarioAuthEntry[];
   published?: boolean;
 }
 

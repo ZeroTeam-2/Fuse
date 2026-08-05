@@ -121,10 +121,14 @@ export function environmentBaseUrl(env: EnvironmentLike | undefined): string | u
 }
 
 /**
- * Базовый URL приложения для исполнения: выбранное окружение → Prod → `baseUrl`
- * приложения (обратная совместимость с приложениями без окружений).
+ * Id окружения, реально используемого для исполнения: выбранное окружение
+ * (если существует и имеет `baseUrl`) → Prod (если имеет `baseUrl`) →
+ * `undefined` (легаси-приложение без окружений — `app.baseUrl` напрямую).
+ * Общая цепочка фолбэков для `resolveAppBaseUrl` и для подбора ключа
+ * авторизации по окружению шага (`WorkerService.applyScenarioAuth`) — оба
+ * обязаны сходиться на одном и том же окружении.
  */
-export function resolveAppBaseUrl(
+export function resolveEffectiveEnvironmentId(
   app: AppLike,
   environmentId?: string,
 ): string | undefined {
@@ -132,13 +136,29 @@ export function resolveAppBaseUrl(
 
   if (environmentId) {
     const chosen = envs.find((e) => e.id === environmentId);
-    const url = environmentBaseUrl(chosen);
-    if (url) return url;
+    if (chosen && environmentBaseUrl(chosen)) return chosen.id;
   }
 
   const prod = envs.find((e) => e.name === PROD_ENV_NAME);
-  const prodUrl = environmentBaseUrl(prod);
-  if (prodUrl) return prodUrl;
+  if (prod && environmentBaseUrl(prod)) return prod.id;
+
+  return undefined;
+}
+
+/**
+ * Базовый URL приложения для исполнения: выбранное окружение → Prod → `baseUrl`
+ * приложения (обратная совместимость с приложениями без окружений).
+ */
+export function resolveAppBaseUrl(
+  app: AppLike,
+  environmentId?: string,
+): string | undefined {
+  const effectiveId = resolveEffectiveEnvironmentId(app, environmentId);
+  if (effectiveId) {
+    const env = (app.environments ?? []).find((e) => e.id === effectiveId);
+    const url = environmentBaseUrl(env);
+    if (url) return url;
+  }
 
   return app.baseUrl;
 }

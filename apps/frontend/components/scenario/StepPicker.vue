@@ -89,6 +89,12 @@ function add() {
   const id = crypto.randomUUID();
   const name = title.value.trim();
   const ep = selectedEndpoint.value;
+  // A service with a parsed auth hint gets authEnabled: true by default.
+  // Without a hint the field is omitted (undefined) — auth is still injected
+  // automatically once the user configures a key on the «Авторизация» tab,
+  // because the worker treats undefined as "use key if configured". The user
+  // can always toggle auth off per step to opt out.
+  const hasHint = !!apps.value.find((a) => a.id === appId.value)?.auth;
   let step: Step;
 
   if (props.stepType === "api" && ep) {
@@ -102,6 +108,7 @@ function add() {
       path: ep.path,
       mappings: {},
       consts: {},
+      ...(hasHint ? { authEnabled: true } : {}),
     };
   } else if (props.stepType === "periodic" && ep) {
     step = {
@@ -114,6 +121,7 @@ function add() {
       pollPath: ep.path,
       pollIntervalSec: pollIntervalSec.value,
       mappings: {},
+      ...(hasHint ? { authEnabled: true } : {}),
     };
   } else if (props.stepType === "scenario") {
     step = { id, type: "scenario", title: name, refScenarioId: refScenarioId.value, mappings: {} };
