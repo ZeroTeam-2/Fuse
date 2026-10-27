@@ -3,6 +3,7 @@
 // и запрос недостающего значения посреди выполнения.
 import { computed, reactive, watch } from "vue";
 import type { ManualInputDescriptor } from "@fuse/shared";
+import { isBlank } from "@fuse/shared";
 
 const props = withDefaults(
   defineProps<{
@@ -29,10 +30,6 @@ watch(
   },
   { immediate: true },
 );
-
-function isBlank(value: unknown): boolean {
-  return value === undefined || value === null || value === "";
-}
 
 /** Шаги в порядке исполнения; поля внутри шага — в порядке перечисления. */
 const groups = computed(() => {
