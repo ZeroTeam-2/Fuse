@@ -20,19 +20,6 @@ export interface PaginatedResponse<T> {
   totalPages: number;
 }
 
-export interface ApiResponse<T> {
-  success: boolean;
-  data: T;
-  message?: string;
-}
-
-export interface ApiErrorResponse {
-  success: false;
-  message: string;
-  statusCode: number;
-  errors?: Record<string, string[]>;
-}
-
 export interface User {
   id: string;
   email: string;
@@ -505,6 +492,12 @@ export interface ManualInputDescriptor {
   label: string;
   type: SchemaField["type"];
   required: boolean;
+}
+
+/** Тело `POST /api/runs/:id/page-submit` — данные блоков страницы шага. */
+export interface PageSubmitDto {
+  stepIndex: number;
+  data: Record<string, unknown>;
 }
 
 export interface SubmitInputsDto {
