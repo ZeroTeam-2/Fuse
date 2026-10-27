@@ -83,10 +83,6 @@ export type ServerWsEvent =
   | WsEvent<"progress", ProgressPayload>
   | WsEvent<"run:status", RunStatusPayload>;
 
-export type ClientWsEvent =
-  | WsEvent<"page:submit", { stepIndex: number; data: Record<string, unknown> }>
-  | WsEvent<"run:cancel", null>;
-
 /**
  * События namespace `notifications` (комната `user:{userId}`). Не `WsEvent`:
  * тот привязан к `runId`-комнатам namespace `runs`.
@@ -99,7 +95,3 @@ export interface NotificationNewPayload {
   notification: RunNotification;
   unreadCount: number;
 }
-
-export type NotificationsServerEvent =
-  | { type: "notifications:snapshot"; payload: NotificationsSnapshotPayload }
-  | { type: "notification:new"; payload: NotificationNewPayload };

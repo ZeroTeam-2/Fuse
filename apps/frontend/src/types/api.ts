@@ -690,6 +690,30 @@ export interface components {
             /** @example user@example.com */
             email?: string;
         };
+        CreateRunDto: {
+            /** @example 65f1c2a4b8e3d1f0a9c7b5e2 */
+            scenarioId: string;
+            /** @description Значения ручного ввода по скоуп-ключам (`s0:inn`, `s2.s0:filter:status`). */
+            inputs?: {
+                [key: string]: unknown;
+            };
+        };
+        PageSubmitDto: {
+            /** @example 0 */
+            stepIndex: number;
+            /** @description Значения блоков страницы шага по их ключам. */
+            data: {
+                [key: string]: unknown;
+            };
+        };
+        SubmitInputsDto: {
+            /** @example 0 */
+            stepIndex: number;
+            /** @description Значения ручных входов шага по ключам входов. */
+            values: {
+                [key: string]: unknown;
+            };
+        };
         ImportPreviewDto: {
             /** @example https://api.example.com/openapi.json */
             openapiUrl: string;
@@ -866,7 +890,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateRunDto"];
+            };
+        };
         responses: {
             201: {
                 headers: {
@@ -963,7 +991,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PageSubmitDto"];
+            };
+        };
         responses: {
             201: {
                 headers: {
@@ -982,7 +1014,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmitInputsDto"];
+            };
+        };
         responses: {
             201: {
                 headers: {

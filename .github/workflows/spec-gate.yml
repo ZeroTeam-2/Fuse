@@ -77,7 +77,10 @@ jobs:
         run: |
           set -euo pipefail
           if [ -d "openspec/changes/$ID" ]; then
-            npx -y @fission-ai/openspec@1.6.0 change validate "$ID" --strict
+            # Версия пина обязана совпадать с CLI, которым пользуются локально,
+            # иначе гейт заворачивает то, что локально валидно. 1.6.0 не знал
+            # `skip_specs: true` и падал на change без спек-дельт.
+            npx -y @fission-ai/openspec@1.10.0 validate "$ID" --type change --strict
           else
             echo "Change '$ID' уже заархивирован — валидировать активную папку нечего."
           fi
