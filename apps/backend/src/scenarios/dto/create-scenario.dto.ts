@@ -1,7 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { IsNotEmpty, IsOptional, IsString } from "class-validator";
+import type { CreateScenarioDto as SharedCreateScenarioDto } from "@fuse/shared";
 
-export class CreateScenarioDto {
+export class CreateScenarioDto implements SharedCreateScenarioDto {
   @ApiProperty({ example: "Deploy to Production" })
   @IsString()
   @IsNotEmpty()
