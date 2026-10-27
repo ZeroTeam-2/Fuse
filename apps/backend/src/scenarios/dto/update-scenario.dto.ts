@@ -1,7 +1,12 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
 import { IsArray, IsBoolean, IsNotEmpty, IsOptional, IsString } from "class-validator";
+import type {
+  EnvironmentSelection,
+  Step,
+  UpdateScenarioDto as SharedUpdateScenarioDto,
+} from "@fuse/shared";
 
-export class UpdateScenarioDto {
+export class UpdateScenarioDto implements SharedUpdateScenarioDto {
   @ApiPropertyOptional({ example: "Deploy to Production" })
   @IsOptional()
   @IsString()
@@ -28,10 +33,13 @@ export class UpdateScenarioDto {
   @IsString()
   subcategory?: string;
 
+  // Структура шага рантаймом здесь не проверяется — её держат
+  // `assertValidPageSteps` и `cycle-guard` в сервисе. Тип фиксирует контракт
+  // на границе API, чтобы сервис не утверждал его приведениями.
   @ApiPropertyOptional({ type: "array" })
   @IsOptional()
   @IsArray()
-  steps?: unknown[];
+  steps?: Step[];
 
   @ApiPropertyOptional({
     type: "array",
@@ -39,7 +47,7 @@ export class UpdateScenarioDto {
   })
   @IsOptional()
   @IsArray()
-  environmentSelections?: { appId: string; environmentId: string }[];
+  environmentSelections?: EnvironmentSelection[];
 
   @ApiPropertyOptional({ default: false })
   @IsOptional()

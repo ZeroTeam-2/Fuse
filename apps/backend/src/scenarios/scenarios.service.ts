@@ -94,9 +94,9 @@ export class ScenariosService {
     const scenario = await this.findById(id, ownerId);
 
     if (dto.steps) {
-      this.assertValidPageSteps(dto.steps as Step[]);
+      this.assertValidPageSteps(dto.steps);
 
-      const refSteps = (dto.steps as Step[]).filter(
+      const refSteps = dto.steps.filter(
         (s): s is ScenarioStepRef => s.type === "scenario",
       );
 
@@ -109,7 +109,7 @@ export class ScenariosService {
           .exec();
 
         const allEntries = [
-          { id: scenario._id.toString(), steps: dto.steps as Step[] },
+          { id: scenario._id.toString(), steps: dto.steps },
           ...referencedScenarios.map((s) => ({
             id: s._id.toString(),
             steps: (s.steps ?? []) as Step[],
@@ -130,7 +130,7 @@ export class ScenariosService {
     // (или пересобирает) шаг с `broken: true`, следующее сохранение шагов
     // само снимает блокировку — отдельная ручка "разблокировать" не нужна.
     if (dto.steps) {
-      const stillBroken = (dto.steps as Step[]).some(
+      const stillBroken = dto.steps.some(
         (s) => (s as { broken?: boolean }).broken === true,
       );
       (updateQuery.$set as Record<string, unknown>).blocked = stillBroken;
