@@ -11,7 +11,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import type { AuthenticatedRequest } from "../auth/auth.types";
 import { NotificationsService } from "./notifications.service";
-import { NotificationsPaginationQueryDto } from "./dto/pagination-query.dto";
+import { PaginationQueryDto } from "../common/dto/pagination-query.dto";
 
 @ApiTags("notifications")
 @ApiBearerAuth()
@@ -24,7 +24,7 @@ export class NotificationsController {
   @ApiOperation({ summary: "List current user's notifications (paginated)" })
   list(
     @Req() req: AuthenticatedRequest,
-    @Query() query: NotificationsPaginationQueryDto,
+    @Query() query: PaginationQueryDto,
   ) {
     return this.notificationsService.listForUser(
       req.user.userId,

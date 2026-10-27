@@ -135,14 +135,10 @@
 </template>
 
 <script setup lang="ts">
+import type { ProviderDetail } from "@fuse/shared";
+
 const route = useRoute();
 const { $api } = useNuxtApp() as any;
-
-interface ProviderDetail {
-  appId: string;
-  name: string;
-  endpoints: { id: string; method: string; path: string; summary?: string }[];
-}
 
 interface CardDetail {
   id: string;

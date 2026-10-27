@@ -8,6 +8,7 @@ import type {
 } from "@fuse/shared";
 import {
   blockOutputKey,
+  isBlank,
   isDisplayBlock,
   isInputBlock,
   pageBlocks,
@@ -312,8 +313,4 @@ export function missingRequiredKeys(
   return descriptors
     .filter((d) => d.required && isBlank(inputs?.[d.key]))
     .map((d) => d.key);
-}
-
-export function isBlank(value: unknown): boolean {
-  return value === undefined || value === null || value === "";
 }
