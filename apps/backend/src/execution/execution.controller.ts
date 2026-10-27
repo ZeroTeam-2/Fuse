@@ -19,7 +19,10 @@ import { RunStatus } from "@fuse/shared";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import type { AuthenticatedRequest } from "../auth/auth.types";
 import { ExecutionService } from "./execution.service";
+import { CreateRunDto } from "./dto/create-run.dto";
+import { PageSubmitDto } from "./dto/page-submit.dto";
 import { RunsListQueryDto } from "./dto/runs-list-query.dto";
+import { SubmitInputsDto } from "./dto/submit-inputs.dto";
 
 @ApiTags("runs")
 @ApiBearerAuth()
@@ -30,10 +33,7 @@ export class ExecutionController {
 
   @Post()
   @ApiOperation({ summary: "Create a new scenario run" })
-  create(
-    @Req() req: AuthenticatedRequest,
-    @Body() body: { scenarioId: string; inputs?: Record<string, unknown> },
-  ) {
+  create(@Req() req: AuthenticatedRequest, @Body() body: CreateRunDto) {
     return this.executionService.createRun(
       req.user.userId,
       body.scenarioId,
@@ -97,7 +97,7 @@ export class ExecutionController {
   submitPage(
     @Req() req: AuthenticatedRequest,
     @Param("id") id: string,
-    @Body() body: { stepIndex: number; data: Record<string, unknown> },
+    @Body() body: PageSubmitDto,
   ) {
     return this.executionService.submitPageData(
       id,
@@ -114,7 +114,7 @@ export class ExecutionController {
   submitInputs(
     @Req() req: AuthenticatedRequest,
     @Param("id") id: string,
-    @Body() body: { stepIndex: number; values: Record<string, unknown> },
+    @Body() body: SubmitInputsDto,
   ) {
     return this.executionService.submitInputs(
       id,

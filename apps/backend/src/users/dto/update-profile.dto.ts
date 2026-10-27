@@ -1,7 +1,8 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
 import { IsEmail, IsOptional, IsString } from "class-validator";
+import type { UpdateProfileDto as SharedUpdateProfileDto } from "@fuse/shared";
 
-export class UpdateProfileDto {
+export class UpdateProfileDto implements SharedUpdateProfileDto {
   @ApiPropertyOptional({ example: "Иван" })
   @IsOptional()
   @IsString()
