@@ -1,7 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { IsNotEmpty, IsOptional, IsString, IsUrl } from "class-validator";
+import type { CreateAppDto as SharedCreateAppDto } from "@fuse/shared";
 
-export class CreateAppDto {
+export class CreateAppDto implements SharedCreateAppDto {
   @ApiProperty({ example: "My API" })
   @IsString()
   @IsNotEmpty()
