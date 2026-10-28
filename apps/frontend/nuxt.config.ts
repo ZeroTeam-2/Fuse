@@ -69,6 +69,7 @@ export default defineNuxtConfig({
       // (страницы могут переопределять его через useHead).
       title: "Fuse",
       link: [
+        { rel: "icon", type: "image/x-icon", href: "/favicon.ico" },
         { rel: "preconnect", href: "https://fonts.googleapis.com" },
         {
           rel: "preconnect",
