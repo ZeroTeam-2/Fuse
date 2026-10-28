@@ -48,7 +48,7 @@ const minio = new MinioClient({
   port: Number(process.env.S3_PORT ?? 9000),
   useSSL: false,
   accessKey: process.env.S3_ACCESS_KEY ?? "minioadmin",
-  secretKey: process.env.S3_SECRET_KEY ?? "minioadmin",
+  secretKey: process.env.S3_SECRET_KEY ?? "fuse-local-dev-secret",
 });
 
 const bucket = process.env.S3_BUCKET ?? "fuse";
