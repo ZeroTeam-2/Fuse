@@ -1,4 +1,4 @@
-# Инфраструктура для локальной разработки: MongoDB, LocalStack (SQS), MinIO.
+# Инфраструктура для локальной разработки: MongoDB, LocalStack (SQS), Garage (S3).
 #
 # Здесь ТОЛЬКО инфраструктура. Фронтенд и бэкенд запускаются на хосте
 # (`pnpm dev`) с hot-reload и ходят в эти контейнеры через localhost:
@@ -9,12 +9,12 @@
 #
 # Полный стек в докере (backend + frontend + caddy) — это docker-compose.yml.
 #
-# Порты на хосте: mongo 27018, sqs 4566, s3 9000, консоль minio 9001.
+# Порты на хосте: mongo 27018, sqs 4566, s3 9000.
 #
 # ВАЖНО: значения ниже намеренно захардкожены и НЕ берутся из ${...}.
 # Docker Compose автоматически читает корневой .env (но не .env.local), а там
-# лежат БОЕВЫЕ креды и имя прод-бакета — при интерполяции локальный MinIO
-# поднимался с прод-ключами и прод-именем бакета. Это локальная инфраструктура:
+# лежат БОЕВЫЕ креды и имя прод-бакета — при интерполяции локальное хранилище
+# поднималось с прод-ключами и прод-именем бакета. Это локальная инфраструктура:
 # креды фиксированные и должны совпадать с .env.local.example.
 services:
   mongo:
@@ -56,21 +56,34 @@ services:
       retries: 10
       start_period: 30s
 
-  minio:
-    image: minio/minio:latest
-    container_name: fuse-minio
+  # S3-совместимое хранилище. Бакет и ключ доступа Garage заводит сам при первом
+  # старте (--single-node --default-bucket), поэтому отдельного бутстрап-контейнера
+  # здесь нет. Веб-консоли у Garage тоже нет: смотреть бакет — через pnpm test:infra
+  # или aws-cli/rclone на http://localhost:9000 (см. README).
+  garage:
+    image: dxflrs/garage:v2.5.0
+    container_name: fuse-garage
     restart: unless-stopped
-    command: server /data --console-address ":9001"
+    # Entrypoint у образа пустой, cmd по умолчанию — ["/garage", "server"],
+    # поэтому путь к бинарю указываем явно.
+    command: ["/garage", "server", "--single-node", "--default-bucket"]
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      GARAGE_DEFAULT_ACCESS_KEY: minioadmin
+      # Не короче 16 символов: с более коротким Garage отказывается стартовать.
+      # Значение должно совпадать с S3_SECRET_KEY в .env.local.example.
+      GARAGE_DEFAULT_SECRET_KEY: fuse-local-dev-secret
+      GARAGE_DEFAULT_BUCKET: fuse
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      # S3 API Garage слушает 3900, наружу отдаём привычный 9000 — чтобы
+      # .env.local.example и дефолты S3_PORT в коде остались нетронутыми.
+      - "9000:3900"
     volumes:
-      - fuse-minio-data:/data
+      - ./docker/garage/garage.toml:/etc/garage.toml:ro
+      - fuse-garage-meta:/var/lib/garage/meta
+      - fuse-garage-data:/var/lib/garage/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      # В образе нет шелла вообще, поэтому healthcheck только в exec-форме.
+      test: ["CMD", "/garage", "status"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -85,22 +98,7 @@ services:
     ports:
       - "8085:8080"
 
-  # Одноразовый бутстрап: создаёт бакет и завершается. Идемпотентен.
-  minio-init:
-    image: minio/mc:latest
-    container_name: fuse-minio-init
-    restart: "no"
-    depends_on:
-      minio:
-        condition: service_healthy
-    environment:
-      S3_ACCESS_KEY: minioadmin
-      S3_SECRET_KEY: minioadmin
-      S3_BUCKET: fuse
-    entrypoint: ["/bin/sh", "/init-bucket.sh"]
-    volumes:
-      - ./docker/minio/init-bucket.sh:/init-bucket.sh:ro
-
 volumes:
   fuse-mongo-data:
-  fuse-minio-data:
+  fuse-garage-meta:
+  fuse-garage-data:

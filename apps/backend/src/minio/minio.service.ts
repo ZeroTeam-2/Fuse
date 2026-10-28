@@ -48,7 +48,8 @@ export class MinioService implements OnModuleInit {
       port,
       useSSL,
       accessKey: this.configService.get<string>("S3_ACCESS_KEY") ?? "minioadmin",
-      secretKey: this.configService.get<string>("S3_SECRET_KEY") ?? "minioadmin",
+      secretKey:
+        this.configService.get<string>("S3_SECRET_KEY") ?? "fuse-local-dev-secret",
     });
 
     try {
