@@ -1,0 +1,20 @@
+# Конфиги, из которых AST-экстрактор делает узлы на каждый ключ JSON
+# ("compilerOptions", "exclude", "$schema"...). Для графа кода это шум:
+# ~45 узлов и ложные «дубликаты имён» между apps/*. package.json НЕ исключаем —
+# через него в граф попадают рёбра к npm-зависимостям.
+tsconfig*.json
+nest-cli.json
+turbo.json
+oxlint.json
+vitest.config.ts
+vitest.infra.config.ts
+commitlint.config.ts
+
+# Документы. Решение по graphify: граф строим ТОЛЬКО по коду.
+# Структурный разбор markdown бесплатен, но документные узлы занимают места
+# сидов и бюджет печати — замеры показали падение полноты ответов про код.
+# Благодаря этому `graphify update .` остаётся код-онли и не требует флагов.
+*.md
+*.mdc
+docs/
+openspec/
