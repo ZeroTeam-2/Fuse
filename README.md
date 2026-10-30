@@ -10,7 +10,7 @@
 │  (Nuxt 3)    │     │  (NestJS: API + WS +   │     │              │
 │              │◀───▶│   SQS-worker в одном   │     └──────────────┘
 └──────────────┘  WS │      процессе)         │────▶┌──────────────┐
-                     └───────────┬────────────┘     │    MinIO     │
+                     └───────────┬────────────┘     │    Garage    │
                                  │                   │  (S3 storage) │
                            ┌──────┴───────┐          └──────────────┘
                            │   AWS SQS    │
@@ -26,7 +26,7 @@
 - **AWS SQS** — очередь исполнения сценариев (enqueue при `POST /api/runs` → consumer в том же backend-процессе).
 - **LocalStack** — локальная эмуляция AWS SQS для разработки.
 - **MongoDB** — основное хранилище данных.
-- **MinIO** — S3-совместимое файловое хранилище (аватары, загруженные файлы).
+- **Garage** — S3-совместимое файловое хранилище локальной разработки (аватары, загруженные файлы). В бою вместо него внешний S3, адрес задаётся через `S3_URL`.
 - **Caddy** — reverse proxy в docker-compose (роутит `/api/*` в backend, остальное во frontend).
 - **Shared** (`packages/shared`) — общие TypeScript типы, enum'ы, категории, WebSocket события.
 
@@ -66,7 +66,7 @@ pnpm install
 # 2. Базовый .env (JWT_SECRET, OAuth-креды и т.п.)
 cp .env.example .env
 
-# 3. Инфраструктура в докере: MongoDB + LocalStack (SQS) + MinIO
+# 3. Инфраструктура в докере: MongoDB + LocalStack (SQS) + Garage (S3)
 pnpm infra
 
 # 4. Локальный профиль: приложение пойдёт в контейнеры, а не в удалённые сервисы
@@ -88,8 +88,7 @@ pnpm dev:frontend  # frontend
 |---|---|---|
 | MongoDB | `27018` | не 27017 — чтобы не конфликтовать с системным `mongod` |
 | SQS (LocalStack) | `4566` | очередь + DLQ создаются на старте |
-| S3 (MinIO) | `9000` | бакет `fuse` создаётся на старте |
-| Консоль MinIO | `9001` | `minioadmin` / `minioadmin` |
+| S3 (Garage) | `9000` | бакет `fuse` создаётся на старте; внутри контейнера порт 3900 |
 | Мок-API | `8085` | go-httpbin; на него смотрит сид-приложение |
 
 ### Сид локальной БД
@@ -143,6 +142,44 @@ pnpm infra:reset  # снести вместе с томами и поднять 
 её нужно поднять обратно через `pnpm infra`, иначе бэкенд не достучится до
 MongoDB (`ECONNREFUSED ... :27018`).
 
+#### Переход с MinIO на Garage (разовый шаг)
+
+Локальное S3-хранилище переехало с MinIO на Garage: образы `minio/minio` и
+`minio/mc` удалены из Docker Hub, апстрим архивирован, и `pnpm infra` на чистой
+машине перестал подниматься. Что нужно сделать каждому один раз:
+
+```bash
+# 1. Снять старый контейнер: compose про него больше не знает, он остаётся
+#    осиротевшим и держит порт 9000 и свой том.
+docker compose -f docker-compose.dev.yml down --remove-orphans
+
+# 2. Удалить том MinIO (данные в нём не переносятся — это локальные файлы).
+docker volume rm fuse_fuse-minio-data
+
+# 3. Поправить S3_SECRET_KEY в своём .env.local — файл в .gitignore и сам
+#    не обновится. Новое значение см. в .env.local.example: Garage не стартует
+#    с секретом короче 16 символов, а прежний `minioadmin` — 10.
+
+# 4. Поднять заново.
+pnpm infra
+```
+
+Если пропустить шаг 3, бэкенд поднимется, но все обращения к S3 будут падать на
+проверке подписи.
+
+#### Как посмотреть содержимое бакета
+
+Веб-консоли у Garage нет (это была консоль MinIO на `9001`). Вместо неё:
+
+```bash
+pnpm test:infra                                  # бакет существует + round-trip объекта
+docker exec fuse-garage /garage bucket info fuse # размер, число объектов, права ключа
+docker exec fuse-garage /garage status           # состояние ноды
+```
+
+Для полноценного просмотра файлов подойдёт любой S3-клиент (`aws-cli`, `rclone`)
+на эндпоинт `http://localhost:9000`, регион `us-east-1`, с кредами из `.env.local`.
+
 ## Запуск через Docker Compose (полный стек)
 
 Полный стек в докере (backend + frontend + caddy) — это `docker-compose.yml`.
@@ -168,11 +205,11 @@ docker compose up -d --build
 | `AWS_ACCESS_KEY_ID` | `test` | AWS access key (LocalStack: `test`) |
 | `AWS_SECRET_ACCESS_KEY` | `test` | AWS secret key (LocalStack: `test`) |
 | `AWS_ENDPOINT_URL` | — | Endpoint для LocalStack (пусто = реальный AWS) |
-| `S3_URL` | `localhost` | Хост MinIO |
-| `S3_PORT` | `9000` | Порт MinIO |
-| `S3_ACCESS_KEY` | `minioadmin` | Ключ доступа MinIO |
-| `S3_SECRET_KEY` | `minioadmin` | Секрет MinIO |
-| `S3_BUCKET` | `fuse` | Bucket MinIO |
+| `S3_URL` | `localhost` | Хост S3 |
+| `S3_PORT` | `9000` | Порт S3 |
+| `S3_ACCESS_KEY` | `minioadmin` | Ключ доступа S3 |
+| `S3_SECRET_KEY` | `fuse-local-dev-secret` | Секрет S3; локально не короче 16 символов (требование Garage) |
+| `S3_BUCKET` | `fuse` | Bucket S3 |
 | `JWT_SECRET` | — | Секрет для JWT (мин. 32 символа) |
 | `JWT_ACCESS_EXPIRES` | `15m` | Время жизни access-токена |
 | `JWT_REFRESH_EXPIRES` | `7d` | Время жизни refresh-токена |
@@ -201,11 +238,34 @@ pnpm seed             # Наполнить локальную БД сид-дан
 pnpm lint             # Линтинг (oxlint)
 pnpm format           # Форматирование (oxfmt)
 pnpm gen:types        # Генерация типов из OpenAPI-спеки backend'а
-pnpm infra            # Поднять инфраструктуру: MongoDB + LocalStack (SQS) + MinIO
+pnpm infra            # Поднять инфраструктуру: MongoDB + LocalStack (SQS) + Garage (S3)
 pnpm infra:logs       # Логи инфраструктуры
 pnpm infra:down       # Остановить инфраструктуру (данные сохраняются)
 pnpm infra:reset      # Остановить и удалить тома (чистая БД и бакет)
 ```
+
+## Граф кода (graphify MCP)
+
+В репозитории настроен project-scoped MCP-сервер `graphify` (`.mcp.json`). Он даёт агенту
+навигацию по графу кода: поиск по связям, соседей узла, ключевые абстракции (god nodes),
+сообщества и кратчайшие пути между сущностями — вместо чтения файлов пачками.
+
+Сам граф (`graphify-out/`) в историю не коммитится, он собирается локально. Порядок:
+
+```bash
+# 1. Один раз: поставить graphify, чтобы бинарь был в PATH
+#    (команда graphify-mcp из .mcp.json берётся оттуда же)
+
+# 2. Собрать граф — скилл /graphify в агенте (нужен LLM для разметки и кластеризации)
+#    В Claude Code:  /graphify
+
+# 3. Дальше инкрементально, уже без LLM:
+graphify update .
+```
+
+Пока `graphify-out/graph.json` не собран, MCP-сервер не поднимется — это ожидаемо и на
+сборку, тесты и запуск проекта никак не влияет. Инструмент `graph_stats` сообщает, на каком
+коммите построен граф, и предупреждает, если он отстал от `HEAD`.
 
 ## Структура проекта
 

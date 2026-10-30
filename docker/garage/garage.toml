@@ -1,0 +1,32 @@
+# Конфигурация Garage для ЛОКАЛЬНОЙ разработки (docker-compose.dev.yml).
+#
+# Garage заменил MinIO: образы minio/minio и minio/mc удалены из Docker Hub,
+# апстрим архивирован — локальная инфраструктура перестала подниматься с нуля.
+#
+# Секреты ниже захардкожены намеренно, как и креды в docker-compose.dev.yml:
+# это однонодовая локальная инсталляция без межнодового трафика и без доступа
+# извне. Боевой S3 — внешний (Timeweb), этот конфиг до него не доходит.
+
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "sqlite"
+
+# Одна нода — реплицировать не на кого.
+replication_factor = 1
+
+rpc_bind_addr = "[::]:3901"
+rpc_public_addr = "127.0.0.1:3901"
+rpc_secret = "0da499e709f02da38689c90f192389a666e590217f28b2e350777681819aa54b"
+
+[s3_api]
+# Garage обслуживает ровно один регион и отвечает AuthorizationHeaderMalformed
+# на запросы к любому другому. Клиент в apps/backend/src/minio/minio.service.ts
+# регион явно не задаёт, поэтому здесь стоит дефолт S3-клиентов, а не "garage"
+# из примеров документации.
+s3_region = "us-east-1"
+api_bind_addr = "[::]:3900"
+root_domain = ".s3.garage.localhost"
+
+[admin]
+api_bind_addr = "[::]:3903"
+admin_token = "v+gtsHYQ9PEnosArHKzxaUs4HrMMx2RmFYjyxuXbbpE="
