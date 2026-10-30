@@ -34,7 +34,7 @@ export const envSchema = z.object({
     .optional()
     .transform((value) => (value ? Number(value) : undefined)),
   S3_ACCESS_KEY: z.string().default("minioadmin"),
-  S3_SECRET_KEY: z.string().default("minioadmin"),
+  S3_SECRET_KEY: z.string().default("fuse-local-dev-secret"),
   S3_BUCKET: z.string().default("fuse"),
 
   JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters"),
