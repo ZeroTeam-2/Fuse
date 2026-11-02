@@ -27,10 +27,83 @@ const ERRORS: Record<string, string> = {
 const errorMessage = computed(() =>
   error.value ? (ERRORS[error.value] ?? "Не удалось войти. Попробуйте ещё раз.") : "",
 );
+
+// ─── Локальный вход без OAuth ────────────────────────────────────────────────
+// Весь блок живёт внутри `if (import.meta.dev)`: в прод-сборке `import.meta.dev`
+// заменяется литералом false, и ветка вырезается целиком вместе с адресом
+// эндпоинта. Признак приходит от бэкенда (404 = вход не настроен), а не из
+// клиентской конфигурации: переменную можно выставить ошибочно, а
+// незарегистрированный маршрут соврать не может.
+const devAvailable = useState<boolean | null>("dev-login-available", () => null);
+const devEmail = ref("");
+const devPassword = ref("");
+const devSubmitting = ref(false);
+const devError = ref("");
+
+const displayedError = computed(() => errorMessage.value || devError.value);
+
+function closeModal() {
+  devError.value = "";
+  devPassword.value = "";
+  close();
+}
+
+// Заглушка для прод-сборки: там dev-ветка ниже вырезана, а шаблон на неё
+// всё равно ссылается. Реальная реализация назначается только в dev.
+// eslint-disable-next-line prefer-const
+let devSubmit: () => Promise<void> = async () => {};
+
+if (import.meta.dev) {
+  const apiBase = useApiBase();
+  const devLoginUrl = `${apiBase}/api/auth/dev-login`;
+
+  const probe = async () => {
+    if (devAvailable.value !== null) return;
+    try {
+      const response = await fetch(devLoginUrl, { credentials: "include" });
+      devAvailable.value = response.ok;
+    } catch {
+      devAvailable.value = false;
+    }
+  };
+
+  // Спрашиваем не на каждой загрузке страницы, а при первом открытии модалки.
+  watch(open, (isOpen) => {
+    if (isOpen) void probe();
+  });
+
+  const authStore = useAuthStore();
+
+  devSubmit = async () => {
+    devError.value = "";
+    devSubmitting.value = true;
+    try {
+      const response = await fetch(devLoginUrl, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: devEmail.value, password: devPassword.value }),
+      });
+
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { message?: string } | null;
+        devError.value = body?.message || "Не удалось войти. Проверьте логин и пароль.";
+        return;
+      }
+
+      await authStore.fetchUser();
+      closeModal();
+    } catch {
+      devError.value = "Бэкенд недоступен. Запущен ли pnpm dev:main?";
+    } finally {
+      devSubmitting.value = false;
+    }
+  };
+}
 </script>
 
 <template>
-  <Modal v-if="open" :width="440" @close="close">
+  <Modal v-if="open" :width="440" @close="closeModal">
     <div class="relative flex flex-col items-center text-center pt-2 pb-3">
       <!-- Modal рисует крестик только вместе с заголовком, а он тут не нужен. -->
       <IconButton
@@ -38,7 +111,7 @@ const errorMessage = computed(() =>
         label="Закрыть"
         :size="34"
         class="absolute right-0 top-0"
-        @click="close"
+        @click="closeModal"
       >
         <Icon name="x" :size="16" />
       </IconButton>
@@ -55,10 +128,10 @@ const errorMessage = computed(() =>
       </p>
 
       <p
-        v-if="errorMessage"
+        v-if="displayedError"
         class="w-full font-sans text-[0.8125rem] text-rose-600 bg-rose-50 border border-rose-200 rounded-xl px-3.5 py-2.5 mb-5"
       >
-        {{ errorMessage }}
+        {{ displayedError }}
       </p>
 
       <!-- Фирменная кнопка Яндекс ID: красный #FC3F1D и белый логотип «Я». -->
@@ -74,6 +147,39 @@ const errorMessage = computed(() =>
         </span>
         Войти с Яндекс ID
       </a>
+
+      <!--
+        Локальный вход: виден только когда бэкенд подтвердил, что он настроен.
+        В прод-сборке devAvailable остаётся null, и блок не рисуется.
+      -->
+      <form
+        v-if="devAvailable"
+        class="w-full mt-6 pt-6 border-t border-zinc-200 flex flex-col gap-3 text-left"
+        @submit.prevent="devSubmit"
+      >
+        <p class="font-sans text-[0.75rem] font-semibold uppercase tracking-wide text-zinc-400">
+          Локальный вход
+        </p>
+        <Input
+          v-model="devEmail"
+          label="Логин"
+          type="email"
+          placeholder="seed@fuse.local"
+        />
+        <Input
+          v-model="devPassword"
+          label="Пароль"
+          type="password"
+        />
+        <Button
+          type="submit"
+          variant="dark"
+          full-width
+          :disabled="devSubmitting || !devEmail || !devPassword"
+        >
+          {{ devSubmitting ? "Входим…" : "Войти" }}
+        </Button>
+      </form>
 
       <p class="font-sans text-[0.75rem] text-zinc-400 mt-5">
         Продолжая, вы соглашаетесь с условиями использования Fuse.
