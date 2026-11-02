@@ -53,8 +53,12 @@
   пользу базового, три остальных наследуют его и добавляют только свои поля.
 - Разметка шапки переезжает из `layouts/default.vue` в `TopNav.vue`; layout
   подключает компонент, витрина `ui-kit.vue` показывает боевую шапку.
-- Поведение не меняется нигде: списки расширений, подписи операторов, границы
-  и значения по умолчанию пагинации, вид и содержимое шапки остаются теми же.
+- Поведение сохраняется везде, кроме одного вырожденного входа: списки
+  расширений, подписи операторов, границы и значения по умолчанию пагинации,
+  вид и содержимое шапки остаются теми же. Единственное отличие — файл без
+  расширения, чьё имя совпадает с допустимым расширением (имя ровно `pdf` при
+  `accept: [".pdf"]`): раньше dropzone-проверка его пропускала, теперь
+  отклоняет. Разбор — в `design.md`.
 
 ## Capabilities
 
@@ -64,8 +68,9 @@ _нет._
 
 ### Modified Capabilities
 
-_нет — чистый рефакторинг без изменения наблюдаемого поведения, в
-`.openspec.yaml` установлен `skip_specs: true`._
+_нет — рефакторинг без изменения требований: единственное отличие в
+поведении (файл без расширения с именем допустимого расширения) спекой
+`step-pages` не описано, в `.openspec.yaml` установлен `skip_specs: true`._
 
 ## Impact
 
@@ -75,8 +80,9 @@ _нет — чистый рефакторинг без изменения наб
   `packages/shared/src/types/index.ts`, реэкспорт в
   `packages/shared/src/index.ts`.
 - **Код (бэкенд)**: новый `apps/backend/src/common/dto/pagination-query.dto.ts`;
-  правятся `apps/backend/src/apps/dto/pagination-query.dto.ts` (переименование
-  класса в `AppsListQueryDto`), `apps/backend/src/execution/dto/runs-list-query.dto.ts`,
+  `apps/backend/src/apps/dto/pagination-query.dto.ts` переименовывается в
+  `apps-list-query.dto.ts` вместе с классом (`AppsListQueryDto`); правятся
+  `apps/backend/src/execution/dto/runs-list-query.dto.ts`,
   `apps/backend/src/marketplace/dto/marketplace-query.dto.ts`; удаляются
   `apps/backend/src/notifications/dto/pagination-query.dto.ts` и
   `apps/backend/src/scenarios/dto/pagination-query.dto.ts`; обновляются
