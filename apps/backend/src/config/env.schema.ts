@@ -34,7 +34,7 @@ export const envSchema = z.object({
     .optional()
     .transform((value) => (value ? Number(value) : undefined)),
   S3_ACCESS_KEY: z.string().default("minioadmin"),
-  S3_SECRET_KEY: z.string().default("minioadmin"),
+  S3_SECRET_KEY: z.string().default("fuse-local-dev-secret"),
   S3_BUCKET: z.string().default("fuse"),
 
   JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters"),
@@ -47,6 +47,13 @@ export const envSchema = z.object({
     .string()
     .default("http://localhost:3001/api/auth/callback"),
   APP_URL: z.string().default("http://localhost:5173"),
+
+  // Локальный вход без OAuth: пара задаётся только на машине разработчика
+  // (.env.local). Пустой DEV_LOGIN_PASSWORD означает, что маршрута нет —
+  // AuthController отвечает на него 404. В проде непустой пароль запрещён,
+  // см. superRefine ниже.
+  DEV_LOGIN_EMAIL: z.string().default(""),
+  DEV_LOGIN_PASSWORD: z.string().default(""),
 
   // Лимиты размера файлов. Дефолты — из file-limits.constants.ts (единый
   // источник правды); значения в МБ, производные байты считаются в потребителях.
@@ -69,6 +76,19 @@ export const envSchema = z.object({
 
   LOG_COLLECTOR_URL: z.string().default(""),
   MONIUM_ENABLED: z.string().default(""),
+}).superRefine((env, ctx) => {
+  // docker-compose.yml поднимает backend с NODE_ENV=production по умолчанию и
+  // пробрасывает туда же DEV_LOGIN_*. Пара кредов, случайно оставленная в .env,
+  // тихо открыла бы вход в бою, поэтому падаем на старте, а не игнорируем
+  // переменную молча.
+  if (env.NODE_ENV === "production" && env.DEV_LOGIN_PASSWORD !== "") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["DEV_LOGIN_PASSWORD"],
+      message:
+        "локальный вход по паролю запрещён в production — очистите DEV_LOGIN_PASSWORD или запускайте с NODE_ENV=development",
+    });
+  }
 });
 
 export type Env = z.infer<typeof envSchema>;

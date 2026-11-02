@@ -8,7 +8,7 @@
     "dev": "turbo run dev",
     "dev:main": "turbo run dev --filter=@fuse/backend",
     "dev:frontend": "turbo run dev --filter=@fuse/frontend",
-    "infra": "docker compose -f docker-compose.dev.yml up -d --wait mongo localstack minio mock-api && docker compose -f docker-compose.dev.yml run --rm minio-init",
+    "infra": "docker compose -f docker-compose.dev.yml up -d --wait mongo localstack garage mock-api",
     "infra:down": "docker compose -f docker-compose.dev.yml down",
     "infra:reset": "docker compose -f docker-compose.dev.yml down -v && pnpm infra",
     "infra:logs": "docker compose -f docker-compose.dev.yml logs -f",
