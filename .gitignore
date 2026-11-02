@@ -9,6 +9,8 @@ node_modules/
 
 # Build outputs
 dist/
+# Отдельный outDir воркер-процесса: свой watch, чтобы не воевать с dist/ API.
+dist-worker/
 .output/
 .nuxt/
 .nitro/

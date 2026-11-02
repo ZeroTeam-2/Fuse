@@ -5,6 +5,7 @@
   "scripts": {
     "prebuild": "pnpm --filter @fuse/shared build",
     "dev": "nest start --watch",
+    "dev:worker": "nest start --watch --config nest-cli.worker.json",
     "build": "nest build",
     "start": "node dist/main",
     "typecheck": "tsc --noEmit",
