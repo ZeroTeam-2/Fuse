@@ -5,25 +5,39 @@
 ## Архитектура
 
 ```
-┌──────────────┐     ┌────────────────────────┐     ┌──────────────┐
-│   Frontend   │────▶│        Backend         │────▶│   MongoDB    │
-│  (Nuxt 3)    │     │  (NestJS: API + WS +   │     │              │
-│              │◀───▶│   SQS-worker в одном   │     └──────────────┘
-└──────────────┘  WS │      процессе)         │────▶┌──────────────┐
-                     └───────────┬────────────┘     │    MinIO     │
-                                 │                   │  (S3 storage) │
-                           ┌──────┴───────┐          └──────────────┘
-                           │   AWS SQS    │
-                           │  (очередь    │
-                           │  исполнения) │
-                           └──────────────┘
+┌──────────────┐     ┌───────────────────────┐     ┌────────────────┐
+│   Frontend   │────▶│      API-процесс      │────▶│    MongoDB     │
+│  (Nuxt 3)    │     │  (NestJS: REST + WS,  │◀───▶│  + мост событий│
+│              │◀───▶│  очередь НЕ читает)   │     │ws_events_bridge│
+└──────────────┘  WS └───────────┬───────────┘     └────────▲───────┘
+                                 │ enqueue {runId}           │ конверты
+                                 ▼                           │ событий
+                           ┌──────────────┐          ┌───────┴────────┐
+                           │   AWS SQS    │─────────▶│ Воркер-процессы│
+                           │  (очередь    │  N:1     │  (N штук, SQS- │
+                           │  исполнения) │          │  consumer, без │
+                           └──────────────┘          │     HTTP)      │
+                                                     └───────┬────────┘
+                                                             │
+                                                     ┌───────▼────────┐
+                                                     │     MinIO      │
+                                                     │  (S3 storage)  │
+                                                     └────────────────┘
 ```
+
+Два процесса из одного образа: `node dist/main` — API, `node dist/worker-main` —
+воркер. API держит сокеты клиентов, но очередь не потребляет; воркеры исполняют
+шаги, но HTTP не поднимают. События воркера доезжают до сокетов через
+capped-коллекцию `ws_events_bridge` в MongoDB (tailable cursor на стороне API) —
+внешнего брокера не добавляется, replica set не требуется.
 
 ### Компоненты
 
 - **Frontend** (`apps/frontend`) — Nuxt 3 SSR, Pinia, Tailwind-free scoped CSS. Страницы маркетплейса, конструктор сценариев, личный кабинет.
-- **Backend** (`apps/backend`) — NestJS REST API. Модули: auth (Yandex OAuth + JWT), users, apps (импорт OpenAPI-спеков), scenarios (CRUD + валидация), marketplace (каталог карточек), execution (запуск сценариев), uploads (single + chunked), websocket (real-time события). SQS-consumer (`WorkerService`) исполняется в том же процессе и эмитит WebSocket-события напрямую через `RunGateway` (без внешнего брокера). Поддерживает шаги: api, delay, periodic (polling), scenario (вложенные), file.
-- **AWS SQS** — очередь исполнения сценариев (enqueue при `POST /api/runs` → consumer в том же backend-процессе).
+- **Backend / API-процесс** (`apps/backend`, entrypoint `src/main.ts`) — NestJS REST API + WebSocket-гейтвеи. Модули: auth (Yandex OAuth + JWT), users, apps (импорт OpenAPI-спеков), scenarios (CRUD + валидация), marketplace (каталог карточек), execution (ручки запусков), uploads (single + chunked), websocket (real-time события), events (шина + чтение моста). Очередь **не** потребляет.
+- **Backend / воркер-процесс** (`apps/backend`, entrypoint `src/worker-main.ts`) — SQS-consumer (`WorkerService`) в NestJS application context без HTTP-сервера. Исполняет шаги: api, delay, periodic (polling), scenario (вложенные), file. Масштабируется горизонтально: N процессов на одной очереди, координация не нужна (семантика SQS). Параллелизм внутри процесса — `WORKER_CONCURRENCY`.
+- **Мост событий** (`ws_events_bridge`) — capped-коллекция MongoDB: воркер пишет конверты событий, API-процесс читает их tailable-курсором и транслирует в socket.io-комнаты. Односторонний канал, работает на standalone MongoDB.
+- **AWS SQS** — очередь исполнения сценариев (enqueue при `POST /api/runs` в API-процессе → consumer в воркер-процессе).
 - **LocalStack** — локальная эмуляция AWS SQS для разработки.
 - **MongoDB** — основное хранилище данных.
 - **MinIO** — S3-совместимое файловое хранилище (аватары, загруженные файлы).
@@ -33,11 +47,16 @@
 ### Поток выполнения сценария
 
 1. Пользователь запускает сценарий → `POST /api/runs`
-2. Backend создаёт Run в MongoDB и отправляет задачу в SQS-очередь
-3. SQS-consumer (в том же backend-процессе) подхватывает сообщение, выполняет шаги последовательно
-4. WebSocket события (step:start, step:done, progress, page:required) эмитятся напрямую через `RunGateway` (Socket.IO) — worker и gateway в одном процессе
+2. API-процесс создаёт Run в MongoDB (`pending`) и отправляет `{runId}` в SQS-очередь
+3. Воркер-процесс подхватывает сообщение, выполняет шаги последовательно и сохраняет состояние в Run после каждого шага
+4. WebSocket-события (step:start, step:done, progress, page:required) воркер публикует конвертами в `ws_events_bridge`; API-процесс тейлит коллекцию и эмитит их в комнату `run:{runId}` через Socket.IO
 5. Frontend получает события через Socket.IO и обновляет UI в реальном времени
 6. Для шагов типа `page` — исполнение переходит в режим ожидания ввода (WAITING_INPUT)
+
+Состояние Run пишется в MongoDB **до** публикации события, а гейтвей отдаёт
+снапшот при каждом подключении клиента — поэтому мост отвечает за «живость», а
+не за истину: потеря события в нём деградирует UX, но не корректность.
+Без запущенного воркера запуски остаются в `pending`.
 
 ### Загрузка файлов
 
@@ -72,15 +91,23 @@ pnpm infra
 # 4. Локальный профиль: приложение пойдёт в контейнеры, а не в удалённые сервисы
 cp .env.local.example .env.local
 
-# 5. Фронт и бэк на хосте
+# 5. Фронт, API и воркер на хосте
 pnpm dev
 
-# Или по отдельности:
-pnpm dev:main      # backend API (+ SQS-worker в том же процессе)
+# Или по отдельности (разными терминалами):
+pnpm dev:main      # API-процесс (REST + WS), очередь не читает
+pnpm dev:worker    # воркер-процесс (SQS-consumer)
 pnpm dev:frontend  # frontend
 ```
 
 Фронтенд — http://localhost:5173, бэкенд — http://localhost:3001.
+
+`pnpm dev` поднимает **три** процесса приложения: фронтенд, API и воркер. Без
+воркера запуски сценариев останутся в `pending` — API очередь не потребляет.
+
+У процессов независимые watch-циклы и разные выходные каталоги (`dist/` у API,
+`dist-worker/` у воркера), поэтому пересборка API не трогает воркер: рестарт
+API посреди запуска больше не осиротляет исполнение на visibility timeout.
 
 ### Порты инфраструктуры
 
@@ -145,8 +172,9 @@ MongoDB (`ECONNREFUSED ... :27018`).
 
 ## Запуск через Docker Compose (полный стек)
 
-Полный стек в докере (backend + frontend + caddy) — это `docker-compose.yml`.
-`docker-compose.dev.yml` приложение **не** поднимает: там только инфраструктура.
+Полный стек в докере (backend + worker + frontend + caddy) — это
+`docker-compose.yml`. `docker-compose.dev.yml` приложение **не** поднимает:
+там только инфраструктура.
 
 ```bash
 cp .env.example .env
@@ -155,6 +183,31 @@ cp .env.example .env
 docker compose up -d --build
 # Доступно на http://localhost:${HTTP_PORT:-8081}
 ```
+
+Сервисы `backend` и `worker` собираются из одного образа
+(`apps/backend/Dockerfile`) и различаются только командой: `dist/main` против
+`dist/worker-main`.
+
+> **Важно при обновлении с версии без отдельного воркера:** контейнер `backend`
+> сам сценарии больше не исполняет. Без сервиса `worker` запуски остаются в
+> `pending`. Сервис входит в дефолтный `docker compose up`, отдельно включать
+> его не нужно.
+
+### Масштабирование воркеров
+
+```bash
+# N процессов-воркеров на одной очереди (у сервиса нет container_name и ports,
+# поэтому он масштабируется).
+docker compose up -d --scale worker=3
+
+# Сколько запусков держит ОДИН воркер (1–10, лимит выборки SQS).
+WORKER_CONCURRENCY=10 docker compose up -d
+```
+
+Суммарный параллелизм = `число воркеров × WORKER_CONCURRENCY`. Потребность
+больше 10 одновременных запусков закрывается числом воркеров, а не одним
+толстым процессом. Распределение сообщений обеспечивает SQS (visibility
+timeout) — координации между воркерами в коде нет.
 
 ## Переменные окружения
 
@@ -168,6 +221,7 @@ docker compose up -d --build
 | `AWS_ACCESS_KEY_ID` | `test` | AWS access key (LocalStack: `test`) |
 | `AWS_SECRET_ACCESS_KEY` | `test` | AWS secret key (LocalStack: `test`) |
 | `AWS_ENDPOINT_URL` | — | Endpoint для LocalStack (пусто = реальный AWS) |
+| `WORKER_CONCURRENCY` | `5` | Сколько запусков держит один воркер-процесс (1–10 — лимит выборки SQS) |
 | `S3_URL` | `localhost` | Хост MinIO |
 | `S3_PORT` | `9000` | Порт MinIO |
 | `S3_ACCESS_KEY` | `minioadmin` | Ключ доступа MinIO |
@@ -189,8 +243,9 @@ docker compose up -d --build
 ## Команды разработки
 
 ```bash
-pnpm dev              # Запуск backend + frontend
-pnpm dev:main         # Только backend API (+ SQS-worker)
+pnpm dev              # Запуск frontend + API + воркера
+pnpm dev:main         # Только API-процесс (REST + WS, очередь не читает)
+pnpm dev:worker       # Только воркер-процесс (SQS-consumer)
 pnpm dev:frontend     # Только frontend
 pnpm build            # Сборка всех пакетов
 pnpm typecheck        # TypeScript проверка всех пакетов
@@ -212,8 +267,10 @@ pnpm infra:reset      # Остановить и удалить тома (чис�
 ```
 Fuse/
 ├── apps/
-│   ├── backend/          # NestJS API + worker
+│   ├── backend/          # NestJS: два entrypoint'а — API и воркер
 │   │   ├── src/
+│   │   │   ├── main.ts   # entrypoint API-процесса (REST + WS)
+│   │   │   ├── worker-main.ts # entrypoint воркер-процесса (SQS-consumer)
 │   │   │   ├── auth/     # Yandex OAuth, JWT
 │   │   │   ├── users/    # Профили пользователей
 │   │   │   ├── apps/     # Импорт OpenAPI, CRUD приложений
@@ -223,6 +280,7 @@ Fuse/
 │   │   │   ├── uploads/  # Single + chunked загрузка файлов
 │   │   │   ├── minio/    # S3-хранилище
 │   │   │   ├── websocket/# Real-time события
+│   │   │   ├── events/   # Шина событий + мост воркер → API через MongoDB
 │   │   │   ├── logging/  # Структурированное логирование
 │   │   │   └── seed/     # Демонстрационные данные
 │   │   └── test/         # E2E и unit тесты
@@ -235,7 +293,7 @@ Fuse/
 │       └── e2e/          # Playwright тесты
 ├── packages/
 │   └── shared/           # Общие типы, enum'ы, категории
-├── docker-compose.yml     # Полный стек в докере (backend + frontend + caddy)
+├── docker-compose.yml     # Полный стек в докере (backend + worker + frontend + caddy)
 ├── docker-compose.dev.yml # Только инфраструктура для разработки на хосте
 └── Caddyfile              # Конфигурация reverse proxy
 ```
