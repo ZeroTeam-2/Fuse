@@ -17,7 +17,7 @@ import { ScenariosService } from "./scenarios.service";
 import { ManualInputsService } from "../execution/manual-inputs.service";
 import { CreateScenarioDto } from "./dto/create-scenario.dto";
 import { UpdateScenarioDto } from "./dto/update-scenario.dto";
-import { ScenarioPaginationQueryDto } from "./dto/pagination-query.dto";
+import { PaginationQueryDto } from "../common/dto/pagination-query.dto";
 
 @ApiTags("scenarios")
 @ApiBearerAuth()
@@ -33,7 +33,7 @@ export class ScenariosController {
   @ApiOperation({ summary: "List user's scenarios (paginated)" })
   findByOwner(
     @Req() req: AuthenticatedRequest,
-    @Query() query: ScenarioPaginationQueryDto,
+    @Query() query: PaginationQueryDto,
   ) {
     return this.scenariosService.findByOwner(
       req.user.userId,

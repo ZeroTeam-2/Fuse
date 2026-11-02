@@ -527,6 +527,18 @@ export interface MarketplaceCard {
   blockedReason?: string;
 }
 
+/** Приложение-провайдер в карточке маркетплейса: чем именно она пользуется. */
+export interface ProviderDetail {
+  appId: string;
+  name: string;
+  endpoints: {
+    id: string;
+    method: string;
+    path: string;
+    summary?: string;
+  }[];
+}
+
 export interface CategoryCount {
   category: string;
   count: number;

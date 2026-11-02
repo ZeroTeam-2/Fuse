@@ -1,24 +1,10 @@
 import { ApiPropertyOptional } from "@nestjs/swagger";
-import { Type } from "class-transformer";
-import { IsEnum, IsInt, IsOptional, IsString, Max, Min } from "class-validator";
+import { IsEnum, IsOptional, IsString } from "class-validator";
 import { SortOrder } from "@fuse/shared";
+import type { MarketplaceQuery } from "@fuse/shared";
+import { PaginationQueryDto } from "../../common/dto/pagination-query.dto";
 
-export class MarketplaceQueryDto {
-  @ApiPropertyOptional({ default: 1, minimum: 1 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  page?: number = 1;
-
-  @ApiPropertyOptional({ default: 20, minimum: 1, maximum: 100 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(100)
-  limit?: number = 20;
-
+export class MarketplaceQueryDto extends PaginationQueryDto implements MarketplaceQuery {
   @ApiPropertyOptional({ example: "Данные" })
   @IsOptional()
   @IsString()
