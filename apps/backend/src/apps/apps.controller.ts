@@ -21,6 +21,7 @@ import {
   ApiConsumes,
   ApiBody,
 } from "@nestjs/swagger";
+import { ALLOWED_SPEC_EXTENSIONS, getExtension } from "@fuse/shared";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import type { AuthenticatedRequest } from "../auth/auth.types";
 import { AppsService } from "./apps.service";
@@ -28,18 +29,11 @@ import { CreateAppDto } from "./dto/create-app.dto";
 import { ImportPreviewDto } from "./dto/import-preview.dto";
 import { UpdateAppDto } from "./dto/update-app.dto";
 import { FileImportDto, ImportPreviewFileDto } from "./dto/file-import.dto";
-import { PaginationQueryDto } from "./dto/pagination-query.dto";
+import { AppsListQueryDto } from "./dto/apps-list-query.dto";
 import {
   CreateEnvironmentDto,
   UpdateEnvironmentDto,
 } from "./dto/environment.dto";
-
-const ALLOWED_SPEC_EXTENSIONS = new Set([".json", ".yaml", ".yml"]);
-
-function getExtension(filename: string): string {
-  const dot = filename.lastIndexOf(".");
-  return dot >= 0 ? filename.slice(dot).toLowerCase() : "";
-}
 
 function validateSpecFile(file: Express.Multer.File): void {
   if (!file) {
@@ -65,7 +59,7 @@ export class AppsController {
   })
   findByOwner(
     @Req() req: AuthenticatedRequest,
-    @Query() query: PaginationQueryDto,
+    @Query() query: AppsListQueryDto,
   ) {
     return this.appsService.findByOwner(
       req.user.userId,

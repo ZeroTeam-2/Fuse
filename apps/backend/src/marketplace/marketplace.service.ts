@@ -8,22 +8,12 @@ import type {
   MarketplaceCard,
   MarketplaceQuery,
   PaginatedResponse,
+  ProviderDetail,
   Step,
 } from "@fuse/shared";
 import { Scenario, ScenarioDocument } from "../scenarios/scenario.schema";
 import { App, AppDocument } from "../apps/app.schema";
 import { ManualInputsService } from "../execution/manual-inputs.service";
-
-export interface ProviderDetail {
-  appId: string;
-  name: string;
-  endpoints: {
-    id: string;
-    method: string;
-    path: string;
-    summary?: string;
-  }[];
-}
 
 export interface MarketplaceCardDetail extends MarketplaceCard {
   description?: string;
