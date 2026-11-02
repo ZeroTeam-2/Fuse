@@ -10,8 +10,8 @@
         в готовые <span class="text-rose-600">сценарии</span>
       </h1>
       <p class="font-sans text-lg text-zinc-500 leading-normal max-w-[560px]">
-        Не документация, а рабочие карточки. Загрузите файл, пройдите поток или расшифруйте
-        звонок — прямо в браузере, без единой строчки кода.
+        Не документация, а рабочие карточки. Заполните данные, приложите файл и получите результат.
+        Без единой строчки кода.
       </p>
     </div>
 
@@ -96,9 +96,7 @@ const sortOptions = [
 const rangeStart = computed(() => (page.value - 1) * limit + 1);
 const rangeEnd = computed(() => (page.value - 1) * limit + cards.value.length);
 
-const allCount = computed(() =>
-  categories.value.reduce((sum, c) => sum + c.count, 0),
-);
+const allCount = computed(() => categories.value.reduce((sum, c) => sum + c.count, 0));
 
 const navItems = computed(() => [
   { label: ALL, count: allCount.value },
@@ -129,9 +127,7 @@ function applyCat(val: string) {
     selectedCategory.value = val;
     selectedSubcategory.value = "";
   } else {
-    const parent = categories.value.find((c) =>
-      c.subcategories.some((s) => s.name === val),
-    );
+    const parent = categories.value.find((c) => c.subcategories.some((s) => s.name === val));
     selectedCategory.value = parent?.category ?? "";
     selectedSubcategory.value = val;
   }
@@ -161,7 +157,11 @@ watch(search, () => {
 async function fetchCatalog() {
   loading.value = true;
   try {
-    const query: Record<string, unknown> = { page: page.value, limit, sort: sort.value };
+    const query: Record<string, unknown> = {
+      page: page.value,
+      limit,
+      sort: sort.value,
+    };
     if (search.value) query.search = search.value;
     if (selectedCategory.value) query.category = selectedCategory.value;
     if (selectedSubcategory.value) query.subcategory = selectedSubcategory.value;

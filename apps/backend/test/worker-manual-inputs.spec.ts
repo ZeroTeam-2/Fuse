@@ -107,14 +107,14 @@ function harness(run: Record<string, unknown>, steps: Step[], descriptors: Manua
     } as any,
     { findById: vi.fn(() => ({ exec: () => Promise.resolve(APP) })) } as any,
     { get: vi.fn().mockReturnValue("http://queue") } as any,
-    { publish: vi.fn() } as any,
+    { publishRun: vi.fn(), publishNotification: vi.fn() } as any,
     { assertSafeUrl: vi.fn().mockResolvedValue(undefined) } as any,
     { forSteps: vi.fn().mockResolvedValue(descriptors) } as any,
     { getObjectBuffer: vi.fn().mockResolvedValue(Buffer.from("")) } as any,
     { notifyRunEvent: vi.fn().mockResolvedValue(undefined) } as any,
   );
 
-  return { worker, runModel, run, gateway: (worker as any).gateway };
+  return { worker, runModel, run, bus: (worker as any).bus };
 }
 
 /**
@@ -376,7 +376,7 @@ describe("WorkerService — manual inputs", () => {
 
     const { worker } = harness(run, steps, []);
     const publish = vi.fn();
-    (worker as any).gateway = { publish };
+    (worker as any).bus = { publishRun: publish };
 
     // Display-only страница не блокирует поток: сабмита нет, запуск завершается.
     await (worker as any).executeRun("run-1");
@@ -429,7 +429,7 @@ describe("WorkerService — manual inputs", () => {
 
     const { worker, runModel } = harness(run, steps, []);
     const publish = vi.fn();
-    (worker as any).gateway = { publish };
+    (worker as any).bus = { publishRun: publish };
 
     respondWhileWaiting(runModel, run, {});
 
@@ -455,7 +455,7 @@ describe("WorkerService — manual inputs", () => {
 
     const { worker } = harness(run, steps, [descriptor({})]);
     const publish = vi.fn();
-    (worker as any).gateway = { publish };
+    (worker as any).bus = { publishRun: publish };
 
     // Фаза 1: обязательного значения нет во входах — воркер публикует
     // input:required и ПАУЗИТ (API не вызывается).
@@ -496,7 +496,7 @@ describe("WorkerService — manual inputs", () => {
       [descriptor({})],
     );
     const publish = vi.fn();
-    (worker as any).gateway = { publish };
+    (worker as any).bus = { publishRun: publish };
 
     await (worker as any).executeRun("run-1");
 

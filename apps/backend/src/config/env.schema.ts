@@ -25,6 +25,15 @@ export const envSchema = z.object({
   AWS_SECRET_ACCESS_KEY: z.string().default("test"),
   AWS_ENDPOINT_URL: z.string().default(""),
 
+  // Сколько запусков один воркер-процесс держит одновременно (batchSize
+  // sqs-consumer). Верхняя граница 10 — лимит одного ReceiveMessage у SQS;
+  // потребность в большем закрывается числом воркеров, а не толстым процессом.
+  WORKER_CONCURRENCY: z
+    .string()
+    .default("5")
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(10)),
+
   // Хост ("localhost") либо полный URL ("https://s3.twcstorage.ru") — схема
   // задаёт TLS и порт по умолчанию. S3_PORT нужен, только когда порт
   // нестандартный (локальный minio на 9000); см. parseS3Endpoint.

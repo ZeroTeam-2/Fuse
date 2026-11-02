@@ -16,6 +16,7 @@ import { UploadsModule } from "./uploads/uploads.module";
 import { NotificationsModule } from "./notifications/notifications.module";
 import { LoggingModule } from "./logging/logging.module";
 import { JwtAuthGuard } from "./auth/guards/jwt-auth.guard";
+import { EventsModule } from "./events/events.module";
 
 @Module({
   imports: [
@@ -44,6 +45,10 @@ import { JwtAuthGuard } from "./auth/guards/jwt-auth.guard";
       }),
       inject: [ConfigService],
     }),
+    // Шина событий API-процесса: публикация прямо в гейтвеи + BridgeTailer,
+    // который подливает в них события воркер-процессов. Регистрируется ровно
+    // здесь — модуль глобальный, потребители токен не импортируют.
+    EventsModule.forApi(),
     MinioModule,
     UsersModule,
     AuthModule,

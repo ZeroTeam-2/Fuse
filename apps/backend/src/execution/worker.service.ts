@@ -1,4 +1,5 @@
 import {
+  Inject,
   Injectable,
   Logger,
   OnApplicationBootstrap,
@@ -38,8 +39,8 @@ import { Scenario, ScenarioDocument } from "../scenarios/scenario.schema";
 import { App, AppDocument } from "../apps/app.schema";
 import { SsrfGuard } from "../apps/ssrf-guard";
 import { joinBaseUrl, resolveAppBaseUrl } from "../apps/base-url";
-import { RunGateway } from "../websocket/run.gateway";
 import { MinioService } from "../minio/minio.service";
+import { EVENT_BUS, type EventBus } from "../events/event-bus";
 import { NotificationsService } from "../notifications/notifications.service";
 import { resolveMappings, groupInputsByLocation } from "./mapping-resolver";
 import type { LocatedInputs } from "./mapping-resolver";
@@ -118,7 +119,7 @@ export class WorkerService
     private readonly scenarioModel: Model<ScenarioDocument>,
     @InjectModel(App.name) private readonly appModel: Model<AppDocument>,
     private readonly configService: ConfigService,
-    private readonly gateway: RunGateway,
+    @Inject(EVENT_BUS) private readonly bus: EventBus,
     private readonly ssrfGuard: SsrfGuard,
     private readonly manualInputsService: ManualInputsService,
     private readonly minioService: MinioService,
@@ -143,6 +144,10 @@ export class WorkerService
     const accessKeyId = this.configService.get<string>("AWS_ACCESS_KEY_ID") ?? "test";
     const secretAccessKey = this.configService.get<string>("AWS_SECRET_ACCESS_KEY") ?? "test";
     const queueUrl = this.configService.get<string>("AWS_SQS_QUEUE_URL")!;
+    // Границы 1–10 уже проверены схемой env; фолбэк — для DI-контекстов, где
+    // ConfigService подменён стабом (юнит-тесты воркера).
+    const concurrency =
+      this.configService.get<number>("WORKER_CONCURRENCY") ?? 5;
 
     const sqsClient = new SQSClient({
       region,
@@ -153,7 +158,7 @@ export class WorkerService
     this.consumer = Consumer.create({
       queueUrl,
       sqs: sqsClient,
-      batchSize: 5,
+      batchSize: concurrency,
       waitTimeSeconds: 20,
       visibilityTimeout: 7200,
       handleMessage: async (message) => {
@@ -176,7 +181,9 @@ export class WorkerService
 
     this.consumer.start();
 
-    this.logger.log("Worker started — processing scenario execution jobs");
+    this.logger.log(
+      `Worker started — processing scenario execution jobs (concurrency ${concurrency})`,
+    );
   }
 
   async stop(): Promise<void> {
@@ -186,8 +193,13 @@ export class WorkerService
     }
   }
 
+  /**
+   * Единственная точка выхода WS-событий воркера. В воркер-процессе за
+   * `EVENT_BUS` стоит мост через Mongo (сокетов здесь нет), поэтому публикация
+   * асинхронная и её результат дожидается вызывающий.
+   */
   private async publish(runId: string, event: ServerWsEvent): Promise<void> {
-    this.gateway.publish(runId, event);
+    await this.bus.publishRun(runId, event);
   }
 
   /**

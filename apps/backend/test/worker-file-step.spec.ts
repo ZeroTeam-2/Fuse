@@ -119,7 +119,7 @@ function harness(run: Record<string, unknown>, steps: Step[], app: unknown = APP
     } as any,
     { findById: vi.fn(() => ({ exec: () => Promise.resolve(app) })) } as any,
     { get: vi.fn().mockReturnValue("http://queue") } as any,
-    { publish: vi.fn() } as any,
+    { publishRun: vi.fn(), publishNotification: vi.fn() } as any,
     { assertSafeUrl: vi.fn().mockResolvedValue(undefined) } as any,
     { forSteps: vi.fn().mockResolvedValue([]) } as any,
     minio as any,
@@ -280,7 +280,7 @@ describe("WorkerService — api step with a file input", () => {
       } as Step,
     ]);
     const publish = vi.fn();
-    (worker as any).gateway = { publish };
+    (worker as any).bus = { publishRun: publish };
 
     await (worker as any).executeRun("run-1");
 

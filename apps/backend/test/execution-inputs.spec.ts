@@ -63,7 +63,7 @@ function scenarioModelStub(steps: Step[]) {
 }
 
 const config = { get: vi.fn().mockReturnValue("http://queue") } as any;
-const gateway = { publish: vi.fn() } as any;
+const bus = { publishRun: vi.fn(), publishNotification: vi.fn() } as any;
 const minio = { deleteFile: vi.fn(), getPresignedUrl: vi.fn() } as any;
 const notifications = {
   notifyRunEvent: vi.fn().mockResolvedValue(undefined),
@@ -96,7 +96,7 @@ describe("ExecutionService — run inputs", () => {
       runModel,
       scenarioModelStub([STEP_WITH_REQUIRED_INPUT]),
       config,
-      gateway,
+      bus,
       manualInputsStub(true),
       minio,
       notifications,
@@ -113,7 +113,7 @@ describe("ExecutionService — run inputs", () => {
       runModelStub(),
       scenarioModelStub([STEP_WITH_REQUIRED_INPUT]),
       config,
-      gateway,
+      bus,
       manualInputsStub(true),
       minio,
       notifications,
@@ -130,7 +130,7 @@ describe("ExecutionService — run inputs", () => {
       runModelStub(),
       scenarioModelStub([STEP_WITH_REQUIRED_INPUT]),
       config,
-      gateway,
+      bus,
       manualInputsStub(false),
       minio,
       notifications,
@@ -153,7 +153,7 @@ describe("ExecutionService — mid-run input submit", () => {
       runModel,
       scenarioModelStub([]),
       config,
-      gateway,
+      bus,
       manualInputsStub(true),
       minio,
       notifications,
@@ -184,7 +184,7 @@ describe("ExecutionService — mid-run input submit", () => {
       runModelStub({ userId: "u1", status: RunStatus.RUNNING, currentStep: 2 }),
       scenarioModelStub([]),
       config,
-      gateway,
+      bus,
       manualInputsStub(true),
       minio,
       notifications,
@@ -206,7 +206,7 @@ describe("ExecutionService — mid-run input submit", () => {
       runModel,
       scenarioModelStub([]),
       config,
-      gateway,
+      bus,
       manualInputsStub(true),
       minio,
       notifications,
