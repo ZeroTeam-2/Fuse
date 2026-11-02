@@ -144,6 +144,10 @@ export class WorkerService
     const accessKeyId = this.configService.get<string>("AWS_ACCESS_KEY_ID") ?? "test";
     const secretAccessKey = this.configService.get<string>("AWS_SECRET_ACCESS_KEY") ?? "test";
     const queueUrl = this.configService.get<string>("AWS_SQS_QUEUE_URL")!;
+    // Границы 1–10 уже проверены схемой env; фолбэк — для DI-контекстов, где
+    // ConfigService подменён стабом (юнит-тесты воркера).
+    const concurrency =
+      this.configService.get<number>("WORKER_CONCURRENCY") ?? 5;
 
     const sqsClient = new SQSClient({
       region,
@@ -154,7 +158,7 @@ export class WorkerService
     this.consumer = Consumer.create({
       queueUrl,
       sqs: sqsClient,
-      batchSize: 5,
+      batchSize: concurrency,
       waitTimeSeconds: 20,
       visibilityTimeout: 7200,
       handleMessage: async (message) => {
@@ -177,7 +181,9 @@ export class WorkerService
 
     this.consumer.start();
 
-    this.logger.log("Worker started — processing scenario execution jobs");
+    this.logger.log(
+      `Worker started — processing scenario execution jobs (concurrency ${concurrency})`,
+    );
   }
 
   async stop(): Promise<void> {
