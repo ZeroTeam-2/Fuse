@@ -7,6 +7,15 @@ import type {
   StepPage,
   StepSchema,
 } from "../types";
+import { getExtension } from "../files";
+
+/**
+ * Значение не заполнено: формы страницы и ручных входов считают пустыми ровно
+ * эти три случая — `0` и `false` являются значениями.
+ */
+export function isBlank(value: unknown): boolean {
+  return value === undefined || value === null || value === "";
+}
 
 /** Все типы блоков палитры, сгруппированные позже по категории. */
 export const PAGE_BLOCK_TYPES: PageBlockType[] = [
@@ -107,7 +116,7 @@ export function validateFileAgainstBlock(
     .map((a) => a.trim().toLowerCase())
     .filter(Boolean);
   if (accept.length > 0) {
-    const ext = `.${(file.name.split(".").pop() ?? "").toLowerCase()}`;
+    const ext = getExtension(file.name);
     const type = (file.type || "").toLowerCase();
     const ok = accept.some((a) => (a.startsWith(".") ? ext === a : type === a));
     if (!ok) return `Недопустимый формат. Допустимые: ${accept.join(", ")}`;
