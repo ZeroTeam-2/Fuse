@@ -5,8 +5,9 @@
   "description": "Fuse monorepo — NuxtJS + NestJS + MongoDB",
   "packageManager": "pnpm@10.4.1",
   "scripts": {
-    "dev": "turbo run dev",
+    "dev": "turbo run dev dev:worker",
     "dev:main": "turbo run dev --filter=@fuse/backend",
+    "dev:worker": "turbo run dev:worker --filter=@fuse/backend",
     "dev:frontend": "turbo run dev --filter=@fuse/frontend",
     "infra": "docker compose -f docker-compose.dev.yml up -d --wait mongo localstack minio mock-api && docker compose -f docker-compose.dev.yml run --rm minio-init",
     "infra:down": "docker compose -f docker-compose.dev.yml down",
