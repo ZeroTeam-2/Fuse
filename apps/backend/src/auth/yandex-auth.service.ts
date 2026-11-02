@@ -141,7 +141,12 @@ export class YandexAuthService {
     return this.issueTokens(user);
   }
 
-  private async issueTokens(user: UserDocument): Promise<TokenPair> {
+  /**
+   * Выпускает пару access/refresh для пользователя. Публичный, потому что этим
+   * же кодом выдаёт сессию локальный вход по паролю (`POST /api/auth/dev-login`):
+   * второй путь выдачи разошёлся бы с этим по TTL и флагам куки.
+   */
+  async issueTokens(user: UserDocument): Promise<TokenPair> {
     const payload: JwtPayload = {
       userId: user._id.toString(),
       email: user.email,
