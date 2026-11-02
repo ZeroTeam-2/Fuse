@@ -13,6 +13,7 @@ import { SQSClient } from "@aws-sdk/client-sqs";
 import {
   RunStatus,
   isUploadedFileRef,
+  isBlank,
   isInputBlock,
   pageBlocks,
   blockOutputKey,
@@ -44,7 +45,6 @@ import { resolveMappings, groupInputsByLocation } from "./mapping-resolver";
 import type { LocatedInputs } from "./mapping-resolver";
 import { ManualInputsService } from "./manual-inputs.service";
 import {
-  isBlank,
   localKeyOf,
   mapPageDataToOutputs,
   resolvePageBindings,

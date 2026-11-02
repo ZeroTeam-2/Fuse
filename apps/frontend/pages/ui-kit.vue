@@ -130,7 +130,7 @@
       <h2 class="text-[1.375rem] font-bold tracking-[-0.02em] text-zinc-900">Navigation</h2>
 
       <div class="rounded-2xl overflow-hidden border border-zinc-200">
-        <TopNav :items="navItems" :user="{ name: 'Анна Ковалёва' }" />
+        <TopNav />
       </div>
 
       <div class="grid grid-cols-2 gap-8 items-start pt-2">
@@ -325,12 +325,6 @@ const providerOptions = [
 ];
 const methodOptions = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 
-// navigation
-const navItems = [
-  { label: "Каталог", active: true },
-  { label: "Мои сценарии" },
-  { label: "Мои API" },
-];
 const tab = ref("overview");
 const tabItems = [
   { value: "overview", label: "Обзор" },

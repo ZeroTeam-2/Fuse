@@ -45,6 +45,12 @@ services:
       YANDEX_CLIENT_SECRET: ${YANDEX_CLIENT_SECRET:-}
       YANDEX_REDIRECT_URI: ${YANDEX_REDIRECT_URI:-}
       APP_URL: ${APP_URL:-http://localhost:${HTTP_PORT:-8081}}
+      # Локальный вход по логину и паролю (в обход OAuth) для случая, когда весь
+      # стек поднят в докере. По умолчанию пусто — маршрут отвечает 404.
+      # Непустой пароль при NODE_ENV=production роняет бэкенд на старте, так что
+      # для этого профиля нужно явно задать NODE_ENV=development.
+      DEV_LOGIN_EMAIL: ${DEV_LOGIN_EMAIL:-}
+      DEV_LOGIN_PASSWORD: ${DEV_LOGIN_PASSWORD:-}
     expose:
       - "3001"
     extra_hosts:

@@ -273,6 +273,7 @@
 <script setup lang="ts">
 import {
   CATEGORIES,
+  OPERATOR_LABELS,
   blockOutputName,
   isInputBlock,
   pageBlockCount,
@@ -367,16 +368,6 @@ function pathOf(step: Step) {
   if (step.type === "page") return `${pageBlockCount(step.page)} элем.`;
   return "";
 }
-
-const OPERATOR_LABELS: Record<string, string> = {
-  eq: "=",
-  ne: "≠",
-  gt: ">",
-  lt: "<",
-  gte: "≥",
-  lte: "≤",
-  contains: "содержит",
-};
 
 /** «где inn = 7707083893» — чтобы отбор элемента был виден, не открывая шаг. */
 function filterSummary(filter?: StepFilter): string {

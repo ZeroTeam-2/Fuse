@@ -35,6 +35,11 @@ describe("validateFileAgainstBlock", () => {
     expect(err).toContain("больше 2 МБ");
   });
 
+  it("rejects a name without a dot against an extension filter", () => {
+    const err = validateFileAgainstBlock(block, { name: "pdf", type: "", size: 10 });
+    expect(err).toContain("Недопустимый формат");
+  });
+
   it("accepts anything when the block has no constraints", () => {
     const free: PageBlock = { id: "dz", type: "dropzone", span: 6 };
     expect(validateFileAgainstBlock(free, { name: "any.bin", type: "", size: 1e9 })).toBeNull();

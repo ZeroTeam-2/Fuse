@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue";
+import { ALLOWED_SPEC_EXTENSIONS, getExtension } from "@fuse/shared";
 
 const props = withDefaults(
   defineProps<{
@@ -27,20 +28,13 @@ const isDragOver = ref(false);
 const selectedFile = ref<File | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 
-const ALLOWED_EXTENSIONS = new Set([".json", ".yaml", ".yml"]);
-
-function getExtension(name: string): string {
-  const dot = name.lastIndexOf(".");
-  return dot >= 0 ? name.slice(dot).toLowerCase() : "";
-}
-
 function validate(file: File): string | null {
   if (file.size > props.maxSize) {
     const mb = Math.round(props.maxSize / (1024 * 1024));
     return `Размер файла превышает ${mb} МБ`;
   }
   const ext = getExtension(file.name);
-  if (!ALLOWED_EXTENSIONS.has(ext)) {
+  if (!ALLOWED_SPEC_EXTENSIONS.has(ext)) {
     return "Допустимы только файлы .json, .yaml, .yml";
   }
   return null;
