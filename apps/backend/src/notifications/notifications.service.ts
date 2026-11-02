@@ -1,4 +1,9 @@
-import { Injectable, Logger, NotFoundException } from "@nestjs/common";
+import {
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
 import type {
@@ -7,9 +12,9 @@ import type {
   RunNotification,
 } from "@fuse/shared";
 import { Notification, NotificationDocument } from "./notification.schema";
-import { NotificationsGateway } from "./notifications.gateway";
 import { Run, RunDocument } from "../execution/run.schema";
 import { Scenario, ScenarioDocument } from "../scenarios/scenario.schema";
+import { EVENT_BUS, type EventBus } from "../events/event-bus";
 
 const DUPLICATE_KEY = 11000;
 
@@ -23,7 +28,7 @@ export class NotificationsService {
     @InjectModel(Run.name) private readonly runModel: Model<RunDocument>,
     @InjectModel(Scenario.name)
     private readonly scenarioModel: Model<ScenarioDocument>,
-    private readonly gateway: NotificationsGateway,
+    @Inject(EVENT_BUS) private readonly bus: EventBus,
   ) {}
 
   /**
@@ -61,7 +66,7 @@ export class NotificationsService {
         .countDocuments({ userId: run.userId, read: false })
         .exec();
 
-      this.gateway.emitNew(run.userId, {
+      await this.bus.publishNotification(run.userId, {
         notification: this.toDto(doc),
         unreadCount,
       });

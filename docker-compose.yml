@@ -62,6 +62,52 @@ services:
       retries: 5
       start_period: 40s
 
+  # Исполнитель сценариев: тот же образ, другая команда. Без container_name и
+  # ports — иначе сервис не масштабируется; масштаб: docker compose up -d
+  # --scale worker=N. Воркер не обслуживает HTTP, поэтому caddy и frontend от
+  # него не зависят.
+  #
+  # BREAKING: без этого сервиса запуски остаются в pending — backend сам
+  # очередь больше не потребляет.
+  worker:
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+    restart: unless-stopped
+    command: ["node", "apps/backend/dist/worker-main"]
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      # PORT/APP_URL воркеру не нужны, но остаются в общей env-схеме.
+      MONGODB_URL: ${MONGODB_URL:?MONGODB_URL is required}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_SQS_QUEUE_URL: ${AWS_SQS_QUEUE_URL:-http://localstack:4566/000000000000/scenario-execution}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
+      AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL:-http://localstack:4566}
+      # Сколько запусков держит ОДИН воркер (1–10). Больше — через число
+      # реплик: docker compose up -d --scale worker=N.
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-5}
+      S3_URL: ${S3_URL:-minio}
+      # Пусто для внешнего S3 (порт и TLS берутся из схемы в S3_URL).
+      S3_PORT: ${S3_PORT:-}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-fuse}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      YANDEX_CLIENT_ID: ${YANDEX_CLIENT_ID:-}
+      YANDEX_CLIENT_SECRET: ${YANDEX_CLIENT_SECRET:-}
+      YANDEX_REDIRECT_URI: ${YANDEX_REDIRECT_URI:-}
+      APP_URL: ${APP_URL:-http://localhost:${HTTP_PORT:-8081}}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # HTTP у воркера нет — проверяется только живость процесса.
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f dist/worker-main > /dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
   frontend:
     build:
       context: .
