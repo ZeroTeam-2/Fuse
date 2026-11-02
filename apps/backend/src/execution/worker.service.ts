@@ -1,4 +1,5 @@
 import {
+  Inject,
   Injectable,
   Logger,
   OnApplicationBootstrap,
@@ -37,8 +38,8 @@ import { Scenario, ScenarioDocument } from "../scenarios/scenario.schema";
 import { App, AppDocument } from "../apps/app.schema";
 import { SsrfGuard } from "../apps/ssrf-guard";
 import { joinBaseUrl, resolveAppBaseUrl } from "../apps/base-url";
-import { RunGateway } from "../websocket/run.gateway";
 import { MinioService } from "../minio/minio.service";
+import { EVENT_BUS, type EventBus } from "../events/event-bus";
 import { NotificationsService } from "../notifications/notifications.service";
 import { resolveMappings, groupInputsByLocation } from "./mapping-resolver";
 import type { LocatedInputs } from "./mapping-resolver";
@@ -118,7 +119,7 @@ export class WorkerService
     private readonly scenarioModel: Model<ScenarioDocument>,
     @InjectModel(App.name) private readonly appModel: Model<AppDocument>,
     private readonly configService: ConfigService,
-    private readonly gateway: RunGateway,
+    @Inject(EVENT_BUS) private readonly bus: EventBus,
     private readonly ssrfGuard: SsrfGuard,
     private readonly manualInputsService: ManualInputsService,
     private readonly minioService: MinioService,
@@ -186,8 +187,13 @@ export class WorkerService
     }
   }
 
+  /**
+   * Единственная точка выхода WS-событий воркера. В воркер-процессе за
+   * `EVENT_BUS` стоит мост через Mongo (сокетов здесь нет), поэтому публикация
+   * асинхронная и её результат дожидается вызывающий.
+   */
   private async publish(runId: string, event: ServerWsEvent): Promise<void> {
-    this.gateway.publish(runId, event);
+    await this.bus.publishRun(runId, event);
   }
 
   /**

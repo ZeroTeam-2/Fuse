@@ -1,4 +1,5 @@
 import {
+  Inject,
   Injectable,
   NotFoundException,
   BadRequestException,
@@ -19,8 +20,8 @@ import type {
 } from "@fuse/shared";
 import { Run, RunDocument } from "./run.schema";
 import { Scenario, ScenarioDocument } from "../scenarios/scenario.schema";
-import { RunGateway } from "../websocket/run.gateway";
 import { MinioService } from "../minio/minio.service";
+import { EVENT_BUS, type EventBus } from "../events/event-bus";
 import { NotificationsService } from "../notifications/notifications.service";
 import { ManualInputsService } from "./manual-inputs.service";
 import { missingRequiredKeys } from "./manual-inputs";
@@ -64,7 +65,7 @@ export class ExecutionService {
     @InjectModel(Scenario.name)
     private readonly scenarioModel: Model<ScenarioDocument>,
     private readonly configService: ConfigService,
-    private readonly gateway: RunGateway,
+    @Inject(EVENT_BUS) private readonly bus: EventBus,
     private readonly manualInputsService: ManualInputsService,
     private readonly minioService: MinioService,
     private readonly notificationsService: NotificationsService,
@@ -234,7 +235,9 @@ export class ExecutionService {
   }
 
   private async publishCancelled(run: RunDocument): Promise<void> {
-    this.gateway.publish(run._id.toString(), {
+    // В API-процессе за `EVENT_BUS` стоит `LocalEventBus` — событие уходит
+    // прямо в гейтвей, как и раньше; через мост идут только события воркера.
+    await this.bus.publishRun(run._id.toString(), {
       type: "run:status",
       runId: run._id.toString(),
       payload: {

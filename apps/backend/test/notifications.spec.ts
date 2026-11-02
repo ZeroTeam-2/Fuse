@@ -5,9 +5,6 @@ vi.mock("../src/notifications/notification.schema", () => ({
   Notification: { name: "Notification" },
   NotificationSchema: {},
 }));
-vi.mock("../src/notifications/notifications.gateway", () => ({
-  NotificationsGateway: class {},
-}));
 vi.mock("../src/execution/run.schema", () => ({
   Run: { name: "Run" },
   RunSchema: {},
@@ -47,19 +44,19 @@ function build(overrides: {
       exec("scenario" in overrides ? overrides.scenario : { title: "Сценарий" }),
     ),
   };
-  const gateway = { emitNew: vi.fn() };
+  const bus = { publishRun: vi.fn(), publishNotification: vi.fn() };
   const service = new NotificationsService(
     notificationModel,
     runModel,
     scenarioModel,
-    gateway as any,
+    bus as any,
   );
-  return { service, notificationModel, gateway };
+  return { service, notificationModel, bus };
 }
 
 describe("NotificationsService.notifyRunEvent", () => {
   it("создаёт уведомление и эмитит его в комнату пользователя", async () => {
-    const { service, notificationModel, gateway } = build({});
+    const { service, notificationModel, bus } = build({});
 
     await service.notifyRunEvent("run-1", "run_completed");
 
@@ -72,7 +69,7 @@ describe("NotificationsService.notifyRunEvent", () => {
         read: false,
       }),
     );
-    expect(gateway.emitNew).toHaveBeenCalledWith(
+    expect(bus.publishNotification).toHaveBeenCalledWith(
       "u1",
       expect.objectContaining({ unreadCount: 1 }),
     );
@@ -80,10 +77,10 @@ describe("NotificationsService.notifyRunEvent", () => {
 
   it("повторная доставка (duplicate key) молча гасится и не эмитится", async () => {
     const dup = Object.assign(new Error("E11000 duplicate key"), { code: 11000 });
-    const { service, gateway } = build({ create: vi.fn().mockRejectedValue(dup) });
+    const { service, bus } = build({ create: vi.fn().mockRejectedValue(dup) });
 
     await expect(service.notifyRunEvent("run-1", "run_completed")).resolves.toBeUndefined();
-    expect(gateway.emitNew).not.toHaveBeenCalled();
+    expect(bus.publishNotification).not.toHaveBeenCalled();
   });
 
   it("любая другая ошибка не роняет вызывающего (запуск важнее уведомления)", async () => {

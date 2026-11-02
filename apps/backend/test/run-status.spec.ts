@@ -86,7 +86,7 @@ function setMockScenario(scenario: any) {
 describe("Run status transitions", () => {
   let service: ExecutionService;
   let mockConfig: Partial<ConfigService>;
-  let mockGateway: { publish: ReturnType<typeof vi.fn> };
+  let mockBus: { publishRun: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -101,12 +101,12 @@ describe("Run status transitions", () => {
         return undefined;
       }),
     };
-    mockGateway = { publish: vi.fn() };
+    mockBus = { publishRun: vi.fn() };
     service = new ExecutionService(
       MockRunModel as any,
       MockScenarioModel as any,
       mockConfig as ConfigService,
-      mockGateway as any,
+      mockBus as any,
       { forSteps: vi.fn().mockResolvedValue([]) } as any,
       { deleteFile: vi.fn(), getPresignedUrl: vi.fn() } as any,
       {
@@ -277,8 +277,8 @@ describe("Run status transitions", () => {
         { _id: { $in: ["run-1", "run-2"] } },
         { $set: { status: RunStatus.CANCELLED } },
       );
-      expect(mockGateway.publish).toHaveBeenCalledTimes(2);
-      expect(mockGateway.publish).toHaveBeenCalledWith(
+      expect(mockBus.publishRun).toHaveBeenCalledTimes(2);
+      expect(mockBus.publishRun).toHaveBeenCalledWith(
         "run-1",
         expect.objectContaining({
           type: "run:status",
@@ -294,7 +294,7 @@ describe("Run status transitions", () => {
 
       expect(count).toBe(0);
       expect(MockRunModel.updateMany).not.toHaveBeenCalled();
-      expect(mockGateway.publish).not.toHaveBeenCalled();
+      expect(mockBus.publishRun).not.toHaveBeenCalled();
     });
 
     it("does nothing when no scenario ids are provided", async () => {

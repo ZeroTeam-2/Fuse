@@ -38,7 +38,7 @@ function makeWorker(app: unknown) {
   const appModel = { findById: vi.fn(() => mockQuery(app)) };
   const runModel = { findById: vi.fn(() => mockQuery(null)), updateOne: vi.fn(() => mockQuery(null)) };
   const scenarioModel = { findById: vi.fn(() => mockQuery(null)) };
-  const gateway = { publish: vi.fn() };
+  const bus = { publishRun: vi.fn(), publishNotification: vi.fn() };
   const ssrfGuard = { assertSafeUrl: vi.fn().mockResolvedValue(undefined) };
   const config = { get: vi.fn(() => undefined) };
 
@@ -49,7 +49,7 @@ function makeWorker(app: unknown) {
     scenarioModel as any,
     appModel as any,
     config as any,
-    gateway as any,
+    bus as any,
     ssrfGuard as any,
     manualInputs as any,
     { getObjectBuffer: vi.fn() } as any,
