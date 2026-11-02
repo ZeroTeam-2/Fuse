@@ -4,7 +4,7 @@
 // подставленные данные пройденных шагов из `resolved`. Один компонент на панель
 // запуска и playground — вместо трёх веток по типам страницы.
 import type { PageBlock, StepPage } from "@fuse/shared";
-import { blockCategory, validateFileAgainstBlock } from "@fuse/shared";
+import { blockCategory, isBlank, validateFileAgainstBlock } from "@fuse/shared";
 import type { FileUploadHandle } from "../../composables/useFileUpload";
 
 const props = withDefaults(
@@ -27,10 +27,6 @@ const values = reactive<Record<string, unknown>>({});
 const uploads = reactive<Record<string, FileUploadHandle>>({});
 const fileErrors = reactive<Record<string, string>>({});
 const { upload: startUpload } = useFileUpload();
-
-function isBlank(value: unknown): boolean {
-  return value === undefined || value === null || value === "";
-}
 
 function requiredBlocks(): PageBlock[] {
   const out: PageBlock[] = [];
