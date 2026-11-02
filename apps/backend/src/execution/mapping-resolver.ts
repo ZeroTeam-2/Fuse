@@ -1,3 +1,4 @@
+import { OPERATOR_LABELS } from "@fuse/shared";
 import type {
   FilterOperator,
   RunStepResult,
@@ -15,16 +16,6 @@ export interface LocatedInputs {
   header: Record<string, unknown>;
   body: Record<string, unknown>;
 }
-
-const OPERATOR_LABELS: Record<FilterOperator, string> = {
-  eq: "=",
-  ne: "≠",
-  gt: ">",
-  lt: "<",
-  gte: "≥",
-  lte: "≤",
-  contains: "содержит",
-};
 
 /** Ключ, под которым пользовательское значение условия приходит во входных данных. */
 export function filterInputKey(paramKey: string): string {
