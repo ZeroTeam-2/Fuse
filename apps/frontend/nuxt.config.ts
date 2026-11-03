@@ -5,6 +5,11 @@ import { publicEnvSchema, serverEnvSchema } from "./config/env.schema";
 
 const rootDir = fileURLToPath(new URL(".", import.meta.url));
 const sharedSrc = resolve(rootDir, "../../packages/shared/src");
+// Порядок как у бэкенда (`envFilePath` в app.module.ts): .env.local выигрывает,
+// потому что dotenv не перезаписывает уже заданные переменные. Локально живым
+// остаётся только .env.local; .env читается ради CI, который кладёт туда копию
+// .env.example перед typecheck.
+loadEnv({ path: resolve(rootDir, "../../.env.local") });
 loadEnv({ path: resolve(rootDir, "../../.env") });
 delete process.env.PORT;
 delete process.env.NITRO_PORT;

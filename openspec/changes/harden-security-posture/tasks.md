@@ -4,16 +4,34 @@
 > не приводятся: они фиксируются хэшами (см. 1.7), сами значения — в канале
 > сопровождения.
 
-## 1. Аварийная ротация секретов (T+0, до кода)
+## 1. Ротация секретов и отвязка от внешней инфраструктуры
 
-- [ ] 1.1 Сгенерировать новый `JWT_SECRET` (`openssl rand -hex 48`) и обновить во всех окружениях
-- [ ] 1.2 Сгенерировать новый `NUXT_SESSION_SECRET` (`openssl rand -hex 48`) и обновить во всех окружениях
-- [ ] 1.3 Ротировать root-креды MongoDB
-- [ ] 1.4 Перевыпустить статические ключи очереди (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` профиля Yandex Message Queue)
-- [ ] 1.5 Перевыпустить ключи S3 (`S3_ACCESS_KEY` / `S3_SECRET_KEY` профиля Timeweb)
-- [ ] 1.6 Перевыпустить `YANDEX_CLIENT_SECRET` в кабинете OAuth-приложения
-- [ ] 1.7 Внести sha256 отозванных значений в `apps/backend/src/config/env.schema.ts` и `apps/frontend/config/env.schema.ts`; сверка по хэшу, сами значения в репозиторий не возвращаются
-- [ ] 1.8 Вычистить плейнтекст секретов из истории git (`git filter-repo --replace-text`), перевыпустить ветки `main`, `develop`, активные `change/*`, предупредить всех, у кого есть локальные клоны
+Степень утечки у значений разная, и от неё зависит срочность. Целиком в
+публичный репозиторий попали два: пароль root MongoDB (64 символа) и
+`YANDEX_CLIENT_SECRET` (32 символа). У остальных четырёх утекли только
+префиксы — 13, 12, 10 и 8 символов, воспользоваться ими нельзя.
+
+- [x] 1.1 Перевыпущен `JWT_SECRET` (`openssl rand -hex 48`)
+- [x] 1.2 Перевыпущен `NUXT_SESSION_SECRET`. Старое значение совпадало с `JWT_SECRET` — одно и то же на подпись токенов и на сессию Nuxt; теперь значения разные
+- [x] 1.3 Общий `.env` удалён вместе с кредами внешних сервисов. Рабочий профиль — `.env.local` (локальные Mongo, LocalStack, Garage), внешней инфраструктуры у проекта нет
+- [x] 1.4 `nuxt.config.ts` читает `.env.local`, затем `.env` (как `envFilePath` у бэкенда); `.env.example` и `.env.local.example` приведены к локальному профилю
+- [x] 1.5 Плейнтекст секретов вычищен из истории git (`git filter-repo --replace-text`), ветки `main` и `develop` перевыпущены
+- [ ] 1.6 **Сменить пароль root MongoDB** на внешнем сервере. Утёк целиком вместе с адресом хоста, лежал в публичном репозитории с 19.07.2026 — проверить базу на следы доступа (лишние коллекции, записки о выкупе, объём данных)
+- [ ] 1.7 **Перевыпустить `YANDEX_CLIENT_SECRET`** в кабинете OAuth-приложения. Утёк целиком; с парой client_id + secret можно выдавать себя за приложение в OAuth-обмене
+- [ ] 1.8 Перевыпустить статический ключ Yandex Message Queue и ключи Timeweb S3 — для гигиены, утекли только префиксы
+- [ ] 1.9 Внести sha256 отозванных значений в `apps/backend/src/config/env.schema.ts` и `apps/frontend/config/env.schema.ts`. Сами значения в репозиторий не возвращаются; хэши посчитаны до удаления `.env`:
+
+  | Переменная | sha256 отозванного значения |
+  |---|---|
+  | `MONGODB_URL` | `ed46c443893b686ff123ba490534dba602cacc32262b35ee263444214a12e3ed` |
+  | `AWS_ACCESS_KEY_ID` | `0478a4966e517e2170aa73ecf6639af8a76460907894814aabaa3089505cd92a` |
+  | `AWS_SECRET_ACCESS_KEY` | `9093f87aeaa188be5771708ac18f3b213d5e1b18901325f72d1a319e36ae5acf` |
+  | `S3_ACCESS_KEY` | `82100458573677ff1c7cf23fa667ddfe1b144a786fbc241364fbe02ca48d7f04` |
+  | `S3_SECRET_KEY` | `bcb5442c6837f8de7e65cb748459052c9f0d739e7edfb2b3ac5b6d795e09e387` |
+  | `YANDEX_CLIENT_SECRET` | `ba2a655f52a7110c6f6e50b6542583cec6c563ab51ae7648bf406729c60ed9ed` |
+  | `JWT_SECRET` / `NUXT_SESSION_SECRET` | `67b10701b534be9b9908f01f2dd1821237bb70189a69eb6199aaa57c4535acdd` |
+
+- [ ] 1.10 Запросить у GitHub Support сборку мусора репозитория — **или сознательно отказаться**. Старые объекты достижимы из 24 рефов `refs/pull/*` (41 коммит с секретом), поэтому сами они не исчезнут никогда. После выполнения 1.6–1.8 это вопрос гигиены, а не безопасности
 
 ## 2. Backend — глобальные middleware
 
@@ -33,15 +51,23 @@
 
 ## 3. Fail-fast валидация секретов
 
-- [ ] 3.1 В `env.schema.ts` перевести проверку обязательности секретов в `superRefine`, обусловленный `NODE_ENV === "production"` (тем же приёмом, что уже применён к `DEV_LOGIN_PASSWORD`). Дефолты `test` / `minioadmin` / `fuse-local-dev-secret` остаются для разработки
-- [ ] 3.2 Отклонять в production: пустые `AWS_*`, `S3_*`, `YANDEX_*`, placeholder `JWT_SECRET` из `.env.example`, значения с хэшем из списка отозванных (1.7)
-- [ ] 3.3 Отклонять `JWT_SECRET` с вырожденным алфавитом (один повторяющийся символ)
-- [ ] 3.4 **Отклонять непустой `SSRF_ALLOWED_HOSTS` при `NODE_ENV=production`** — список обходит и блок-лист, и резолв DNS целиком
-- [ ] 3.5 Требовать `https://` у непустого `LOG_COLLECTOR_URL`
-- [ ] 3.6 Заменить `configService.get<string>("JWT_SECRET") ?? "fallback"` на `getOrThrow` в четырёх местах: `app.module.ts:41`, `auth/auth.module.ts:17`, `auth/strategies/jwt.strategy.ts:20`, `auth/yandex-auth.service.ts:130`
-- [ ] 3.7 Проверить: `rg '\?\? "fallback"' apps/backend/src/` — пусто
-- [ ] 3.8 В `docker-compose.yml` заменить `:-` на `:?` для `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` — **в обоих сервисах, `backend` и `worker`**. `MONGODB_URL`, `JWT_SECRET`, `NUXT_SESSION_SECRET` уже приведены
-- [ ] 3.9 Привести `S3_URL: ${S3_URL:-minio}` — дефолт указывает на сервис, которого больше нет (локально Garage, в бою внешний S3)
+Строгий режим MUST включаться по тому, **на что указывает конфигурация**, а не
+по `NODE_ENV`. Ровно этот случай и произошёл: в `.env` стояло
+`NODE_ENV=development`, а `MONGODB_URL`, `AWS_*` и `S3_*` смотрели на боевые
+Yandex Cloud, Timeweb и внешний Mongo — вместе с непустым
+`SSRF_ALLOWED_HOSTS` и включённым локальным входом. Проверка, привязанная к
+`NODE_ENV=production`, в таком профиле не сработала бы ни одна.
+
+- [ ] 3.1 Ввести в `env.schema.ts` признак «конфигурация смотрит наружу»: хост считается внешним, если это IP-литерал из публичного диапазона либо доменное имя с точкой вне `localhost`/`.local`. Односегментные имена (`mongo`, `localstack`, `garage` — сервисы compose), приватные диапазоны и `host.docker.internal` считаются локальными
+- [ ] 3.2 При внешней конфигурации **или** `NODE_ENV=production` включать строгий режим: отклонять пустые и placeholder-значения `JWT_SECRET`, `NUXT_SESSION_SECRET`, `AWS_*`, `S3_*`, `YANDEX_*`, а также значения с хэшем из списка отозванных (1.9)
+- [ ] 3.3 В строгом режиме отклонять непустой `SSRF_ALLOWED_HOSTS` — список обходит и блок-лист, и резолв DNS целиком
+- [ ] 3.4 В строгом режиме отклонять непустой `DEV_LOGIN_PASSWORD` (сейчас проверка привязана только к `NODE_ENV=production`)
+- [ ] 3.5 Отклонять `JWT_SECRET` с вырожденным алфавитом (один повторяющийся символ) и совпадение `JWT_SECRET` с `NUXT_SESSION_SECRET` — так было до ротации
+- [ ] 3.6 Требовать `https://` у непустого `LOG_COLLECTOR_URL`
+- [ ] 3.7 Заменить `configService.get<string>("JWT_SECRET") ?? "fallback"` на `getOrThrow` в четырёх местах: `app.module.ts:41`, `auth/auth.module.ts:17`, `auth/strategies/jwt.strategy.ts:20`, `auth/yandex-auth.service.ts:130`
+- [ ] 3.8 Проверить: `rg '\?\? "fallback"' apps/backend/src/` — пусто
+- [ ] 3.9 В `docker-compose.yml` заменить `:-` на `:?` для `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` — **в обоих сервисах, `backend` и `worker`**. `MONGODB_URL`, `JWT_SECRET`, `NUXT_SESSION_SECRET` уже приведены
+- [ ] 3.10 Привести `S3_URL: ${S3_URL:-minio}` — дефолт указывает на сервис, которого больше нет (локально Garage, в бою внешний S3)
 
 ## 4. Cookie-флаги + CSRF
 
@@ -159,19 +185,20 @@
 
 ## 14. CI/CD
 
-- [ ] 14.1 Завести GitHub App с минимальными правами (Issues RW, Pull requests RW, Contents Read)
-- [ ] 14.2 Перевести `change-bootstrap.yml` и `change-complete.yml` на токен GitHub App, удалить секрет `FLOW_TOKEN`
-- [ ] 14.3 В `change-bootstrap.yml` убрать прямую подстановку выражения в shell: шаг «Убедиться, что лейбл существует» подставляет `${{ steps.change.outputs.id }}` в тело команды. Передавать через `env:`, как это уже сделано в соседних шагах
-- [ ] 14.4 Проверять идентификатор change'а регулярным выражением `^[a-z0-9-]{1,40}$` до любых вызовов `gh`
-- [ ] 14.5 Guard на PR из форков в `change-complete.yml` — защита в глубину: на событие `pull_request` из форка секреты и так не передаются, но инвариант стоит зафиксировать
-- [ ] 14.6 Добавить `permissions: contents: read` в `ci.yml` (в трёх остальных workflow блок уже есть)
-- [ ] 14.7 Workflow поиска секретов на `pull_request`
-- [ ] 14.8 Job аудита зависимостей в `ci.yml`
-- [ ] 14.9 Workflow сканирования образов
-- [ ] 14.10 `pnpm.overrides` в корневом `package.json` для транзитивных `multer` (из `@nestjs/platform-express`, сейчас 2.1.1) и `tar`. Прямые зависимости уже подняты: backend объявляет `multer@^2.2.0`, в локе есть `tar@7.5.19`
-- [ ] 14.11 `pnpm install` для обновления лока
-- [ ] 14.12 Пин всех `uses:` по commit SHA с комментарием версии
-- [ ] 14.13 Заменить `cp .env.example .env` в `ci.yml` на явный блок `env:`
+Change-флоу на GitHub Actions больше не используется, и дальше проект уезжает
+на GitLab CI. Поэтому укреплять `change-bootstrap.yml` и `change-complete.yml`
+незачем — их надо удалить. Это закрывает и shell-инъекцию через имя ветки, и
+сам долгоживущий токен, одним действием вместо четырёх.
+
+- [ ] 14.1 Удалить `.github/workflows/change-bootstrap.yml` и `.github/workflows/change-complete.yml`
+- [ ] 14.2 **Отозвать PAT `FLOW_TOKEN`** в настройках токенов аккаунта и удалить одноимённый секрет репозитория. Токен с правами на issues и pull requests живёт там без потребителя
+- [ ] 14.3 Решить судьбу `ci.yml` и `spec-gate.yml` вместе с переездом на GitLab CI: либо перенести проверки (lint, typecheck, тесты, гейт спеки), либо удалить вслед за остальными
+- [ ] 14.4 Пока GitHub Actions остаются живыми — добавить `permissions: contents: read` в `ci.yml` (в `spec-gate.yml` блок уже есть)
+- [ ] 14.5 Перенести в новый пайплайн гейты, которых сейчас нет нигде: поиск секретов, аудит зависимостей, сканирование образов
+- [ ] 14.6 `pnpm.overrides` в корневом `package.json` для транзитивных `multer` (из `@nestjs/platform-express`, сейчас 2.1.1) и `tar`. Прямые зависимости уже подняты: backend объявляет `multer@^2.2.0`, в локе есть `tar@7.5.19`
+- [ ] 14.7 `pnpm install` для обновления лока
+- [ ] 14.8 В оставшихся GitHub-workflow закрепить `uses:` по commit SHA с комментарием версии
+- [ ] 14.9 Заменить `cp .env.example .env` в пайплайне на явный блок переменных окружения
 
 ## 15. Тесты и регрессионные гейты
 

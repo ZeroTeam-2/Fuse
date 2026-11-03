@@ -21,11 +21,14 @@ const rootDir = resolve(import.meta.dirname, "../../..");
 
 // Порядок как в ConfigModule бэкенда: .env.local перекрывает .env. Node не
 // затирает уже установленные переменные, поэтому local грузим первым.
-const localEnv = resolve(rootDir, ".env.local");
-if (existsSync(localEnv)) {
-  process.loadEnvFile(localEnv);
+// Оба файла опциональны: общий .env удалён вместе с кредами внешних сервисов,
+// рабочий профиль живёт в .env.local.
+for (const envFile of [".env.local", ".env"]) {
+  const path = resolve(rootDir, envFile);
+  if (existsSync(path)) {
+    process.loadEnvFile(path);
+  }
 }
-process.loadEnvFile(resolve(rootDir, ".env"));
 
 const mongoUrl = process.env.MONGODB_URL;
 if (!mongoUrl) {

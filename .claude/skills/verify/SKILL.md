@@ -5,14 +5,14 @@ description: Как проверить изменение Fuse вживую — 
 
 # Проверка Fuse вживую
 
-Dev-серверы поднимает пользователь (не убивать его процессы): бэкенд `nest --watch` на :3001 (сам подхватывает правки), фронтенд `nuxt dev` на :5173. Инфра — `pnpm infra` (docker: `fuse-mongo` :27018, `fuse-localstack` SQS :4566, `fuse-garage` S3 :9000). Профиль `.env.local` перекрывает `.env`.
+Dev-серверы поднимает пользователь (не убивать его процессы): бэкенд `nest --watch` на :3001 (сам подхватывает правки), фронтенд `nuxt dev` на :5173. Инфра — `pnpm infra` (docker: `fuse-mongo` :27018, `fuse-localstack` SQS :4566, `fuse-garage` S3 :9000). Единственный файл окружения — `.env.local`: общий `.env` удалён вместе с кредами внешних сервисов.
 
 ## Handle
 
 1. **Бэкенд жив:** `curl http://localhost:3001/api/schema.json` → 200 (заодно источник для `pnpm gen:types`).
 2. **JWT** (авторизация — кука `access_token`):
    ```bash
-   SECRET=$(grep '^JWT_SECRET' .env | sed 's/JWT_SECRET=//')
+   SECRET=$(grep '^JWT_SECRET' .env.local | sed 's/JWT_SECRET=//')
    DIR=$(ls -d node_modules/.pnpm/jsonwebtoken@*/node_modules/jsonwebtoken | head -1)
    SECRET=$SECRET DIR=$DIR node -e "console.log(require(require('path').resolve(process.env.DIR)).sign({userId:'<id из users>',email:'seed@fuse.local'},process.env.SECRET,{expiresIn:'4h'}))"
    ```

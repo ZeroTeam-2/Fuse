@@ -11,14 +11,22 @@
  */
 // mongoose — CommonJS, под ESM берём его через default-импорт.
 import mongoose from "mongoose";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { deriveBaseUrl } from "../src/apps/base-url.ts";
 
 const dryRun = process.argv.includes("--dry-run");
 
-// .env лежит в корне монорепозитория; ConfigModule здесь не поднимаем —
-// скрипт запускается голым node, без Nest.
-process.loadEnvFile(resolve(import.meta.dirname, "../../../.env"));
+// Файлы окружения лежат в корне монорепозитория; ConfigModule здесь не
+// поднимаем — скрипт запускается голым node, без Nest. Порядок как у бэкенда:
+// .env.local перекрывает .env, Node не затирает уже заданные переменные. Оба
+// файла опциональны — общий .env удалён вместе с кредами внешних сервисов.
+for (const envFile of [".env.local", ".env"]) {
+  const envPath = resolve(import.meta.dirname, "../../..", envFile);
+  if (existsSync(envPath)) {
+    process.loadEnvFile(envPath);
+  }
+}
 
 const mongoUrl = process.env.MONGODB_URL;
 if (!mongoUrl) {
