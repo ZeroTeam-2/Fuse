@@ -1,3 +1,25 @@
+> **Примечание при архивации (2026-11-03).** Изменение заархивировано
+> `openspec archive --skip-specs`: функциональность давно в `main` (файловый
+> импорт спеки — `POST /apps/import-preview-file` и `POST /apps/from-file`,
+> `components/ui/Dropzone.vue`, режим «URL / Файл» в `pages/my/apps/new.vue`),
+> но дельта-спека успела устареть и при обычном применении **откатила бы**
+> `openspec/specs/api-app-management/spec.md` назад:
+>
+> - дельта требует сохранять `specSnapshot`, тогда как главная спека после
+>   `centralize-file-size-limits` прямо запрещает инлайн-снапшот спеки в
+>   документе приложения;
+> - дельта объявляет повторный импорт по URL недоступным для приложений,
+>   созданных из файла, — а `reimport-spec-from-file` добавила требование
+>   «Повторный импорт спецификации из файла», доступное любому приложению
+>   независимо от источника создания;
+> - дельта не знает о более поздних сценариях: теги и группировка endpoints,
+>   лимит размера файла из конфигурации, создание окружения Prod.
+>
+> Поэтому главная спека оставлена как есть — она уже описывает файловый импорт
+> полнее дельты. Незакрытые пункты 1.3 / 9.1 / 9.2 — ручная QA, перекрытая
+> более поздними изменениями и тестами `apps-reimport-file.spec.ts`,
+> `openapi-parser.spec.ts`.
+
 ## Why
 
 Today an API app can only be created by providing a public URL to an OpenAPI spec. The prior `add-yaml-spec-parsing` change added YAML parsing for URL-fetched specs but explicitly deferred file upload as a non-goal. Users with local `.yaml`/`.yml`/`.json` specs (e.g. unfinished, private, or behind a VPN) have no way to import them — they must host the file first. Adding a drag-and-drop file drop zone to the creation flow removes this friction.
