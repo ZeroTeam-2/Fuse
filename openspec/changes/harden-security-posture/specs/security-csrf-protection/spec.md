@@ -1,56 +1,70 @@
 ## ADDED Requirements
 
 ### Requirement: SameSite=Lax для auth-кук
-Система SHALL устанавливать auth-куки (`access_token`, `refresh_token`) с атрибутом `SameSite=Lax` во всех окружениях, включая production. Атрибут `Secure` MUST быть `true` в production. Куки MUST иметь `HttpOnly=true` и `Path=/api`.
+Система SHALL устанавливать auth-куки (`access_token`, `refresh_token`) с `SameSite=Lax` во всех окружениях, включая production, где сейчас стоит `SameSite=None`. `None` означает «присылать куку на любой кросс-сайтовый запрос» — то есть ровно то, что делает возможным CSRF при cookie-аутентификации; фронтенд и API живут за одним Caddy и на одном origin, так что `None` ничего не даёт взамен. `HttpOnly` MUST быть `true`, `Secure` MUST быть `true` в production.
+
+`Path` MUST оставаться `/`. Сузить его до `/api` нельзя: socket.io обслуживается вне глобального префикса (`/socket.io/`), и тогда браузер не пришлёт `access_token` в handshake, а аутентификация WebSocket-соединения перестанет работать.
 
 #### Scenario: Production cookie flags
-- **WHEN** система выдаёт auth-куки в production-окружении
-- **THEN** каждый `Set-Cookie` содержит `HttpOnly; Secure; SameSite=Lax; Path=/api`
+- **WHEN** система выдаёт auth-куки в production
+- **THEN** каждый `Set-Cookie` содержит `HttpOnly; Secure; SameSite=Lax; Path=/`
 
 #### Scenario: Dev cookie flags
-- **WHEN** система выдаёт auth-куки в dev-окружении
-- **THEN** каждый `Set-Cookie` содержит `HttpOnly; SameSite=Lax; Path=/api` (без `Secure`, допускает HTTP на localhost)
+- **WHEN** система выдаёт auth-куки вне production
+- **THEN** каждый `Set-Cookie` содержит `HttpOnly; SameSite=Lax; Path=/` без `Secure` — вход по HTTP на localhost продолжает работать
+
+#### Scenario: Кука доезжает до WebSocket-handshake
+- **WHEN** браузер открывает соединение с `/socket.io/` после входа
+- **THEN** в handshake приходит `access_token`, и сервер аутентифицирует соединение
 
 ### Requirement: POST-only logout
-Система SHALL принимать logout только методом `POST /api/auth/logout`. Endpoint `GET /api/auth/logout` MUST быть удалён.
+Система SHALL принимать выход только как `POST /api/auth/logout`; обработчик `GET` MUST быть удалён. `GET`-logout выполняется по картинке на чужом сайте и разлогинивает пользователя без его участия, а в будущем — вместе с инвалидацией сессии в хранилище.
 
 #### Scenario: Logout через POST
 - **WHEN** аутентифицированный пользователь отправляет `POST /api/auth/logout` с CSRF-токеном
-- **THEN** система инвалидирует сессию и очищает auth-куки с теми же `Path`/`Domain`/`SameSite` атрибутами, что использовались при установке
+- **THEN** система инвалидирует сессию и очищает auth-куки тем же набором атрибутов, с которым они ставились
 
 #### Scenario: Logout через GET заблокирован
-- **WHEN** любой клиент запрашивает `GET /api/auth/logout`
-- **THEN** система отвечает `404 Not Found` (или `405 Method Not Allowed`) и не очищает куки
+- **WHEN** клиент запрашивает `GET /api/auth/logout`
+- **THEN** система отвечает `404`/`405` и куки не очищает
 
 ### Requirement: CSRF-токен double-submit
-Система SHALL выдавать CSRF-токен через `csrf-csrf` библиотеку в отдельной httpOnly-куке (`csrf-token`) с `SameSite=Lax`. Все state-changing эндпоинты (POST/PUT/PATCH/DELETE) MUST требовать presence и валидность заголовка `x-csrf-token`, совпадающего с cookie. Сравнение MUST быть timing-safe.
+Система SHALL выдавать CSRF-токен по схеме double-submit: в куку кладётся связанное с сессией значение, а клиент обязан прислать парный токен заголовком `x-csrf-token`. Все методы, меняющие состояние (`POST`, `PUT`, `PATCH`, `DELETE`), MUST отвергаться без валидной пары. Сравнение MUST быть за постоянное время.
+
+Кука MUST быть `HttpOnly`, поэтому прочитать её из JS нельзя — и не нужно: плоский токен клиент получает телом ответа от эндпоинта выдачи и держит в памяти. Требование «прочитать токен из cookie на фронтенде» несовместимо с `HttpOnly` и MUST NOT использоваться.
 
 #### Scenario: Запрос без CSRF-токена
 - **WHEN** клиент отправляет `POST /api/scenarios` без заголовка `x-csrf-token`
-- **THEN** система отвечает `403 Forbidden` с ошибкой `CSRF token missing`
+- **THEN** система отвечает `403` и не создаёт сценарий
 
 #### Scenario: Несовпадение токенов
-- **WHEN** клиент отправляет `POST /api/runs/:id/cancel` с заголовком `x-csrf-token: abc`, но кука `csrf-token=xyz`
-- **THEN** система отвечает `403 Forbidden` с ошибкой `CSRF token mismatch`
+- **WHEN** клиент отправляет `POST /api/runs/:id/cancel` с `x-csrf-token`, не парным куке
+- **THEN** система отвечает `403` и не меняет состояние запуска
 
 #### Scenario: Валидный CSRF-токен
-- **WHEN** клиент отправляет state-changing запрос с корректным `x-csrf-token`, совпадающим с cookie
-- **THEN** запрос обрабатывается нормально
+- **WHEN** клиент отправляет state-changing запрос с корректной парой кука/заголовок
+- **THEN** запрос обрабатывается как обычно
 
-### Requirement: Origin/Referer валидация для non-GET
-Система SHALL иметь глобальный guard, который для всех non-GET запросов проверяет, что заголовок `Origin` (или `Referer` при отсутствии `Origin`) совпадает с разрешённым `APP_URL`. Запросы без обоих заголовков MUST отклоняться с `403`.
+### Requirement: Проверка Origin для методов, меняющих состояние
+Система SHALL проверять `Origin` (при его отсутствии — `Referer`) для всех не-`GET` запросов и отклонять запросы с чужим origin, даже если auth-кука валидна.
 
-#### Scenario: Cross-site request block
-- **WHEN** браузер отправляет `POST /api/users/me/avatar` с `Origin: https://evil.com`
-- **THEN** система отвечает `403 Forbidden`, даже если auth-кука присутствует
+Проверка MUST учитывать, что часть запросов приходит не из браузера: Nuxt-сервер на SSR сам ходит в API (в том числе `POST /api/auth/refresh`), пробрасывая куки пользователя, и заголовка `Origin` в таком запросе нет. Правило «нет `Origin` и нет `Referer` → `403`» в этом виде ломает SSR-рефреш сессии. Запрос без обоих заголовков MUST отклоняться только тогда, когда он пришёл не от доверенного внутреннего клиента; способ отличения (внутренняя сеть, собственный заголовок фронтенд-сервера или выделенный маршрут с собственной защитой) MUST быть зафиксирован при реализации и покрыт тестом на SSR-сценарий.
 
-#### Scenario: Same-origin request
-- **WHEN** браузер отправляет `POST /api/users/me/avatar` с `Origin: https://fuse.example.com` (равным `APP_URL`)
-- **THEN** запрос проходит к контроллеру
+#### Scenario: Cross-site запрос отклонён
+- **WHEN** браузер отправляет `POST /api/users/me/avatar` с `Origin: https://evil.example`
+- **THEN** система отвечает `403`, несмотря на валидную auth-куку
 
-### Requirement: Выдача CSRF-токена через отдельный эндпоинт
-Система SHALL предоставлять `GET /api/auth/csrf-token`, возвращающий свежий CSRF-токен в `csrf-token` cookie. Endpoint MUST быть доступен только аутентифицированным пользователям.
+#### Scenario: Same-origin запрос проходит
+- **WHEN** браузер отправляет `POST /api/users/me/avatar` с `Origin`, равным `APP_URL`
+- **THEN** запрос доходит до контроллера
 
-#### Scenario: Получение CSRF-токена после логина
-- **WHEN** аутентифицированный пользователь запрашивает `GET /api/auth/csrf-token`
-- **THEN** система устанавливает `csrf-token` cookie и возвращает токен в JSON-ответе для использования в `x-csrf-token` заголовке
+#### Scenario: SSR-рефреш не ломается
+- **WHEN** Nuxt-сервер при рендере страницы отправляет `POST /api/auth/refresh` без заголовка `Origin`
+- **THEN** запрос обрабатывается, сессия обновляется, и страница рендерится аутентифицированной
+
+### Requirement: Выдача CSRF-токена
+Система SHALL предоставлять эндпоинт выдачи CSRF-токена, доступный аутентифицированному пользователю: он ставит куку и возвращает парный плоский токен в теле ответа. Фронтенд MUST подставлять этот токен заголовком `x-csrf-token` во все state-changing запросы и запрашивать новый после входа и после ротации сессии.
+
+#### Scenario: Получение токена после входа
+- **WHEN** аутентифицированный пользователь запрашивает эндпоинт выдачи CSRF-токена
+- **THEN** ответ ставит куку и содержит в теле токен, пригодный для заголовка `x-csrf-token`

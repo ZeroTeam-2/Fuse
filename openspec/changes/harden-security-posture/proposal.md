@@ -1,94 +1,104 @@
 ## Why
 
-Комплексный аудит безопасности Fuse выявил **17 критических**, **25 высоких** и **более 25 средних/низких** уязвимостей во всех слоях приложения (backend, frontend, инфраструктура). Текущая реализация уязвима к CSRF (cookie-auth + `SameSite=None` в проде), IDOR на эндпоинтах выполнения и загрузок, отсутствию rate-limiting и helmet, сломанной защите от SSRF, регекс-санитайзеру XSS, захардкоженным секретам и выставленному наружу Swagger UI. Устранение этих дефектов критично до любого публичного запуска — иначе возможны массовый захват аккаунтов, утечка данных пользователей и компрометация инфраструктуры Yandex Cloud / Timeweb.
+Аудит безопасности Fuse (30.10.2026) прошёл по всем слоям — backend, frontend, инфраструктура — и нашёл дефекты, которые нельзя оставлять до публичного запуска: CSRF при cookie-аутентификации с `SameSite=None` в production, IDOR на загрузках и на ручных входах сценария, отсутствие rate-limiting и security-заголовков, обходимую защиту от SSRF (DNS rebinding, внешние `$ref`), регекс-санитайзер HTML, фолбэк-секрет `"fallback"` для подписи JWT, открытый наружу Swagger, боевые креды в `.env` и в артефактах самого change'а.
+
+Состав изменения сверен с кодом на коммите `a80f5172` (03.11.2026). За время между аудитом и сверкой в main влились семь change'ей, и часть выводов аудита устарела:
+
+- **IDOR на эндпоинтах выполнения закрыт** — `execution.controller` прокидывает владельца, `getRun` отбивает чужой запуск. Остаётся регрессионный тест.
+- **Воркер вынесен в отдельный процесс**, события идут через мост поверх MongoDB. Hardening контейнеров и ограничения ресурсов должны покрывать сервис `worker`, которого в момент аудита не было.
+- **MinIO заменён на Garage**, Yandex SQS — на SQS-совместимый профиль с `AWS_*`. Задачи про `minio/minio:latest` и имена переменных Yandex потеряли адресата.
+- **Появился локальный вход по паролю** (`POST /api/auth/dev-login`, `@Public()`) — новая неаутентифицированная точка, которой в аудите нет.
+- **Появился `SSRF_ALLOWED_HOSTS`** — список исключений, обходящий и блок-лист, и резолв DNS.
+- **Публичность шагов опубликованного сценария зафиксирована как продуктовое решение** (панель запуска и playground для гостя), поэтому «срезать `steps`» из маркетплейса больше не цель — цель точнее: вырезать `consts` и `blockedReason`.
+- **`multer` и `tar` уже подняты** в прямых зависимостях; остаются транзитивные вхождения.
 
 ## What Changes
 
 **Аутентификация и сессии**
-- **BREAKING**: Сменить `sameSite: 'none'` → `'lax'` для auth-кук в проде; сделать logout методом `POST`.
-- Внедрить защиту CSRF (double-submit токен через `csrf-csrf`) для всех state-changing эндпоинтов.
-- Убрать фолбэк `?? "fallback"` для `JWT_SECRET`; использовать `configService.getOrThrow` и `.refine` против захардкоженных placeholder-строк.
-- Добавить ротацию refresh-токенов с `jti` и server-side session store; добавлять `tokenVersion` в access-токен с bump при logout-everywhere.
-- Реализовать OAuth `state`-параметр (генерация, cookie-bound, валидация в callback).
+- **BREAKING**: `sameSite: 'none'` → `'lax'` для auth-кук в production; `logout` становится `POST`. `path` остаётся `/` — сужение до `/api` отрезало бы куку от handshake socket.io.
+- Защита CSRF: парный токен (кука `HttpOnly` + заголовок `x-csrf-token`, плоское значение выдаётся телом ответа) и проверка `Origin` для методов, меняющих состояние — с исключением для серверных вызовов Nuxt при SSR.
+- Убрать фолбэк `?? "fallback"` для `JWT_SECRET` в четырёх местах, перейти на `getOrThrow`.
+- Ротация refresh-токенов с `jti` и серверным хранилищем сессий; `tokenVersion` для «выйти везде».
+- OAuth `state`: генерация, привязка к куке, сверка в callback (`getAuthUrl` уже принимает параметр).
+- Строгий лимит частоты на `/auth/dev-login`, `/auth/refresh`, `/auth/callback`, `/auth/logout`.
 
-**Авторизация (IDOR)**
-- Прокинуть `req.user.userId` в `execution.cancelRun/submitPageData/submitInputs` с проверкой владельца.
-- Проверять владельца в `uploads.findSession(uploadId, userId)` и во всех chunked-upload эндпоинтах.
-- Проверять ownership/published для `scenarios/:id/manual-inputs`.
-- Аутентифицировать WebSocket-подключения (`RunGateway.handleConnection`) с проверкой `run.userId === decoded.userId`.
-- Убрать `email` из `UpdateProfileDto`; запретить `published` через generic PATCH (только через `togglePublish`).
+**Авторизация**
+- Проверка владельца в `uploads.findSession` и во всех четырёх чанковых эндпоинтах.
+- Проверка владельца на `GET /api/scenarios/:id/manual-inputs` (гостевой путь остаётся через маркетплейс).
+- Аутентификация handshake WebSocket в `RunGateway` с проверкой владельца запуска — по образцу уже работающего `NotificationsGateway`.
+- Убрать из DTO поля, которыми обходятся проверки: `email` из `UpdateProfileDto`, `published` из `UpdateScenarioDto`, `openapiUrl` из `UpdateAppDto`.
 
 **SSRF**
-- Использовать `ipaddr.js` (RFC 6890) в `SsrfGuard`, блокировать decimal/octal/hex/IPv4-mapped IPv6; pin IP через кастомный `dns.lookup` (undici Agent) для устранения DNS-rebinding.
-- Запретить external `$ref` dereference в `@readme/openapi-parser` (`{ dereference: { external: false } }`).
-- Срезать `openapiUrl` из `UpdateAppDto` (миграция только через пересоздание).
+- Разбор адреса через `ipaddr.js` (RFC 6890) вместо списка регулярных выражений; блокировка нестандартных записей IPv4 и IPv4-mapped IPv6.
+- Пиннинг адреса на соединение (кастомный `lookup` диспетчера) — закрывает окно между проверкой и `fetch`.
+- `redirect: "manual"` с повторной проверкой каждого `Location`.
+- Запрет внешних `$ref` при dereference спецификации.
+- Запрет непустого `SSRF_ALLOWED_HOSTS` в production.
 
-**Rate Limiting & Headers**
-- Установить `@nestjs/throttler` как `APP_GUARD`; строгие лимиты на `/auth/*`, `/marketplace`, `/uploads/*`.
-- Подключить `helmet()`; `Cache-Control: no-store` на auth-ответах.
-- Спрятать Swagger/`/api/schema.json` за `NODE_ENV !== 'production'`.
-- Глобальный `AllExceptionsFilter` — срезать детали 5xx в ответах.
+**Лимиты и заголовки**
+- `ThrottlerGuard` как `APP_GUARD` + **`trust proxy` у Express**: без него `req.ip` равен адресу контейнера Caddy и все пользователи считаются одним клиентом.
+- `helmet()`, лимиты тела запроса, `Cache-Control: no-store` на auth-ответах.
+- Swagger и `/api/schema.json` только вне production.
+- Глобальный фильтр исключений: 5xx без диагностики, с идентификатором запроса.
 
 **Валидация и загрузки**
-- `FileInterceptor("file", { limits: { fileSize, files: 1 } })` везде; проверка по magic-bytes через `file-type` (запрет SVG для аватаров); `Content-Disposition: attachment` на загружаемые объекты.
-- Валидировать `partNumber` ∈ 1..10000; cap размера `parts[]`.
-- Парсить `js-yaml` со схемой `JSON_SCHEMA` (запрет anchors).
-- Заменять regex-санитайзер `sanitizeRichText` на `isomorphic-dompurify` (parser-based).
+- `limits: { fileSize, files: 1 }` на всех шести точках приёма файлов (аватар, single-upload, четыре эндпоинта спецификаций); проверка аватара по сигнатуре содержимого, запрет SVG.
+- Верхняя граница на тело `uploadPart` и валидация номера части.
+- Развязать хранение аватара от presigned-ссылки **до** сокращения TTL — иначе аватары отвалятся навсегда.
+- Парсерный санитайзер вместо регекс-санитайзера в `sanitizeRichText` (его потребители — `renderMarkdown` и страница карточки).
 
 **Инфраструктура и секреты**
-- **BREAKING**: Ротировать **все** скомпрометированные креды в `.env` (MongoDB root, Yandex SQS, Timeweb S3, Yandex OAuth secret, JWT/session секреты); вынести в Vault/Doppler/sops.
-- Удалить `.default("test"/"minioadmin")` в `env.schema.ts`; заменить `${VAR:-default}` → `${VAR:?required}` в `docker-compose.yml`.
-- Запустить контейнеры от non-root `USER`; добавить `cap_drop: [ALL]`, `security_opt: ["no-new-privileges:true"]`, `read_only: true`, resource limits.
-- Bind dev-инфраструктуру (mongo/minio/localstack/mock-api) на `127.0.0.1`.
-- Включить TLS в Caddy (ACME) и добавить security headers (HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy).
-- CSP на frontend через `nuxt-security` или Nitro `routeRules`.
-- Заменить `FLOW_TOKEN` PAT на GitHub App + OIDC; валидировать имя change-ветки через regex; добавить `permissions: contents: read` в `ci.yml`; блокировать fork-PR в `change-complete`.
-- Добавить SAST (Gitleaks), Trivy (image + repo scan), `pnpm audit --audit-level=high` в CI.
-- Bump `multer` до `>=2.2.0` и `tar` до `>=7.5.16` через `pnpm.overrides`.
-- Сократить expiry presigned-URL с 24h до 5–15 минут; добавить on-demand endpoint.
-- Срезать публичное раскрытие полных `steps`/`consts`/`blockedReason` в marketplace.
+- **BREAKING**: ротация всех скомпрометированных кредов; отозванные значения отклоняются валидацией **по хэшу**, чтобы не возвращать их в репозиторий.
+- Fail-fast на секреты, обусловленный `NODE_ENV=production` — дефолты для LocalStack и Garage остаются, иначе локальная разработка встанет.
+- `${VAR:?}` для оставшихся секретов в compose, в обоих сервисах (`backend` и `worker`).
+- Непривилегированный пользователь в контейнерах, `cap_drop`, `read_only`, лимиты ресурсов — включая `worker`.
+- Dev-инфраструктура (`mongo`, `localstack`, `garage`, `mock-api`) слушает только `127.0.0.1`.
+- TLS в Caddy, security-заголовки, `X-Forwarded-For`; перевыпуск OAuth `redirect_uri` на HTTPS.
+- CSP на фронтенде **с nonce** — `script-src 'self'` без nonce ломает гидрацию Nuxt.
+- GitHub App вместо `FLOW_TOKEN`; устранение подстановки имени ветки в shell; `permissions` в `ci.yml`; поиск секретов, аудит зависимостей и сканирование образов в CI; пин actions по SHA.
+- `pnpm.overrides` для транзитивных `multer` и `tar`; corepack с версией pnpm из `packageManager`.
+- Вычистить плейнтекст секретов из истории git.
 
 ## Capabilities
 
 ### New Capabilities
-- `security-rate-limiting`: Throttling входящих HTTP-запросов на уровне приложения (per-IP + per-route), с особыми лимитами для auth/marketplace/uploads.
-- `security-csrf-protection`: Защита state-changing эндпоинтов от CSRF (double-submit token, Origin/Referer checks, SameSite ужесточение).
-- `security-headers`: Унифицированный набор security response headers (helmet на backend, Caddy headers, CSP на frontend).
-- `security-secrets-management`: Политика хранения/валидации секретов (no placeholders, fail-fast валидация, изоляция от build-context).
-- `container-hardening`: Non-root runtime, least-privilege capabilities, read-only FS, resource limits, pinned digests.
-- `supply-chain-security`: CI-гейты для SAST, dependency audit, image scanning, pinning, OIDC вместо PAT.
-- `audit-logging-sanitization`: Санитизация PII и upstream error bodies в логах/ответах, глобальный exception filter.
+- `security-rate-limiting`: ограничение частоты запросов с корректным ключом клиента за прокси.
+- `security-csrf-protection`: парный CSRF-токен, проверка `Origin`, ужесточение атрибутов кук.
+- `security-headers`: единый набор security-заголовков (backend, Caddy, CSP фронтенда).
+- `security-secrets-management`: отказ стартовать с незаполненными и отозванными секретами, изоляция от контекста сборки.
+- `container-hardening`: непривилегированный рантайм, минимальные привилегии, лимиты ресурсов, воспроизводимые образы.
+- `supply-chain-security`: гейты CI (секреты, зависимости, образы), короткоживущие токены, закреплённые actions.
+- `audit-logging-sanitization`: маскирование в логах, идентификатор запроса, обрезка тел ответов, глобальный фильтр исключений.
 
 ### Modified Capabilities
-- `auth-profile`: Ужесточение cookie-флагов, ротация refresh-токенов, валидность OAuth `state`, запрет смены email через PATCH, logout = POST.
-- `marketplace`: Срезание `consts`/`steps`/`blockedReason` из публичного ответа, экранирование `$regex`-поиска от ReDoS.
-- `scenario-execution`: Проверка ownership на cancel/page-submit/input-submit, санитизация ошибок worker, валидация SQS-сообщений.
-- `scenario-builder`: Валидация структуры `steps`, запрет `published` через generic PATCH, ownership-чек на manual-inputs.
-- `api-app-management`: Запрет mutation `openapiUrl`, отключение external `$ref` dereference, размеры файла + YAML-схема.
+- `auth-profile`: атрибуты кук, ротация refresh, OAuth `state`, immutable email, `POST`-logout, лимит на локальный вход, аватар по имени объекта.
+- `marketplace`: вырезание `consts` и `blockedReason` из публичного ответа (шаги остаются), экранирование поиска.
+- `scenario-execution`: аутентификация WebSocket-комнаты, SSRF с пиннингом адреса, обрезка ошибок, валидация сообщения очереди, фиксация проверки владельца.
+- `scenario-builder`: границы размера шагов, запрет публикации через `PATCH`, владельческий `manual-inputs`.
+- `api-app-management`: запрет внешних `$ref`, лимиты на приём файлов спецификации, уточнение роли схемы YAML.
 
 ## Impact
 
 **Код**
-- `apps/backend/src/main.ts`, `app.module.ts` — helmet, throttler, global filter, JSON body limit.
-- `apps/backend/src/auth/` — CSRF, OAuth state, refresh rotation, cookie-флаги, logout=POST, JWT factory.
-- `apps/backend/src/execution/`, `uploads/`, `scenarios/`, `apps/`, `users/`, `websocket/` — IDOR-чеки, валидация, sanitization.
-- `apps/frontend/utils/sanitizeRichText.ts`, `pages/cards/[id]/index.vue` — DOMPurify.
-- `apps/frontend/nuxt.config.ts` — CSP, security headers, отказ от загрузки `.env` в build.
-- `apps/frontend/plugins/{api,metrica}.ts` — allowlist cookie forwarding, замена metrica на `@nuxt/scripts`.
+- `apps/backend/src/main.ts`, `app.module.ts` — helmet, throttler, `trust proxy`, лимиты тела, фильтр исключений, Swagger по окружению.
+- `apps/backend/src/auth/` — CSRF, OAuth `state`, ротация refresh, атрибуты кук, `POST`-logout, `getOrThrow`.
+- `apps/backend/src/{execution,uploads,scenarios,apps,users,websocket,marketplace,notifications}/` — проверки владельца, валидация, санитизация.
+- `apps/backend/src/config/env.schema.ts`, `apps/frontend/config/env.schema.ts` — fail-fast, список отозванных хэшей.
+- `apps/frontend/utils/sanitizeRichText.ts`, `plugins/api.ts`, `nuxt.config.ts` — санитайзер, allowlist кук, CSP, отказ от чтения общего `.env`.
 
 **Инфраструктура**
-- `Caddyfile` — TLS, security headers, rate-limit module.
-- `docker-compose.yml`, `docker-compose.dev.yml` — `127.0.0.1` bind, resource limits, `:?required`.
-- `apps/{backend,frontend,proxy}/Dockerfile` — non-root USER, tini, digest pinning.
-- `.dockerignore` — расширить исключения (`.env*`, `.claude`, `.opencode`, тесты).
-- `.github/workflows/*.yml` — OIDC, permissions, SAST/Trivy/audit шаги, branch-name validation.
+- `Caddyfile` — TLS, заголовки, `X-Forwarded-For`.
+- `docker-compose.yml` — привилегии, лимиты, `:?` для оставшихся секретов (включая `worker`).
+- `docker-compose.dev.yml` — bind на `127.0.0.1`, пин по digest.
+- `apps/{backend,frontend,proxy}/Dockerfile` — непривилегированный пользователь, corepack, сигналы.
+- `.dockerignore`, `.github/workflows/*.yml`.
 
 **Зависимости**
-- Добавить: `helmet`, `@nestjs/throttler`, `csrf-csrf`, `ipaddr.js`, `file-type`, `isomorphic-dompurify`, `@nuxt/scripts`, `nuxt-security`.
-- Обновить: `multer` (≥2.2.0), `tar` (≥7.5.16 через overrides).
-- Удалить: hand-rolled `metrica.ts` snippet.
+- Добавить: `helmet`, `@nestjs/throttler`, `csrf-csrf`, `ipaddr.js`, `file-type`, `undici`, `isomorphic-dompurify`, модуль безопасности Nuxt.
+- `pnpm.overrides` для транзитивных `multer` и `tar`.
 
 **Операционные последствия**
-- **BREAKING**: Все существующие сессии инвалидируются (смена JWT secret + cookie flags).
-- **BREAKING**: Dev-инстансы вне localhost больше не запустятся без явного override.
-- Требуется ротация внешних секретов (Yandex/Timeweb/Mongo) и перевыдача OAuth redirect URI на HTTPS.
+- **BREAKING**: все сессии инвалидируются (смена `JWT_SECRET` и атрибутов кук).
+- **BREAKING**: production не стартует без заполненных секретов и с непустым `SSRF_ALLOWED_HOSTS`.
+- Требуется перевыпуск OAuth `redirect_uri` на HTTPS и ротация внешних кредов.
+- Переписывание истории git потребует перeклонирования репозитория у всех, у кого есть локальные копии.

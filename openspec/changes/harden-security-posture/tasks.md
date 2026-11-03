@@ -1,199 +1,212 @@
+> Статус задач сверен с кодом на коммите `a80f5172` (03.11.2026). Пункты, которые
+> аудит от 30.10 считал открытыми, а новые change'и с тех пор закрыли, снесены или
+> переведены в проверку. Значения скомпрометированных секретов в этом файле больше
+> не приводятся: они фиксируются хэшами (см. 1.7), сами значения — в канале
+> сопровождения.
+
 ## 1. Аварийная ротация секретов (T+0, до кода)
 
-- [ ] 1.1 Сгенерировать новый `JWT_SECRET` через `openssl rand -hex 48` и обновить во всех окружениях (dev/staging/prod, `.env`, vault)
-- [ ] 1.2 Сгенерировать новый `NUXT_SESSION_SECRET` через `openssl rand -hex 48` и обновить во всех окружениях
-- [ ] 1.3 Ротировать MongoDB root-credentials (старый `***REMOVED***` считать скомпрометированным)
-- [ ] 1.4 Перевыдать Yandex SQS static keys (`***REMOVED***`/`***REMOVED***` считать скомпрометированными)
-- [ ] 1.5 Перевыдать Timeweb S3 keys (`***REMOVED***`/`***REMOVED***` считать скомпрометированными)
-- [ ] 1.6 Перевыдать Yandex OAuth client secret (`***REMOVED***` считать скомпрометированным) и обновить `YANDEX_CLIENT_SECRET`
-- [ ] 1.7 Зафиксировать скомпрометированные значения в `apps/backend/src/config/env.schema.ts` через `.refine` (reject blacklist literal strings)
-- [ ] 1.8 Зафиксировать скомпрометированные значения в `apps/frontend/config/env.schema.ts` через `.refine` для `NUXT_SESSION_SECRET`
+- [ ] 1.1 Сгенерировать новый `JWT_SECRET` (`openssl rand -hex 48`) и обновить во всех окружениях
+- [ ] 1.2 Сгенерировать новый `NUXT_SESSION_SECRET` (`openssl rand -hex 48`) и обновить во всех окружениях
+- [ ] 1.3 Ротировать root-креды MongoDB
+- [ ] 1.4 Перевыпустить статические ключи очереди (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` профиля Yandex Message Queue)
+- [ ] 1.5 Перевыпустить ключи S3 (`S3_ACCESS_KEY` / `S3_SECRET_KEY` профиля Timeweb)
+- [ ] 1.6 Перевыпустить `YANDEX_CLIENT_SECRET` в кабинете OAuth-приложения
+- [ ] 1.7 Внести sha256 отозванных значений в `apps/backend/src/config/env.schema.ts` и `apps/frontend/config/env.schema.ts`; сверка по хэшу, сами значения в репозиторий не возвращаются
+- [ ] 1.8 Вычистить плейнтекст секретов из истории git (`git filter-repo --replace-text`), перевыпустить ветки `main`, `develop`, активные `change/*`, предупредить всех, у кого есть локальные клоны
 
-## 2. Backend hardening — глобальные middleware
+## 2. Backend — глобальные middleware
 
 - [ ] 2.1 Установить зависимости: `helmet`, `@nestjs/throttler`, `csrf-csrf`, `ipaddr.js`, `file-type`, `undici`
-- [ ] 2.2 В `apps/backend/src/main.ts` подключить `app.use(helmet({ crossOriginResourcePolicy: { policy: "same-origin" }, ... }))`, с условным пропуском HSTS в dev
-- [ ] 2.3 Установить `app.use(json({ limit: "1mb" }))` и `urlencoded({ limit: "1mb", extended: true })` в `main.ts`
-- [ ] 2.4 Зарегистрировать `ThrottlerModule.forRoot(...)` в `app.module.ts` и `APP_GUARD` `ThrottlerGuard`
-- [ ] 2.5 Добавить `@Throttle({ default: { limit: 5, ttl: 60_000 } })` на `/auth/*` эндпоинты в `auth.controller.ts`
-- [ ] 2.6 Добавить `@Throttle({ default: { limit: 30, ttl: 60_000 } })` на `MarketplaceController`
-- [ ] 2.7 Добавить `@Throttle({ default: { limit: 10, ttl: 60_000 } })` на `UploadsController` и `UsersController.uploadAvatar`
-- [ ] 2.8 Обернуть `/api/docs` и `/api/schema.json` в `main.ts` в `if (process.env.NODE_ENV !== "production")`
-- [ ] 2.9 Создать `apps/backend/src/common/filters/all-exceptions.filter.ts`, зарегистрировать как `APP_FILTER`, с correlation UUID в 5xx ответах
-- [ ] 2.10 Создать `apps/backend/src/common/middleware/correlation-id.middleware.ts`, добавляющий `x-request-id` в request/response, использовать `AsyncLocalStorage` для проброса в `LoggingService`
-- [ ] 2.11 Добавить `@Header("Cache-Control", "no-store")` на все обработчики `AuthController`
+- [ ] 2.2 `app.use(helmet(...))` в `main.ts`; HSTS только при `NODE_ENV=production`
+- [ ] 2.3 Лимиты тела запроса: `json({ limit })` и `urlencoded({ limit, extended: true })` в `main.ts`
+- [ ] 2.4 **Включить `trust proxy`** у Express (`app.set("trust proxy", <число хопов>)`) и убедиться, что Caddy проставляет `X-Forwarded-For`. Без этого `req.ip` равен адресу контейнера Caddy, и throttler считает всех пользователей одним клиентом
+- [ ] 2.5 `ThrottlerModule.forRoot(...)` в `app.module.ts` + `ThrottlerGuard` как `APP_GUARD`
+- [ ] 2.6 Строгий `@Throttle` на `/auth/callback`, `/auth/refresh`, `/auth/dev-login`, `/auth/logout` в `auth.controller.ts`
+- [ ] 2.7 `@Throttle` на `MarketplaceController` (весь контроллер `@Public()`, включая `:id/manual-inputs`)
+- [ ] 2.8 `@Throttle` на `UploadsController`, `UsersController.uploadAvatar` и file-эндпоинты `AppsController`
+- [ ] 2.9 Исключить health-check `GET /` из throttle (`@SkipThrottle`) — docker опрашивает его каждые 15 с
+- [ ] 2.10 Регистрировать `/api/docs` и `/api/schema.json` только вне production
+- [ ] 2.11 `apps/backend/src/common/filters/all-exceptions.filter.ts` + `APP_FILTER`, с идентификатором запроса в теле 5xx
+- [ ] 2.12 `apps/backend/src/common/middleware/request-id.middleware.ts` + `AsyncLocalStorage` для проброса идентификатора в логи
+- [ ] 2.13 `@Header("Cache-Control", "no-store")` на обработчиках `AuthController`
 
 ## 3. Fail-fast валидация секретов
 
-- [ ] 3.1 В `apps/backend/src/config/env.schema.ts` удалить `.default("test")`/`.default("minioadmin")`/`.default("")` для всех секретов; сделать их `z.string().min(N)`
-- [ ] 3.2 Добавить `.refine` на `JWT_SECRET`: reject `change-me-...`, `fallback`, и Shannon entropy < 3.0
-- [ ] 3.3 Добавить `.refine` на `LOG_COLLECTOR_URL`: требовать `https://`
-- [ ] 3.4 В `app.module.ts` заменить `configService.get<string>("JWT_SECRET") ?? "fallback"` на `configService.getOrThrow<string>("JWT_SECRET")`
-- [ ] 3.5 В `apps/backend/src/auth/auth.module.ts` заменить фолбэк-секрет на `getOrThrow`
-- [ ] 3.6 В `apps/backend/src/auth/strategies/jwt.strategy.ts` заменить фолбэк-секрет на `getOrThrow`
-- [ ] 3.7 В `apps/backend/src/auth/yandex-auth.service.ts` заменить фолбэк-секрет на `getOrThrow`
-- [ ] 3.8 В `docker-compose.yml` заменить `${VAR:-default}` на `${VAR:?required}` для всех секретов (JWT_SECRET, NUXT_SESSION_SECRET, MONGODB_URL, AWS_*, S3_*, YANDEX_*)
-- [ ] 3.9 Проверить `rg '\?\? "fallback"' apps/backend/src/` — ни одного совпадения
+- [ ] 3.1 В `env.schema.ts` перевести проверку обязательности секретов в `superRefine`, обусловленный `NODE_ENV === "production"` (тем же приёмом, что уже применён к `DEV_LOGIN_PASSWORD`). Дефолты `test` / `minioadmin` / `fuse-local-dev-secret` остаются для разработки
+- [ ] 3.2 Отклонять в production: пустые `AWS_*`, `S3_*`, `YANDEX_*`, placeholder `JWT_SECRET` из `.env.example`, значения с хэшем из списка отозванных (1.7)
+- [ ] 3.3 Отклонять `JWT_SECRET` с вырожденным алфавитом (один повторяющийся символ)
+- [ ] 3.4 **Отклонять непустой `SSRF_ALLOWED_HOSTS` при `NODE_ENV=production`** — список обходит и блок-лист, и резолв DNS целиком
+- [ ] 3.5 Требовать `https://` у непустого `LOG_COLLECTOR_URL`
+- [ ] 3.6 Заменить `configService.get<string>("JWT_SECRET") ?? "fallback"` на `getOrThrow` в четырёх местах: `app.module.ts:41`, `auth/auth.module.ts:17`, `auth/strategies/jwt.strategy.ts:20`, `auth/yandex-auth.service.ts:130`
+- [ ] 3.7 Проверить: `rg '\?\? "fallback"' apps/backend/src/` — пусто
+- [ ] 3.8 В `docker-compose.yml` заменить `:-` на `:?` для `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` — **в обоих сервисах, `backend` и `worker`**. `MONGODB_URL`, `JWT_SECRET`, `NUXT_SESSION_SECRET` уже приведены
+- [ ] 3.9 Привести `S3_URL: ${S3_URL:-minio}` — дефолт указывает на сервис, которого больше нет (локально Garage, в бою внешний S3)
 
 ## 4. Cookie-флаги + CSRF
 
-- [ ] 4.1 В `apps/backend/src/auth/auth.controller.ts` сменить `sameSite: isProd ? "none" : "lax"` на `sameSite: "lax"` во всех окружениях
-- [ ] 4.2 Установить `path: "/api"` для всех auth-кук
-- [ ] 4.3 Изменить `logout` на `@Post("logout")` (удалить `@Get("logout")`); убрать `@Public()` (требовать auth)
-- [ ] 4.4 В `setAuthCookies` и `logout` использовать один и тот же объект cookie-опций для `clearCookie`
-- [ ] 4.5 Установить `csrf-csrf` библиотеку; создать `apps/backend/src/security/csrf.config.ts` с конфигурацией double-submit token cookie
-- [ ] 4.6 Создать `apps/backend/src/security/csrf.guard.ts`, проверяющий заголовок `x-csrf-token` против cookie для всех non-GET/state-changing запросов
-- [ ] 4.7 Зарегистрировать CsrfGuard как `APP_GUARD` (после JwtAuthGuard)
-- [ ] 4.8 Добавить `GET /api/auth/csrf-token` эндпоинт (auth-required), возвращающий свежий CSRF-токен
-- [ ] 4.9 Создать `apps/backend/src/security/origin.guard.ts`, проверяющий `Origin`/`Referer` против `APP_URL` для всех non-GET; зарегистрировать как `APP_GUARD`
-- [ ] 4.10 На frontend обновить `$fetch`/`useFetch` плагины в `apps/frontend/plugins/api.ts`: автоматически добавлять `x-csrf-token` из cookie на каждый state-changing запрос
+- [ ] 4.1 `sameSite: "lax"` во всех окружениях в `auth.controller.ts:setAuthCookies` (сейчас `none` в production)
+- [ ] 4.2 **`path` оставить `/`.** Сужение до `/api` сломает аутентификацию WebSocket: socket.io живёт на `/socket.io/`, вне глобального префикса, и куку туда браузер не пришлёт
+- [ ] 4.3 `logout` → `@Post("logout")`, убрать `@Get("logout")` и `@Public()`
+- [ ] 4.4 Вынести объект cookie-опций в одно место и использовать его и в `res.cookie`, и в `res.clearCookie`
+- [ ] 4.5 `apps/backend/src/security/csrf.config.ts` — конфигурация `csrf-csrf` (кука `HttpOnly`, парный токен в теле ответа)
+- [ ] 4.6 `apps/backend/src/security/csrf.guard.ts` — проверка `x-csrf-token` для `POST`/`PUT`/`PATCH`/`DELETE`
+- [ ] 4.7 Зарегистрировать `CsrfGuard` как `APP_GUARD` после `JwtAuthGuard`
+- [ ] 4.8 `GET /api/auth/csrf-token` — ставит куку, возвращает парный токен телом
+- [ ] 4.9 `apps/backend/src/security/origin.guard.ts` — проверка `Origin`/`Referer` против `APP_URL` для не-GET. **Предусмотреть SSR**: Nuxt-сервер ходит в API без `Origin` (в т.ч. `POST /api/auth/refresh` из `plugins/api.ts`), и правило «нет заголовков → 403» сломает рефреш сессии при рендере. Решение зафиксировать в коде комментарием и покрыть тестом
+- [ ] 4.10 На фронтенде хранить CSRF-токен из тела ответа в памяти и подставлять заголовком. **Читать из cookie нельзя** — она `HttpOnly`
 
-## 5. Аутентификация — ротация refresh + OAuth state
+## 5. Ротация refresh + OAuth state
 
-- [ ] 5.1 Создать Mongoose-схему `Session` (`{ jti, userId, refreshTokenHash, createdAt, revokedAt }`) в `apps/backend/src/auth/session.schema.ts`
-- [ ] 5.2 Создать `SessionService` с методами `create`, `validate(jti)`, `revoke(jti)`, `revokeAllForUser(userId)`
-- [ ] 5.3 Добавить поле `tokenVersion` в `User`-схему; инкрементировать при password change / "logout everywhere"
-- [ ] 5.4 Обновить `JwtPayload`: добавить `jti` и `sId` для access-токена, `jti` для refresh-токена
-- [ ] 5.5 Переписать `issueTokens` в `yandex-auth.service.ts`: генерировать `jti`, сохранять session, подписывать access с `sId`, refresh с `jti`
-- [ ] 5.6 Переписать `refreshTokens`: верифицировать refresh, проверить валидность `jti` в `SessionService`, при валидности — отозвать старый `jti`, выдать новый; при инвалидности (повтор) — отозвать всю цепочку (`revokeAllForUser`)
-- [ ] 5.7 Обновить `JwtStrategy.validate`: проверить `SessionService.validate(sId)` и опционально `tokenVersion`
-- [ ] 5.8 Добавить `POST /api/auth/logout-all` (инвалидирует все сессии пользователя через `tokenVersion++` и `revokeAllForUser`)
-- [ ] 5.9 В `yandex-auth.service.getAuthUrl()` генерировать `state = crypto.randomUUID()`, сохранять в short-lived httpOnly cookie `oauth_state` (через controller), передавать в Yandex URL
-- [ ] 5.10 В `auth.controller.login()` устанавливать `oauth_state` cookie и возвращать URL с state
-- [ ] 5.11 В `auth.controller.callback()` сверять `req.query.state` с cookie `oauth_state`; при несовпадении — `400`; после сверки удалять cookie
-- [ ] 5.12 Юнит-тесты: replay старого refresh-токена → 401; валидная ротация → 200 с новой парой; несовпадение state → 400
+- [ ] 5.1 Схема `Session` (`{ jti, userId, refreshTokenHash, createdAt, revokedAt }`) в `apps/backend/src/auth/session.schema.ts`
+- [ ] 5.2 `SessionService`: `create`, `validate(jti)`, `revoke(jti)`, `revokeAllForUser(userId)`
+- [ ] 5.3 Поле `tokenVersion` в `User`-схеме
+- [ ] 5.4 `JwtPayload`: `jti` и `sId` в access-токене, `jti` в refresh-токене
+- [ ] 5.5 `issueTokens` в `yandex-auth.service.ts`: генерировать `jti`, сохранять сессию, подписывать access с `sId`. Учесть, что `issueTokens` вызывается и из `devLogin`
+- [ ] 5.6 `refreshTokens`: проверить `jti` в `SessionService`, отозвать старый, выдать новый; при повторном использовании отозванного — `revokeAllForUser`
+- [ ] 5.7 `JwtStrategy.validate`: проверять сессию по `sId` и `tokenVersion`. Учесть, что `validate` уже ходит в базу за пользователем — не добавлять второй запрос на каждый вызов
+- [ ] 5.8 `POST /api/auth/logout-all` — `tokenVersion++` и `revokeAllForUser`
+- [ ] 5.9 `getAuthUrl(state?)` уже принимает параметр — начать его передавать: генерировать `state`, класть в короткоживущую httpOnly-куку
+- [ ] 5.10 `auth.controller.login()` — ставить куку `oauth_state`; сейчас это `@Redirect()`, понадобится `@Res`
+- [ ] 5.11 `auth.controller.callback()` — сверять `state` из query с кукой, затем удалять куку
+- [ ] 5.12 Тесты: повтор отозванного refresh → 401; валидная ротация → новая пара; несовпадение `state` → отказ без сессии
 
-## 6. IDOR — ownership-чеки
+## 6. IDOR — проверки владельца
 
-- [ ] 6.1 В `execution.controller.ts` прокинуть `@Req() req` в `cancel/submitPage/submitInputs` и передать `req.user.userId` в сервис
-- [ ] 6.2 В `execution.service.ts` обновить сигнатуры `cancelRun(runId, userId)`, `submitPageData(runId, stepIndex, data, userId)`, `submitInputs(runId, stepIndex, values, userId)`; добавить ownership-check через `run.userId !== userId` → `ForbiddenException`
-- [ ] 6.3 В `uploads.service.ts` обновить `findSession(uploadId, userId)`: добавить `userId` параметр, выбрасывать `ForbiddenException` при `session.userId !== userId`
-- [ ] 6.4 Обновить `uploadPart`, `completeChunkedUpload`, `abortChunkedUpload`, `getUploadStatus` в `uploads.controller.ts`: прокидывать `req.user.userId`
-- [ ] 6.5 В `scenarios.controller.ts` обновить `getManualInputs`: прокинуть `req.user.userId`
-- [ ] 6.6 В `manual-inputs.service.ts` обновить `forScenario(scenarioId, userId)`: возвращать данные только если `scenario.ownerId === userId` ИЛИ `scenario.published === true`; иначе `NotFoundException` (не раскрывать существование)
-- [ ] 6.7 Юнит-тесты для каждого IDOR-сценария: владелец → 200, чужой → 403/404
+- [ ] 6.1 **Сделано.** `execution.controller.ts` прокидывает `req.user.userId`, `execution.service.getRun` кидает `ForbiddenException`, остальные методы идут через него. Задача сводится к тесту-регрессии (15.4), чтобы инвариант не потерялся
+- [ ] 6.2 `uploads.service.findSession(uploadId)` → `findSession(uploadId, userId)` с `ForbiddenException` при чужой сессии
+- [ ] 6.3 Прокинуть `req.user.userId` в `uploadPart`, `completeChunkedUpload`, `abortChunkedUpload`, `getUploadStatus` в `uploads.controller.ts` — сейчас ни один из четырёх не смотрит на владельца
+- [ ] 6.4 `scenarios.controller.getManualInputs(@Param("id") id)` → прокинуть `req.user.userId`
+- [ ] 6.5 `manual-inputs.service.forScenario(scenarioId)` → `forScenario(scenarioId, ownerId)`, `NotFoundException` для чужого. Гостевой путь не трогать: он идёт через `marketplace.service.getManualInputs`, где уже проверяется `published`
+- [ ] 6.6 Убрать `email` из `UpdateProfileDto` (`apps/backend/src/users/dto/update-profile.dto.ts`)
+- [ ] 6.7 Убрать `published` из `UpdateScenarioDto` — сейчас `scenarios.service.update` пишет `$set: { ...dto }` и публикует мимо проверок `togglePublish`
+- [ ] 6.8 Убрать `openapiUrl` из `UpdateAppDto`
+- [ ] 6.9 Тесты на каждый случай: владелец → 200, чужой → 403/404
 
-## 7. WebSocket-аутентификация
+## 7. Аутентификация WebSocket
 
-- [ ] 7.1 Создать `apps/backend/src/websocket/socket-jwt.guard.ts` с извлечением токена из `handshake.auth.token` или `handshake.headers.cookie`
-- [ ] 7.2 В `run.gateway.ts` реализовать `handleConnection`: верифицировать JWT, при отсутствии/невалидности — `client.disconnect()` с reason `unauthorized`
-- [ ] 7.3 После верификации загрузить `Run` по `runId` из `handshake.query.runId`; проверить `run.userId === decoded.userId`; иначе `client.disconnect()` с reason `forbidden`
-- [ ] 7.4 Валидировать формат `runId` (regex `/^[a-f\d]{24}$/`) перед `join`
-- [ ] 7.5 Передавать в `sendSnapshot` только sanitized данные (без длинных upstream error bodies, без `consts`)
-- [ ] 7.6 E2e-тест: клиент без auth-куки отключается; клиент с auth, но чужим `runId` отключается; клиент с правильным `runId` получает снапшот
+- [ ] 7.1 Вынести извлечение и проверку JWT из handshake в общее место. **Готовый образец уже есть** — `NotificationsGateway.authenticate` (`apps/backend/src/notifications/notifications.gateway.ts`): читает `access_token` из `handshake.headers.cookie`, проверяет через `JwtService`. Переиспользовать, а не писать заново
+- [ ] 7.2 `RunGateway.handleConnection`: отключать сокет без валидного токена. Сейчас проверок нет вовсе — комната определяется `runId` из query
+- [ ] 7.3 Проверять формат `runId`, загружать `Run`, сверять `run.userId` с `userId` из токена; иначе `disconnect`
+- [ ] 7.4 `WebSocketModule` понадобится `JwtModule` (как у `NotificationsGatewayModule`) — проверить, что токен проверяется тем же секретом
+- [ ] 7.5 Снапшот в `sendSnapshot` отдавать уже обрезанным по `error` (см. 11.2); `consts` в снапшот не попадают — `stepResults` их не содержат
+- [ ] 7.6 Тесты: без куки → disconnect; чужой `runId` → disconnect; свой `runId` → снапшот
 
-## 8. SSRF — hardening
+## 8. SSRF
 
-- [ ] 8.1 Установить `ipaddr.js` (если ещё нет)
-- [ ] 8.2 В `apps/backend/src/apps/ssrf-guard.ts` заменить regex-проверку на `ipaddr.js.parse(addr)` + `range === "private"` (включает RFC 6890: loopback, private, link-local, ULA fc00::/7, CGNAT 100.64.0.0/10, metadata 169.254/16, multicast)
-- [ ] 8.3 Блокировать любой IP-литерал в hostname (decimal/octal/hex/IPv4-mapped IPv6 как `[::ffff:127.0.0.1]`)
-- [ ] 8.4 Создать `apps/backend/src/apps/safe-fetch.ts` с `undici.Agent({ connect: { lookup: customLookup } })`, где `customLookup` резолвит DNS один раз, валидирует IP через `assertSafeIp`, и возвращает тот же IP для всех retries
-- [ ] 8.5 В `worker.service.ts` использовать `fetch(url, { dispatcher: safeAgent, redirect: "manual" })`; обрабатывать 3xx вручную с повторной валидацией SSRF для каждого redirect-target
-- [ ] 8.6 В `apps/backend/src/apps/openapi-parser.ts` вызывать `dereference(rawSpec, { dereference: { external: false } })` для запрета external `$ref`
-- [ ] 8.7 В `apps/backend/src/apps/dto/update-app.dto.ts` удалить поле `openapiUrl` (миграция только через DELETE+POST)
-- [ ] 8.8 В `apps/backend/src/apps/spec-text-parser.ts` использовать `load(text, { schema: JSON_SCHEMA, json: true })` для запрета YAML anchors
-- [ ] 8.9 Юнит-тесты: `169.254.169.254` блокируется; decimal `2130706433` блокируется; `[::ffff:127.0.0.1]` блокируется; DNS rebinding отклоняется через pinned IP
+- [ ] 8.1 Заменить `PRIVATE_IPV4_PATTERNS` в `apps/backend/src/apps/ssrf-guard.ts` на разбор через `ipaddr.js` (RFC 6890: loopback, private, link-local, ULA, CGNAT, multicast)
+- [ ] 8.2 Блокировать IP-литералы в нестандартных записях (decimal, octal, hex, IPv4-mapped IPv6)
+- [ ] 8.3 `apps/backend/src/apps/safe-fetch.ts`: `undici.Agent` с кастомным `lookup`, который резолвит один раз, валидирует и пиннит адрес. Сейчас между `assertPublicHostname` и `fetch` окно для подмены
+- [ ] 8.4 `redirect: "manual"` вместо `follow` в `ssrf-guard.fetchSpec` и в вызовах `worker.service` (строки 653 и 837): каждый `Location` прогонять через ту же проверку
+- [ ] 8.5 `openapi-parser.ts:91` — `dereference(rawSpec, { dereference: { external: false } })`
+- [ ] 8.6 `spec-text-parser.ts` — `load(text, { schema: JSON_SCHEMA })`. **Важно:** `JSON_SCHEMA` ограничивает теги, но **не отключает алиасы** — у js-yaml нет такой опции, а `load` в версии 4 и так безопасен по тегам. От billion-laughs защищают лимит размера входа и явный отказ разбирать документ с алиасами; при необходимости — переход на пакет `yaml` с `maxAliasCount`
+- [ ] 8.7 Тесты: `169.254.169.254`, decimal-запись, IPv4-mapped IPv6, подмена DNS между проверкой и соединением, редирект на приватный адрес
 
-## 9. Загрузки — magic-bytes + размеры
+## 9. Загрузки файлов
 
-- [ ] 9.1 Установить `file-type` (если ещё нет)
-- [ ] 9.2 В `apps/backend/src/users/users.controller.ts` обновить `uploadAvatar`: `FileInterceptor("file", { limits: { fileSize: 5*1024*1024, files: 1 } })`; валидация через `fileTypeFromBuffer(file.buffer)` — allowlist PNG/JPEG/WebP, запрет SVG
-- [ ] 9.3 В `uploads.controller.ts` обновить `singleUpload`: `FileInterceptor("file", { limits: { fileSize: maxSingleBytes, files: 1 } })`
-- [ ] 9.4 В `uploads.controller.ts` для `uploadPart`: добавить ограничение размера тела (через `express.raw({ limit: "8mb", type: "*/*" })` route-interceptor или length-checker stream)
-- [ ] 9.5 В `uploads.service.ts` валидировать `partNumber ∈ [1, 10000]`; кап `parts.length` на основе `session.fileSize / MIN_PART_SIZE`
-- [ ] 9.6 В `minio.service.ts` при `uploadFile` передавать metadata `{ "Content-Disposition": "attachment", "X-Content-Type-Options": "nosniff" }`
-- [ ] 9.7 В `minio.service.ts` сократить TTL `presignedGetObject` с `24*60*60` до `15*60` (15 минут)
-- [ ] 9.8 Создать `GET /api/uploads/:id/url` эндпоинт (auth + ownership-check), возвращающий свежий presigned URL по требованию
-- [ ] 9.9 В `apps.controller.ts` `validateSpecFile`: добавить sniffing по контенту (JSON.parse или `js-yaml` failure), а не только по расширению
+- [ ] 9.1 `users.controller.ts:51` — `FileInterceptor("file", { limits: { fileSize, files: 1 } })` + проверка сигнатуры содержимого через `file-type`, allowlist PNG/JPEG/WebP, запрет SVG. Сейчас единственная проверка — `file.mimetype.startsWith("image/")` по значению от клиента
+- [ ] 9.2 `uploads.controller.ts:43` — те же `limits` для `singleUpload`
+- [ ] 9.3 `apps.controller.ts` — те же `limits` на **всех четырёх** file-эндпоинтах (строки 107, 151, 206, 240); `validateSpecFile` сейчас смотрит только на расширение имени
+- [ ] 9.4 `uploads.controller.uploadPart` — ограничить размер читаемого тела. Сейчас обработчик вчитывает весь поток запроса в массив буферов без верхней границы
+- [ ] 9.5 `uploads.service` — валидировать `partNumber` в допустимом диапазоне и ограничить число частей исходя из `session.fileSize`
+- [ ] 9.6 `minio.service.uploadFile` — метаданные `Content-Disposition: attachment` и `X-Content-Type-Options: nosniff`
+- [ ] 9.7 **Перед** сокращением TTL presigned-ссылок развязать хранение от ссылки: `users.service.updateAvatar` сохраняет в `avatarUrl` готовый presigned URL (`users.controller.ts:65`), и с коротким TTL аватары отвалятся навсегда. Хранить `avatarObjectId`, ссылку выпускать на чтение профиля
+- [ ] 9.8 Проверить тот же эффект у `uploads.singleUpload` и `completeChunkedUpload`: обе возвращают клиенту presigned URL, который может быть сохранён в данных шага
+- [ ] 9.9 Только после 9.7–9.8 — сократить TTL `presignedGetObject` в `minio.service.ts:88` с 24 часов
+- [ ] 9.10 `GET /api/uploads/:id/url` — выпуск свежей ссылки по требованию (auth + владелец)
 
-## 10. Frontend hardening
+## 10. Фронтенд
 
-- [ ] 10.1 Установить `isomorphic-dompurify` и `nuxt-security`
-- [ ] 10.2 Переписать `apps/frontend/utils/sanitizeRichText.ts` на `DOMPurify.sanitize(html, { ALLOWED_TAGS: [...], ALLOWED_ATTR: [] })`
-- [ ] 10.3 В `apps/frontend/nuxt.config.ts` подключить `nuxt-security` module с CSP, HSTS, XFO, XCTO, Referrer-Policy
-- [ ] 10.4 Удалить `loadEnv({ path: resolve(rootDir, "../../.env") })` из `nuxt.config.ts`; использовать только `.env.example` на build time или `process.env` из runtime
-- [ ] 10.5 Добавить Nitro server plugin, падающий при `runtimeConfig.sessionSecret === "build-time-placeholder-0123456789abcdef"`
-- [ ] 10.6 Установить `@nuxt/scripts` и заменить hand-rolled `apps/frontend/plugins/metrica.ts` на его Yandex Metrica wrapper (с SRI)
-- [ ] 10.7 В `apps/frontend/plugins/api.ts` добавить allowlist для пересылаемых cookie (`access_token`, `refresh_token`, `csrf-token`)
-- [ ] 10.8 В `apps/frontend/plugins/api.ts` переписать `forwardSetCookiesToBrowser` на использование `cookie.serialize` с явными hardened атрибутами
-- [ ] 10.9 E2e-тест на `pages/cards/[id]/index.vue`: SVG с `<script>` не выполняется после санитайза
-- [ ] 10.10 E2e-тест: CSP violation observable при инъекции стороннего `<script>` (через browser console)
+- [ ] 10.1 Установить `isomorphic-dompurify` и модуль безопасности Nuxt
+- [ ] 10.2 Переписать `apps/frontend/utils/sanitizeRichText.ts` на парсерный санитайзер. Потребители: `renderMarkdown.ts` (блоки страниц шага) и `pages/cards/[id]/index.vue` — оба рендерят через `v-html`
+- [ ] 10.3 Подключить CSP. **С nonce или хэшами**: Nuxt встраивает инлайновый скрипт состояния гидрации, и `script-src 'self'` без nonce положит все SSR-страницы
+- [ ] 10.4 Убрать `loadEnv({ path: resolve(rootDir, "../../.env") })` из `nuxt.config.ts` — сборка читает боевой `.env`
+- [ ] 10.5 Nitro-плагин, роняющий сервер при сборочном плейсхолдере в `runtimeConfig.sessionSecret`
+- [ ] 10.6 Решить по Яндекс.Метрике (вопрос Q5): оставить ручной сниппет с allowlist в CSP либо перевести на `@nuxt/scripts`
+- [ ] 10.7 В `apps/frontend/plugins/api.ts` — allowlist имён пересылаемых cookie (сейчас заголовок `cookie` уходит в бэкенд целиком)
+- [ ] 10.8 ~~Переписать `forwardSetCookiesToBrowser` через `cookie.serialize`~~ — **снято.** Функция пробрасывает `Set-Cookie` от бэкенда как есть, атрибуты сохраняются; переписывание отняло бы у бэкенда контроль над флагами
+- [ ] 10.9 Тест: разметка со скриптом в описании карточки не исполняется после санитайза
+- [ ] 10.10 Тест: нарушение CSP фиксируется при попытке подгрузить сторонний скрипт
 
-## 11. Логирование и санитизация ответов
+## 11. Логи и санитизация ответов
 
-- [ ] 11.1 В `apps/backend/src/logging/logging.service.ts` добавить redactor: emails → `a***@b.com`, поля `password`/`secret`/`token`/`refreshToken`/`accessToken` → `[REDACTED]`, JWT-паттерны → маска
-- [ ] 11.2 В `worker.service.ts` обрезать `upstream error body` до 200 символов перед записью в `stepResults[].error` (полный текст в логи)
-- [ ] 11.3 В `worker.service.ts` валидировать `runId` из SQS-сообщения через regex `/^[a-f\d]{24}$/`; невалидные → ack + DLQ
-- [ ] 11.4 В `marketplace.service.ts` спроектировать `MarketplaceScenarioPublicDto`, исключающий `consts`, `blockedReason`, внутренние `appId`/`endpointId` шагов
-- [ ] 11.5 В `marketplace.service.ts` экранировать `query.search` перед передачей в `$regex` (или переключить на `$text` с индексом)
-- [ ] 11.6 Юнит-тест: паттерн `(a+)+$` не вызывает зависание (> 1с)
+- [ ] 11.1 Подключить `LoggingService` как логгер приложения (`app.useLogger`) — **сейчас он не используется нигде**, вся запись идёт через `Logger` из `@nestjs/common`, и redactor внутри неподключённого сервиса ничего не закроет. Затем добавить маскирование email, полей с токенами и JWT-подобных строк
+- [ ] 11.2 `worker.service.ts` — обрезать тело ошибки стороннего API перед записью в `stepResults[].error` и `run.error`; полный текст в лог
+- [ ] 11.3 `worker.service.ts:165` — валидировать `runId` из тела сообщения до `findById`: сейчас невалидное значение даёт `CastError` в обработчике и уходит на повторную доставку
+- [ ] 11.4 `marketplace.service.getCard` — вырезать `consts` из шагов и `blockedReason` из ответа. **`steps` оставить**: по ним рисуются панель запуска и playground для гостя (см. комментарий в `marketplace.service.ts:25` и требование в спеке `marketplace`)
+- [ ] 11.5 Экранировать `query.search` перед подстановкой в `$regex` — в `getCatalog` и в `getCategoryCounts`
+- [ ] 11.6 Тест: патологический паттерн в поиске не приводит к зависанию
 
-## 12. Container hardening
+## 12. Контейнеры
 
-- [ ] 12.1 В `apps/backend/Dockerfile`: `RUN addgroup -S app && adduser -S app -G app`, `USER app` перед CMD, `COPY --chown=app:app`, `ENTRYPOINT ["/sbin/tini","--"]`, `RUN apk add --no-cache tini`
-- [ ] 12.2 Аналогично для `apps/frontend/Dockerfile`
-- [ ] 12.3 Аналогично для `apps/proxy/Dockerfile` (использовать `USER caddy`)
-- [ ] 12.4 В `docker-compose.yml` для каждого сервиса: `cap_drop: [ALL]`, `security_opt: ["no-new-privileges:true"]`, `read_only: true` + `tmpfs: ["/tmp:noexec,nosuid,size=64m"]`, `mem_limit: 1g`, `cpus: "1.5"`, `pids_limit: 200`
-- [ ] 12.5 В `docker-compose.dev.yml` забиндить все порты dev-инфраструктуры (mongo, minio, localstack, mock-api) на `127.0.0.1:HOST:CONTAINER`
-- [ ] 12.6 В `docker-compose.dev.yml` заменить `image: minio/minio:latest` и `minio/mc:latest` на pin по digest (`@sha256:...`)
-- [ ] 12.7 В `apps/backend/Dockerfile` и `apps/frontend/Dockerfile` заменить `npm install -g pnpm@9` на corepack-пин точной версии (или pin `pnpm@9.18.0`)
-- [ ] 12.8 Расширить `.dockerignore`: добавить `.env*` (кроме `.env.example`), `.claude/`, `.cursor/`, `.opencode/`, `.turbo/`, `**/test`, `**/e2e`, `docs/`, `openspec/`, `scripts/`, `*.md`, `LICENSE`
+- [ ] 12.1 `apps/backend/Dockerfile` — непривилегированный пользователь, `COPY --chown`, `USER` перед `CMD`, корректная доставка `SIGTERM`. Образ общий для `backend` и `worker`
+- [ ] 12.2 То же для `apps/frontend/Dockerfile`
+- [ ] 12.3 То же для `apps/proxy/Dockerfile` (`USER caddy`)
+- [ ] 12.4 В `docker-compose.yml` для **всех четырёх** сервисов (`caddy`, `backend`, `worker`, `frontend`): `cap_drop: [ALL]`, `security_opt: ["no-new-privileges:true"]`, `read_only: true` + `tmpfs`, лимиты памяти/CPU/`pids_limit`. Лимит памяти воркера считать от `WORKER_CONCURRENCY`
+- [ ] 12.5 В `docker-compose.dev.yml` забиндить на `127.0.0.1` порты `mongo` (27018), `localstack` (4566), `garage` (9000), `mock-api` (8085)
+- [ ] 12.6 Пин образов по digest там, где сейчас теги: `mongo:7`, `localstack/localstack:4.7.0`, `dxflrs/garage:v2.5.0`, `mccutchen/go-httpbin:v2.15.0`, `caddy:2-alpine`, `node:24-alpine`
+- [ ] 12.7 Заменить `npm install -g pnpm@9` в обоих Dockerfile на corepack с версией из `packageManager` (`pnpm@10.4.1`) — сейчас образы собираются не тем pnpm, которым проверяется лок
+- [ ] 12.8 Дополнить `.dockerignore`: `.env.local`, `.env.*.local`, `.claude/`, `.cursor/`, `.opencode/`, `.turbo/`, `**/test`, `**/e2e`, `scripts/`, `*.md`. `docs`, `openspec`, `.env`, `node_modules` и артефакты сборки уже есть
 
-## 13. Caddy — TLS + security headers
+## 13. Caddy
 
-- [ ] 13.1 В `Caddyfile` заменить `:8081 { ... }` на `https://<production-domain> { tls <email>; ... }` (домен уточнить у ops)
-- [ ] 13.2 Добавить `header` блок в Caddyfile: HSTS (`max-age=63072000; includeSubDomains; preload`), X-Content-Type-Options, X-Frame-Options DENY, Referrer-Policy, Permissions-Policy
-- [ ] 13.3 Добавить CSP в Caddy (если `nuxt-security` не покрывает edge)
-- [ ] 13.4 Установить `caddy-ratelimit` module (или front CDN) для ограничения `/api/auth/*` (5 req/min per-IP)
-- [ ] 13.5 В `apps/proxy/Dockerfile` убедиться, что Caddy слушает на 80/443, а контейнер запускается с `cap_add: [NET_BIND_SERVICE]` (остальное `cap_drop`)
+- [ ] 13.1 Перевести `:8081` на `https://<домен>` с ACME (домен уточнить у ops, вопрос Q3)
+- [ ] 13.2 Блок `header`: HSTS, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`
+- [ ] 13.3 Проставлять `X-Forwarded-For` / `X-Forwarded-Proto` — от них зависит `trust proxy` (2.4) и, значит, весь rate-limiting
+- [ ] 13.4 Перевыпустить OAuth `redirect_uri` на HTTPS-origin — иначе вход сломается в момент выкатки TLS
+- [ ] 13.5 Решить по edge-лимитам: модуль `caddy-ratelimit` или CDN перед прокси
+- [ ] 13.6 Порты и capability: если Caddy слушает 80/443, оставить `NET_BIND_SERVICE` при `cap_drop: [ALL]`
 
-## 14. CI/CD hardening
+## 14. CI/CD
 
-- [ ] 14.1 Удалить секрет `FLOW_TOKEN` из GitHub repo settings
-- [ ] 14.2 Создать GitHub App с минимальными правами (Issues RW, Pull Requests RW, Contents Read) и зарегистрировать как secret-переменную `APP_ID`/`APP_PRIVATE_KEY`
-- [ ] 14.3 В `change-bootstrap.yml` и `change-complete.yml` заменить `GH_TOKEN: ${{ secrets.FLOW_TOKEN }}` на `gh auth login` через GitHub App (через `tibdex/github-app-token` action)
-- [ ] 14.4 В `change-bootstrap.yml` и `change-complete.yml` валидировать `${ID}` через regex `^[a-z0-9-]{1,40}$` перед использованием в shell-командах
-- [ ] 14.5 В `change-complete.yml` добавить `if: github.event.pull_request.head_repo.full_name == github.repository` для блокировки fork-PR
-- [ ] 14.6 В `ci.yml` добавить `permissions: contents: read`
-- [ ] 14.7 Создать `gitleaks.yml` workflow, запускающий `gitleaks/gitleaks-action` на pull_request
-- [ ] 14.8 В `ci.yml` добавить job `pnpm-audit` с `pnpm audit --prod --audit-level=high`
-- [ ] 14.9 Создать `trivy.yml` workflow, сканирующий repo и собранные Docker-образы через `aquasecurity/trivy-action`
-- [ ] 14.10 В `package.json` (root) добавить `pnpm.overrides`: `"tar": "^7.5.16"`, `"multer": "^2.2.0"`
-- [ ] 14.11 Запустить `pnpm install` для обновления `pnpm-lock.yaml`
-- [ ] 14.12 Pin все `uses:` в `.github/workflows/*.yml` по полному commit SHA (с комментарием версии)
-- [ ] 14.13 В `ci.yml` заменить `cp .env.example .env` на явные env vars в `env:` блоке (отдельные от `.env.example`)
+- [ ] 14.1 Завести GitHub App с минимальными правами (Issues RW, Pull requests RW, Contents Read)
+- [ ] 14.2 Перевести `change-bootstrap.yml` и `change-complete.yml` на токен GitHub App, удалить секрет `FLOW_TOKEN`
+- [ ] 14.3 В `change-bootstrap.yml` убрать прямую подстановку выражения в shell: шаг «Убедиться, что лейбл существует» подставляет `${{ steps.change.outputs.id }}` в тело команды. Передавать через `env:`, как это уже сделано в соседних шагах
+- [ ] 14.4 Проверять идентификатор change'а регулярным выражением `^[a-z0-9-]{1,40}$` до любых вызовов `gh`
+- [ ] 14.5 Guard на PR из форков в `change-complete.yml` — защита в глубину: на событие `pull_request` из форка секреты и так не передаются, но инвариант стоит зафиксировать
+- [ ] 14.6 Добавить `permissions: contents: read` в `ci.yml` (в трёх остальных workflow блок уже есть)
+- [ ] 14.7 Workflow поиска секретов на `pull_request`
+- [ ] 14.8 Job аудита зависимостей в `ci.yml`
+- [ ] 14.9 Workflow сканирования образов
+- [ ] 14.10 `pnpm.overrides` в корневом `package.json` для транзитивных `multer` (из `@nestjs/platform-express`, сейчас 2.1.1) и `tar`. Прямые зависимости уже подняты: backend объявляет `multer@^2.2.0`, в локе есть `tar@7.5.19`
+- [ ] 14.11 `pnpm install` для обновления лока
+- [ ] 14.12 Пин всех `uses:` по commit SHA с комментарием версии
+- [ ] 14.13 Заменить `cp .env.example .env` в `ci.yml` на явный блок `env:`
 
-## 15. Тесты и regression gates
+## 15. Тесты и регрессионные гейты
 
-- [ ] 15.1 Юнит-тесты на каждый новый guard (CsrfGuard, OriginGuard, SocketJwtGuard, ThrottlerModule)
-- [ ] 15.2 E2e-тест: cross-origin POST с `Origin: https://evil.com` отклоняется с 403
-- [ ] 15.3 E2e-тест: state-changing запрос без `x-csrf-token` отклоняется с 403
-- [ ] 15.4 E2e-тест: IDOR на `/api/runs/<other>/cancel` возвращает 403
-- [ ] 15.5 E2e-тест: WebSocket без auth-куки disconnect с `unauthorized`
-- [ ] 15.6 E2e-тест: SSRF на `http://169.254.169.254` в `/api/apps/from-url` отклоняется
-- [ ] 15.7 E2e-тест: external `$ref` в OpenAPI import не резолвится
-- [ ] 15.8 E2e-тест: загрузка SVG аватара отклоняется с 400
-- [ ] 15.9 Юнит-тест на `redactPii` в `LoggingService`: email и токены маскируются
-- [ ] 15.10 Юнит-тест: приложение падает при старте с placeholder JWT_SECRET
-- [ ] 15.11 Юнит-тест: `marketplace search` с патологическим regex не вызывает зависание
+- [ ] 15.1 Юнит-тесты на новые guard'ы: CSRF, Origin (включая SSR-случай без `Origin`), handshake WebSocket
+- [ ] 15.2 Кросс-origin `POST` отклоняется
+- [ ] 15.3 State-changing запрос без CSRF-токена отклоняется
+- [ ] 15.4 Регрессия на IDOR запусков: `POST /api/runs/<чужой>/cancel` → 403 (поведение уже есть, тест его фиксирует)
+- [ ] 15.5 IDOR на чанковой загрузке: чужой `uploadId` → 403
+- [ ] 15.6 WebSocket без куки → disconnect; с чужим `runId` → disconnect
+- [ ] 15.7 SSRF: `169.254.169.254` и нестандартные записи адреса отклоняются
+- [ ] 15.8 External `$ref` не резолвится
+- [ ] 15.9 SVG-аватар отклоняется; PNG с подменённым расширением проходит по сигнатуре
+- [ ] 15.10 Маскирование в логах: email и токены
+- [ ] 15.11 Старт в production с placeholder `JWT_SECRET` падает; старт вне production с дефолтами — нет
+- [ ] 15.12 Старт в production с непустым `SSRF_ALLOWED_HOSTS` падает
+- [ ] 15.13 Поиск по маркетплейсу с патологическим паттерном не вешает запрос
 
-## 16. Документация и ops-runbook
+## 16. Документация и ops
 
-- [ ] 16.1 Обновить `.env.example` с правильными placeholder-инструкциями (`<generate via openssl rand -hex 48>`) для JWT_SECRET и NUXT_SESSION_SECRET
-- [ ] 16.2 Обновить `README.md` секцией "Security" с описанием mandatory env vars и процедурой ротации
-- [ ] 16.3 Зафиксировать процедуру OIDC → GitHub App миграции в `docs/security/ci-migration.md`
-- [ ] 16.4 Добавить runbook "How to rotate compromised secrets" в `docs/security/incident-response.md`
-- [ ] 16.5 Прогнать production staging через https://securityheaders.com/?q=<staging-url> — должна быть оценка A+
+- [ ] 16.1 `.env.example`: инструкции-плейсхолдеры для `JWT_SECRET` и `NUXT_SESSION_SECRET`
+- [ ] 16.2 Раздел «Безопасность» в `README.md`: обязательные переменные и процедура ротации
+- [ ] 16.3 `docs/security/ci-migration.md` — переход с PAT на GitHub App
+- [ ] 16.4 `docs/security/incident-response.md` — ротация скомпрометированных секретов, включая переписывание истории
+- [ ] 16.5 Проверить итоговые заголовки staging внешним чекером
 
-## 17. Smoke и финальная валидация
+## 17. Smoke и финальная проверка
 
-- [ ] 17.1 Smoke: энд-ту-эндый OAuth login работает с SameSite=Lax и CSRF-токеном
-- [ ] 17.2 Smoke: чанковая загрузка работает с ownership-чеками
-- [ ] 17.3 Smoke: WebSocket-прогресс выполнения сценария виден только владельцу
-- [ ] 17.4 Smoke: `/api/docs` возвращает 404 в production
-- [ ] 17.5 Smoke: `helmet` headers присутствуют на всех ответах (curl -I)
-- [ ] 17.6 Smoke: контейнеры запускаются non-root (`docker exec <c> id` → `uid=100(app)`)
-- [ ] 17.7 Smoke: dev-инфра `mongo`/`minio` доступны только с localhost
-- [ ] 17.8 Review: прогнать `rg 'fallback|\?\? "test"|change-me' apps/backend/src/` — ни одного совпадения
-- [ ] 17.9 Review: прогнать `pnpm audit --prod --audit-level=high` — нет high/critical CVE
-- [ ] 17.10 Финальная проверка статуса change: `openspec validate harden-security-posture --strict`
+- [ ] 17.1 Вход через Яндекс работает с `SameSite=Lax`, `state` и CSRF-токеном
+- [ ] 17.2 Локальный вход работает и держит строгий лимит
+- [ ] 17.3 Чанковая загрузка работает с проверкой владельца
+- [ ] 17.4 WebSocket-прогресс виден владельцу и только ему; реконнект работает
+- [ ] 17.5 `/api/docs` отдаёт 404 в production
+- [ ] 17.6 Security-заголовки присутствуют на ответах
+- [ ] 17.7 Контейнеры запускаются не от root (`docker exec <c> id`), включая реплику воркера
+- [ ] 17.8 Dev-инфраструктура доступна только с localhost
+- [ ] 17.9 `rg 'fallback|change-me' apps/backend/src/` — пусто
+- [ ] 17.10 Аудит зависимостей без high/critical
+- [ ] 17.11 `openspec validate harden-security-posture --strict` проходит

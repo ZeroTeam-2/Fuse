@@ -1,55 +1,69 @@
 ## ADDED Requirements
 
-### Requirement: Fail-fast валидация секретов
-`env.schema.ts` SHALL отклонять запуск приложения, если любой из обязательных секретов отсутствует или совпадает с захардкоженным placeholder-значением. Список обязательных секретов: `JWT_SECRET`, `NUXT_SESSION_SECRET`, `MONGODB_URL`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `YANDEX_CLIENT_ID`, `YANDEX_CLIENT_SECRET`, `YANDEX_REDIRECT_URI`.
+### Requirement: Отказ стартовать с незаполненными секретами в production
+Валидация окружения SHALL отклонять запуск в production, если секрет пуст, равен документированному placeholder'у или равен одному из известных скомпрометированных значений. Проверка применяется к обеим схемам окружения: backend (`apps/backend/src/config/env.schema.ts`) и frontend (`apps/frontend/config/env.schema.ts`, `NUXT_SESSION_SECRET`).
 
-#### Scenario: Запуск с захардкоженным JWT_SECRET
-- **WHEN** `JWT_SECRET=change-me-to-a-random-string-of-at-least-32-characters`
-- **THEN** процесс падает при старте с ошибкой `JWT_SECRET must be a strong random value, not the documented placeholder`
+Требование MUST быть обусловлено `NODE_ENV=production` — тем же приёмом, которым уже запрещён пароль локального входа в бою. Безусловное требование непустых `AWS_*`, `S3_*` и `YANDEX_*` сломало бы локальную разработку: LocalStack работает с `test`/`test`, Garage — с фиксированной парой из `.env.local.example`, а локальный вход существует именно для случая, когда OAuth-кредов нет. Поэтому дефолты остаются для разработки и становятся ошибкой в production.
 
-#### Scenario: Запуск с пустым S3_ACCESS_KEY
-- **WHEN** `S3_ACCESS_KEY` пуст или не задан
-- **THEN** процесс падает при старте с ошибкой `S3_ACCESS_KEY is required`
+Отдельно: значения, попавшие в репозиторий или в артефакты change'а, MUST считаться публичными и MUST отклоняться валидацией — чтобы ротация подтверждалась кодом, а не памятью оператора. Список отозванных значений MUST храниться как хэши: внести сам секрет в `env.schema.ts` значило бы вернуть его в репозиторий тем же действием, которым его оттуда убирают.
 
-#### Scenario: Запуск со всеми валидными секретами
-- **WHEN** все обязательные секреты заданы и не совпадают с placeholder-значениями
-- **THEN** приложение успешно стартует
+#### Scenario: Placeholder JWT_SECRET в production
+- **WHEN** приложение стартует с `NODE_ENV=production` и `JWT_SECRET`, равным значению из `.env.example`
+- **THEN** процесс падает на старте с сообщением, называющим переменную и способ сгенерировать значение
 
-### Requirement: Минимальная энтропия JWT_SECRET
-`env.schema.ts` SHALL валидировать `JWT_SECRET` на минимальную длину (≥ 32 символа) и уникальность символов (Shannon entropy ≥ 3.0), чтобы отклонять значения вроде `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`.
+#### Scenario: Скомпрометированное значение в production
+- **WHEN** приложение стартует с `NODE_ENV=production` и секретом из списка скомпрометированных
+- **THEN** процесс падает на старте, явно сообщая, что значение отозвано и требует ротации
 
-#### Scenario: Низкая энтропия
-- **WHEN** `JWT_SECRET=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` (34 символа `a`)
-- **THEN** процесс падает с ошибкой `JWT_SECRET has insufficient entropy`
+#### Scenario: Локальная разработка не ломается
+- **WHEN** разработчик запускает стек вне production с дефолтами из `.env.example` и `.env.local.example`
+- **THEN** приложение стартует как прежде
 
-### Requirement: getOrThrow для JWT-секрета в коде
-Все места использования `JWT_SECRET` в коде SHALL использовать `configService.getOrThrow<string>("JWT_SECRET")` (а не `configService.get(...) ?? "fallback"`). Фолбэк-строки `"fallback"` MUST быть удалены из всех файлов.
+### Requirement: Длина и качество JWT_SECRET
+Валидация SHALL требовать от `JWT_SECRET` минимальную длину (уже есть: 32 символа) и отклонять вырожденные значения с малым числом различных символов.
 
-#### Scenario: Отсутствие фолбэков
-- **WHEN** разработчик grep-ает кодовую базу по `?? "fallback"` или `?? 'fallback'`
-- **THEN** поиск не находит ни одного совпадения
+#### Scenario: Вырожденное значение
+- **WHEN** `JWT_SECRET` состоит из одного повторяющегося символа нужной длины
+- **THEN** процесс падает на старте с сообщением о недостаточном качестве значения
 
-### Requirement: Docker Compose с required-интерполяцией
-`docker-compose.yml` SHALL использовать синтаксис `${VAR:?required}` для всех секретов и критичных конфигов. Синтаксис `${VAR:-default}` для секретов MUST быть удалён.
+### Requirement: Отсутствие фолбэков секрета в коде
+Все обращения к `JWT_SECRET` SHALL использовать `getOrThrow`. Фолбэк `?? "fallback"` MUST быть удалён из всех мест.
 
-#### Scenario: Compose без нужного секрета
-- **WHEN** оператор запускает `docker compose up` без переменной `JWT_SECRET`
-- **THEN** compose падает с ошибкой `JWT_SECRET is required` и не запускает контейнеры
+Сейчас он стоит в четырёх: `app.module.ts`, `auth/auth.module.ts`, `auth/strategies/jwt.strategy.ts` и `auth/yandex-auth.service.ts` (проверка refresh-токена). Это не теоретическая проблема: при незаданном `JWT_SECRET` приложение не падает, а начинает подписывать и принимать токены, подписанные строкой `fallback`, — то есть подделать сессию может кто угодно.
 
-### Requirement: Изоляция секретов от build-context
-Frontend build MUST NOT читать shared `.env` файл во время сборки. Nuxt конфигурация SHALL загружать только `.env.example` или публичные переменные на build-time; runtime-секреты MUST поставляться через окружение раннера (k8s secrets, Docker env, etc.).
+#### Scenario: Фолбэков не осталось
+- **WHEN** в `apps/backend/src` ищется литерал фолбэк-секрета
+- **THEN** совпадений нет
 
-#### Scenario: Build без доступа к `.env`
-- **WHEN** запускается `pnpm --filter @fuse/frontend build` без `../../.env` файла
-- **THEN** сборка успешно завершается, не падая и не инлайная секреты в bundle
+#### Scenario: Незаданный секрет роняет приложение
+- **WHEN** приложение стартует без `JWT_SECRET`
+- **THEN** процесс падает на старте, а не поднимается с подставным секретом
 
-#### Scenario: Runtime валидация session-секрета
-- **WHEN** Nuxt server стартует с `NUXT_SESSION_SECRET=build-time-placeholder-0123456789abcdef`
-- **THEN** сервер падает с ошибкой `NUXT_SESSION_SECRET must be replaced at runtime`
+### Requirement: Обязательная интерполяция секретов в compose
+`docker-compose.yml` SHALL использовать `${VAR:?...}` для секретов, чтобы отсутствующая переменная останавливала запуск, а не подставляла дефолт.
 
-### Requirement: Валидация scheme для LOG_COLLECTOR_URL
-`env.schema.ts` SHALL требовать, чтобы `LOG_COLLECTOR_URL` (если задан) использовал схему `https://`.
+Для `MONGODB_URL`, `JWT_SECRET` и `NUXT_SESSION_SECRET` это уже сделано. Остались дефолты у `S3_ACCESS_KEY`/`S3_SECRET_KEY` (`minioadmin`) и `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` (`test`) — в production-профиле они поднимают сервис с общеизвестными кредами вместо отказа. Сервис `worker` объявляет тот же набор переменных и MUST быть приведён вместе с `backend`.
 
-#### Scenario: HTTP collector отклонён
-- **WHEN** `LOG_COLLECTOR_URL=http://logs.internal/ingest`
-- **THEN** процесс падает при старте с ошибкой `LOG_COLLECTOR_URL must use HTTPS`
+#### Scenario: Compose без секрета
+- **WHEN** оператор запускает стек без переменной, помеченной как обязательная
+- **THEN** compose останавливается с сообщением о недостающей переменной и не стартует контейнеры
+
+### Requirement: Сборка фронтенда без доступа к общему .env
+Сборка фронтенда MUST NOT читать общий `.env` репозитория. Сейчас `nuxt.config.ts` вызывает `loadEnv` на `../../.env`, то есть на файл с боевыми кредами: он попадает в окружение сборки, а в образ — всё, что схема успела прочитать. Значения для сборки MUST приходить из окружения сборщика, рантайм-секреты — из окружения контейнера.
+
+Плейсхолдер `NUXT_SESSION_SECRET`, которым сборка проходит валидацию схемы, MUST приводить к отказу на старте сервера, если он дожил до рантайма.
+
+#### Scenario: Сборка без общего .env
+- **WHEN** фронтенд собирается на машине, где `../../.env` отсутствует
+- **THEN** сборка проходит, значения берутся из окружения, секреты в бандл не попадают
+
+#### Scenario: Плейсхолдер дожил до рантайма
+- **WHEN** Nitro-сервер стартует со сборочным плейсхолдером в `NUXT_SESSION_SECRET`
+- **THEN** сервер падает на старте с явным сообщением, а не работает с предсказуемым секретом сессии
+
+### Requirement: Схема для LOG_COLLECTOR_URL
+Если `LOG_COLLECTOR_URL` задан, он SHALL требовать `https://`. По этому адресу уходят записи логов, включая те, что содержат адреса пользователей, — отправка по HTTP выносит их в открытый канал.
+
+#### Scenario: HTTP-приёмник отклонён
+- **WHEN** задан `LOG_COLLECTOR_URL` со схемой `http://`
+- **THEN** процесс падает на старте с сообщением о требовании HTTPS

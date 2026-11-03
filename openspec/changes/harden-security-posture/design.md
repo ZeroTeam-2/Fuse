@@ -1,182 +1,168 @@
 ## Context
 
-Fuse — NestJS + NuxtJS монорепо с MongoDB, MinIO, AWS SQS, Socket.IO и Yandex OAuth. Аудит кода, конфигов и инфраструктуры выявил критические уязвимости: CSRF (cookie-auth + `SameSite=None` в проде), IDOR на 6 группах эндпоинтов, отсутствие rate-limiting/helmet/CSP, регекс-санитайзер XSS, сломанная SSRF-защита (DNS rebinding + external `$ref` dereference), захардкоженные секреты и публично доступный Swagger. Сейчас проект готовится к публичному запуску, поэтому нужна комплексная программа исправления до релиза.
+Fuse — монорепо NestJS 11 + Nuxt 3 с MongoDB, S3-совместимым хранилищем, SQS-совместимой очередью, socket.io и Yandex OAuth. Исполнение сценариев живёт в **отдельном процессе-воркере** (`worker-main.ts`, масштабируется репликами), события доезжают до сокетов API-процесса через мост поверх MongoDB. Снаружи всё стоит за Caddy. Локальная инфраструктура: Mongo, LocalStack (SQS), Garage (S3), мок-API.
 
-Стек: NestJS 11 (ValidationPipe whitelist, JwtAuthGuard как APP_GUARD), passport-jwt, mongoose 8, socket.io 4, multer 2.1.1 (CVE), `@readme/openapi-parser`, Nuxt 3, Caddy 2 reverse proxy, docker-compose (dev/prod), GitHub Actions CI.
+Аутентификация — JWT в httpOnly-куках, `JwtAuthGuard` как `APP_GUARD`, глобальный `ValidationPipe` с `whitelist` и `forbidNonWhitelisted`. Вход — Yandex OAuth, плюс локальный вход по паре из окружения вне production.
+
+Состояние на коммите `a80f5172`: нет helmet, нет ограничения частоты запросов, нет лимитов тела запроса, Swagger открыт в любом окружении, `sameSite: 'none'` в production, `logout` — `GET`, `JWT_SECRET` имеет фолбэк `"fallback"` в четырёх местах, `SsrfGuard` проверяет адрес регулярными выражениями и следует редиректам, `dereference` разрешает внешние `$ref`, `RunGateway` не проверяет вообще ничего, чанковые загрузки не смотрят на владельца, шесть точек приёма файлов без `limits`, санитайзер HTML собран на регулярных выражениях, presigned-ссылки живут сутки и сохраняются в документах.
 
 ## Goals / Non-Goals
 
-**Goals:**
-- Закрыть **все 17 критических** и **25 высоких** уязвимостей из аудита до публичного запуска.
-- Внедрить защиту-in-depth: helmet + CSP + throttle + non-root контейнеры + SAST в CI.
-- Зафиксировать в коде архитектурные инварианты (ownership-чеки в сервисном слое, валидация на уровне DTO, fail-fast на секреты).
-- Сделать процесс воспроизводимым: тесты на каждый класс уязвимостей, regression-gates в CI.
+**Goals**
+- Закрыть классы дефектов, перечисленные в proposal, до публичного запуска.
+- Защита в глубину: заголовки, CSP, лимиты, непривилегированные контейнеры, гейты в CI.
+- Зафиксировать инварианты в спеках и тестах, включая уже реализованные (проверка владельца запуска), чтобы они не потерялись при следующем расширении API.
+- Не ломать локальную разработку: все ужесточения, несовместимые с дефолтами LocalStack/Garage и локальным входом, обусловлены `NODE_ENV=production`.
 
-**Non-Goals:**
-- Полный переход на asymmetric JWT (RS256/ES256) — оставлен как roadmap после стабилизации HS256 с ротацией.
-- WAF/Cloudflare-фронт — обсуждается отдельно с ops; в этом change фиксируем только прикладные слои.
-- Перенос аутентификации с кук на Bearer-header (CSRF-иммунитет) — слишком инвазивно; вместо этого делаем CSRF-токен + SameSite=Lax.
-- Audit log pipeline (SIEM) — отдельная инициатива; здесь только санитизация PII.
-- Рефакторинг Yandex OAuth на OpenID Connect — теперь не требуется, хватает `state`+PKCE-like nonce.
+**Non-Goals**
+- Переход на асимметричную подпись JWT (RS256/ES256) — после стабилизации ротации.
+- WAF/CDN перед прокси — отдельное решение с ops.
+- Перенос аутентификации с кук на `Authorization: Bearer` — слишком инвазивно; вместо этого CSRF-токен и `SameSite=Lax`.
+- Конвейер аудит-логов (SIEM) — отдельная инициатива; здесь только маскирование.
+- Перевод Yandex OAuth на OpenID Connect — хватает `state`.
 
 ## Decisions
 
-### D1. Cookie-флаги + SameSite вместо перехода на Bearer-header
-**Решение:** `sameSite: 'lax'` (вместо текущего `'none'` в проде), `secure: true` в проде, `httpOnly: true`, `path: '/api'`.
-**Альтернативы:** (a) `SameSite=Strict` — ломает OAuth callback с топ-уровневой навигацией; (b) переход на `Authorization: Bearer` — иммунитет к CSRF, но требует хранения токена в JS и создаёт XSS-риск.
-**Why:** SPA и API живут на одном origin (через Caddy), поэтому Lax достаточен и не ломает login flow.
+### D1. Атрибуты кук вместо перехода на Bearer
+**Решение:** `sameSite: 'lax'` вместо `'none'` в production, `secure: true` в production, `httpOnly: true`, **`path: '/'`**.
+**Почему `path` не `/api`:** socket.io обслуживается вне глобального префикса, по `/socket.io/`. С `Path=/api` браузер не пришлёт `access_token` в handshake, и аутентификация WebSocket (D21) окажется нереализуемой через куку, а положить токен в `handshake.auth` нельзя — кука `HttpOnly` и из JS не читается.
+**Альтернативы:** `SameSite=Strict` ломает возврат из OAuth; Bearer требует хранить токен в JS и открывает XSS-вектор.
 
-### D2. CSRF — double-submit cookie token через `csrf-csrf`
-**Решение:** Библиотека `csrf-csrf` (production-ready, поддерживает cookie-based SPA). Выдаёт `csrf-token` cookie + expects `x-csrf-token` header на каждом state-changing запросе. Дополнительно: глобальный guard, проверяющий `Origin`/`Referer` для non-GET.
-**Альтернативы:** (a) synchronizer token в server-side session — требует session store; (b) SameSite-only — недостаточно для top-level GET CSRF (login CSRF).
-**Why:** Не требует session storage, совместим с stateless JWT, хорошо ложится на Nest guard.
+### D2. CSRF — парный токен
+**Решение:** `csrf-csrf`: кука `HttpOnly` со связанным с сессией значением, плоский парный токен выдаётся **телом ответа** отдельного эндпоинта, клиент держит его в памяти и присылает заголовком `x-csrf-token`. Дополнительно — проверка `Origin`/`Referer` для не-GET.
+**Важно:** схема «прочитать токен из cookie на фронтенде» несовместима с `HttpOnly`; если читать из JS, кука перестаёт быть `HttpOnly` и защита вырождается.
 
-### D3. Refresh-token rotation с Redis-less session store
-**Решение:** Коллекция `sessions` в MongoDB (`{ jti, userId, refreshTokenHash, createdAt, revokedAt }`). При `refreshTokens()` инвалидируем старый jti и выдаём новый. Access-токен получает поле `sId` (session id), проверяемое в `JwtStrategy`. Logout инвалидирует все (или текущую) сессии.
-**Why:** Без ротации украденный refresh-токен живёт 7 дней. Redis не используем — уже есть MongoDB, не плодим инфраструктуру. `tokenVersion` для mass-invalidation при password change / "logout everywhere".
-**Trade-off:** Latency на каждый запрос + 1 Mongo-lookup (можно кэшировать in-memory с TTL 60s).
+### D3. Ротация refresh-токенов на MongoDB
+**Решение:** коллекция сессий (`jti`, `userId`, хэш refresh-токена, время создания и отзыва). При обновлении старый `jti` отзывается, выдаётся новый; повторное использование отозванного `jti` отзывает всю цепочку. Access-токен несёт `sId`, `JwtStrategy` его проверяет. `tokenVersion` — для «выйти везде».
+**Почему не Redis:** MongoDB уже есть, новая инфраструктура не нужна.
+**Trade-off:** `JwtStrategy.validate` уже делает запрос за пользователем — проверку сессии встроить в тот же запрос, а не добавлять второй.
+**Учесть:** `issueTokens` вызывается не только из OAuth-callback, но и из локального входа.
 
-### D4. OAuth `state` — генерация + cookie-bound валидация
-**Решение:** В `GET /api/auth/login` генерируем `crypto.randomUUID()`, кладём в короткоживущую (10 мин) httpOnly cookie `oauth_state` и передаём в URL Yandex. В `callback` сверяем `state` из query с cookie, после чего удаляем cookie.
-**Why:** Login CSRF — реальный вектор при отсутствии state.
+### D4. OAuth `state`
+**Решение:** `state` генерируется при старте входа, кладётся в короткоживущую httpOnly-куку, сверяется в callback, после сверки кука удаляется. `getAuthUrl(state?)` параметр уже принимает — его просто не передают.
+**Техническая деталь:** обработчик `login` сейчас `@Redirect()` и до `Response` не дотягивается; для установки куки понадобится `@Res`.
 
-### D5. IDOR — единый ownership-check в сервисном слое
-**Решение:** Все методы, принимающие идентификатор ресурса (runId, uploadId, scenarioId, appId), MUST принимать `userId` и явно выбрасывать `ForbiddenException` при `resource.userId !== userId`. Контроллеры прокидывают `req.user.userId` (включая `@Param`-параметры). Для WS — тот же чек в `handleConnection` после верификации JWT из `handshake.headers.cookie` или `handshake.auth.token`.
-**Why:** Лучше один паттерн, чем ad-hoc guards на каждый эндпоинт.
+### D5. Проверка владельца в сервисном слое
+**Решение:** метод, принимающий идентификатор ресурса, принимает и `userId` и сам отбивает чужой — не guard на маршруте и не проверка в контроллере.
+**Статус:** для запусков это уже сделано (`getRun` → `ForbiddenException`, остальные методы идут через него). Осталось распространить на `uploads.findSession` и `manual-inputs.forScenario` и закрепить тестами.
 
-### D6. SSRF — `ipaddr.js` + DNS-pinning через undici Agent
+### D6. SSRF — библиотечный разбор адреса и пиннинг
 **Решение:**
-1. `SsrfGuard` использует `ipaddr.js.parse()` + `range === 'private'` (RFC 6890 покрывает ULA, link-local, CGNAT, loopback, metadata IP `169.254.169.254`).
-2. Блокируем любой IP-литерал в hostname (decimal/octal/hex/IPv4-mapped IPv6).
-3. Создаём `undici.Agent({ connect: { lookup: customLookup } })`, где `customLookup` резолвит DNS один раз, проверяет IP, и возвращает тот же IP (pinning) для всех connection-attempts. Передаём agent в `fetch(url, { dispatcher: agent })`.
-4. `@readme/openapi-parser.dereference()` вызываем с `{ dereference: { external: false } }`.
-**Альтернативы:** Запретить fetch external URLs в принципе — слишком жёстко, ломает user-supplied `openapiUrl`.
-**Why:** TOCTOU DNS rebinding — единственный надёжный класс обходов regex-based guard.
+1. Классификация через `ipaddr.js` (RFC 6890) вместо списка регулярных выражений.
+2. Запрет IP-литералов в нестандартных записях (decimal, octal, hex, IPv4-mapped IPv6).
+3. `undici.Agent` с кастомным `lookup`: одно разрешение имени, валидация, пиннинг адреса на соединение. Это закрывает окно между `assertPublicHostname` и `fetch`, которое сейчас открыто.
+4. `redirect: "manual"` и повторная проверка каждого `Location` — сейчас стоит `follow`, и редирект уводит запрос куда угодно уже после всех проверок.
+5. `dereference(spec, { dereference: { external: false } })`.
 
-### D7. Helmet + body-parser limits + throttler как глобальные middleware
+### D7. Глобальные middleware
+**Решение:** helmet, лимиты `json`/`urlencoded`, `ThrottlerGuard` как `APP_GUARD`, точечные строгие лимиты на аутентификацию, маркетплейс и загрузки.
+
+### D8. Ключ ограничения частоты за прокси
+**Решение:** включить `trust proxy` у Express и проставлять `X-Forwarded-For` в Caddy.
+**Почему это обязательная часть, а не деталь:** без доверия к заголовку `req.ip` равен адресу контейнера Caddy — одинаковому для всех. Глобальный лимит в 60 запросов в минуту тогда делится на всех пользователей сразу: защита не работает, а под нагрузкой сервис выключает сам себя. Health-check (`GET /`) исключить из лимита отдельно.
+
+### D9. Swagger по окружению
+**Решение:** регистрировать `/api/docs` и `/api/schema.json` только вне production. Генерация типов фронтенда ходит на локальный инстанс и не затрагивается.
+
+### D10. Глобальный фильтр исключений
+**Решение:** `APP_FILTER` пробрасывает `HttpException` как есть, остальное логирует со stack и отдаёт 5xx с идентификатором запроса и без диагностики.
+**Риск:** фильтр может замаскировать реальные баги → идентификатор в ответе, stack в логе, алерт на долю 5xx.
+
+### D11. Фронтенд — парсерный санитайзер и CSP с nonce
 **Решение:**
-- `app.use(helmet())` со строгим конфигом (включая `crossOriginResourcePolicy: { policy: 'same-origin' }`).
-- `app.use(json({ limit: '1mb' }))`, `urlencoded({ limit: '1mb' })`.
-- `ThrottlerModule.forRoot({ throttlers: [{ name: 'default', ttl: 60_000, limit: 60 }] })`, зарегистрированный как `APP_GUARD`.
-- Per-route `@Throttle`: `/auth/*` — 5/мин, `/marketplace` — 30/мин, `/uploads/*` — 10/мин.
-**Why:** Просто, стандартно, нулевая инвазия в бизнес-логику.
+1. `sanitizeRichText` переписать на `isomorphic-dompurify`. Текущая реализация разбирает разметку регулярными выражениями и пропускает сырые HTML-комментарии; её потребители — `renderMarkdown` (блоки страниц шага) и страница карточки, оба через `v-html`.
+2. CSP через модуль безопасности Nuxt, **с nonce на запрос**. Nuxt встраивает инлайновый скрипт состояния гидрации: `script-src 'self'` без nonce или хэша положит все SSR-страницы, а `'unsafe-inline'` обнулит смысл политики.
+3. Яндекс.Метрика — либо остаётся ручным сниппетом с источником в allowlist, либо переезжает на `@nuxt/scripts` (Q5).
 
-### D8. Swagger за `NODE_ENV !== 'production'`
-**Решение:** Регистрируем `/api/docs` и `/api/schema.json` только в dev/staging. В проде — basic-auth gate для админов (опционально).
-**Why:** Docs = reconnaissance gold.
+### D12. Приём файлов — сигнатура содержимого и лимиты
+**Решение:** `limits: { fileSize, files: 1 }` на всех шести точках приёма (аватар, single-upload, четыре эндпоинта спецификаций). Тип определять по сигнатуре содержимого через `file-type`, а не по `mimetype` от клиента: сейчас аватар проверяется строкой `file.mimetype.startsWith("image/")`, которую подставляет клиент. SVG запрещён. Объекты уходят в S3 с `Content-Disposition: attachment` и `X-Content-Type-Options: nosniff`.
+**Отдельно:** `uploadPart` вчитывает поток запроса в память без верхней границы — там нужна явная граница, а не только проверка номера части.
 
-### D9. Глобальный `AllExceptionsFilter`
-**Решение:** `APP_FILTER` перехватывает всё. Для `HttpException` прокидывает статус и санкционированный message. Для прочих — логирует stack server-side, отвечает клиенту `500 Internal Server Error` с correlation UUID.
-**Why:** Предотвращает утечку DB-конфигов, путей файловой системы и upstream error bodies.
+### D13. Presigned-ссылки — сначала развязать хранение, потом сокращать TTL
+**Решение:** хранить имя объекта, ссылку выпускать на чтение; добавить эндпоинт выдачи ссылки по требованию. Только после этого сокращать TTL.
+**Почему порядок важен:** `users.service.updateAvatar` сохраняет в `avatarUrl` **готовую presigned-ссылку**, выпущенную в момент загрузки. Сокращение TTL без развязки означает, что аватары всех пользователей перестанут отображаться через новый TTL после загрузки — и починить это можно будет только повторной загрузкой. Тот же эффект надо проверить для ссылок, которые `singleUpload` и `completeChunkedUpload` отдают клиенту.
 
-### D10. Frontend — `isomorphic-dompurify` + `nuxt-security` + замена metrica
-**Решение:**
-1. `sanitizeRichText` переписать на `DOMPurify.sanitize(html, { ALLOWED_TAGS: [...], ALLOWED_ATTR: [] })` — парсер-based, иммунитет к mXSS.
-2. `nuxt-security` module даёт CSP + standard headers. CSP: `default-src 'self'; script-src 'self' https://mc.yandex.ru; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' wss: ws:; frame-ancestors 'none'; base-uri 'self'`.
-3. Yandex Metrica — заменить hand-rolled snippet на `@nuxt/scripts` (SRI, consent, Partytown).
-**Why:** CSP + DOMPurify = комбинированная защита от XSS, без которой cookie-auth бесполезен.
+### D14. YAML — что реально даёт схема
+**Решение:** `load(text, { schema: JSON_SCHEMA })`.
+**Уточнение:** `JSON_SCHEMA` ограничивает **теги** типами JSON (отсекает `!!timestamp`, `!!binary`, пользовательские) и **не отключает алиасы** — такой опции у js-yaml нет, а `load` в версии 4 и так не резолвит исполняемые теги. Поэтому от amplification-атаки защищают лимит размера входа (он есть и для URL, и для файлов) и явный отказ разбирать документ с алиасами; если нужна настраиваемая граница — переход на пакет `yaml` с `maxAliasCount`.
 
-### D11. Файлы — magic-bytes + жёсткие multer limits
-**Решение:**
-- `FileInterceptor("file", { limits: { fileSize: 5*1024*1024, files: 1, fields: 10 } })` на всех upload-эндпоинтах (avatar/single/chunked-part).
-- Валидация через `file-type` (первые 4100 байт) — доверяем только magic-bytes, не mimetype.
-- Allowlist: PNG/JPEG/WebP для аватаров; PNG/JPEG/WebP/PDF/JSON/YAML для OpenAPI-спеков.
-- Запрет SVG (stored XSS через `<script>`).
-- При upload в MinIO передаём `Content-Disposition: attachment` и `X-Content-Type-Options: nosniff` в metadata.
-**Why:** Mimetype тривиально спуфить; magic-bytes — нет.
+### D15. Секреты — fail-fast, обусловленный окружением
+**Решение:** обязательность секретов, запрет плейсхолдеров и запрет отозванных значений включаются при `NODE_ENV=production` — тем же `superRefine`, которым уже запрещён `DEV_LOGIN_PASSWORD` в бою. Дефолты `test` (LocalStack), `minioadmin` / `fuse-local-dev-secret` (Garage) остаются для разработки.
+**Почему не безусловно:** безусловное требование непустых `AWS_*`, `S3_*` и `YANDEX_*` ломает `pnpm infra` + `pnpm dev` у всех, включая CI, и такое изменение откатят первым же коммитом.
+**Отозванные значения — по хэшу.** Внести секрет в `env.schema.ts` значило бы вернуть его в репозиторий тем же действием, которым его оттуда убирают.
 
-### D12. Presigned URLs — короткий TTL + on-demand endpoint
-**Решение:** Снижаем expiry с 24h до 15 минут. Добавляем `GET /api/uploads/:id/url` (auth + ownership-check), который mint-ит свежий URL по требованию.
-**Why:** 24h URL в логах/кэшах = постоянная утечка.
+### D16. `SSRF_ALLOWED_HOSTS` запрещён в production
+**Решение:** непустое значение при `NODE_ENV=production` роняет приложение на старте.
+**Почему отдельным решением:** список обходит и блок-лист хостов, и шаг резолва DNS целиком (`assertSafeUrl` для разрешённого хоста возвращается до проверки адреса). Это одна переменная окружения, выключающая всю защиту от SSRF — и в `.env.example` она заполнена.
 
-### D13. YAML — запрет anchors и external refs
-**Решение:** `js-yaml.load(text, { schema: JSON_SCHEMA, json: true })` (отключает anchors/aliases, убирает billion-laughs).
-**Why:** Парсер OpenAPI-spec от пользователей = вектор DoS/RCE.
+### D17. Контейнеры — непривилегированный рантайм
+**Решение:** непривилегированный пользователь, `COPY --chown`, корректная доставка `SIGTERM`, `cap_drop: [ALL]`, `no-new-privileges`, `read_only` с tmpfs, лимиты памяти/CPU/процессов.
+**Охват:** четыре сервиса, включая `worker` — он собирается из того же образа, что backend, и запускается репликами. Для воркера корректная обработка `SIGTERM` не косметика: по сигналу он прекращает забор сообщений, иначе сообщение в полёте теряет время до возврата по visibility timeout.
+**Пин pnpm:** `package.json` объявляет `packageManager: pnpm@10.4.1`, оба Dockerfile ставят `pnpm@9` — образы собираются не тем менеджером, которым проверяется лок. Правильный шаг — corepack по полю `packageManager`, а не пин произвольной версии.
 
-### D14. Секреты — fail-fast + zero-defaults
-**Решение:**
-- В `env.schema.ts` удаляем все `.default("test")`/`.default("minioadmin")`. Все секреты — `z.string().min(N)`.
-- `JWT_SECRET` получает `.refine(v => v !== "change-me-..." && !v.startsWith("fallback"))`.
-- В коде везде `configService.getOrThrow<string>("JWT_SECRET")`.
-- `.env.example` содержит `JWT_SECRET=<generate-via-openssl-rand-hex-48>` (placeholder, не валидный).
-- В `docker-compose.yml` все секреты через `${VAR:?required}`.
-**Why:** Любая захардкоженная строка в коде = утечка.
+### D18. Caddy — TLS, заголовки, X-Forwarded-For
+**Решение:** ACME для production-домена, блок `header` с HSTS и остальным набором, проброс `X-Forwarded-For`/`X-Forwarded-Proto`, при необходимости — модуль ограничения частоты на edge.
+**Связка:** выкатка TLS требует перевыпуска OAuth `redirect_uri`; без него вход сломается в момент деплоя. `X-Forwarded-For` — предусловие для D8.
 
-### D15. Контейнеры — non-root + least privilege
-**Решение:** Для каждого Dockerfile (backend, frontend, proxy):
-- `RUN addgroup -S app && adduser -S app -G app`
-- `COPY --chown=app:app ...`
-- `USER app` перед `ENTRYPOINT`
-- `ENTRYPOINT ["/sbin/tini","--"]` (PID 1, zombie reaping)
-- В compose: `cap_drop: [ALL]`, `security_opt: ["no-new-privileges:true"]`, `read_only: true` (где позволяет NestJS — tmpfs `/tmp`), `mem_limit: 1g`, `cpus: "1.5"`, `pids_limit: 200`.
-**Why:** Стандарт container hardening.
+### D19. CI — короткоживущий токен и никакой подстановки в shell
+**Решение:** GitHub App вместо `FLOW_TOKEN`; все подстановки имени ветки — через `env:`, с проверкой идентификатора регулярным выражением; `permissions` в `ci.yml`; гейты на секреты, зависимости и образы; пин actions по SHA.
+**Конкретное место инъекции:** в `change-bootstrap.yml` шаг создания лейбла подставляет `${{ steps.change.outputs.id }}` прямо в текст команды. Подстановка выражения происходит до запуска shell, а имена git-веток допускают `;`, `$`, `(`, `)` и обратные кавычки — ветка с метасимволами выполняет произвольный код в раннере, где лежит токен автоматизации. Остальные шаги уже передают значение через `env:`.
+**Про форки:** на событие `pull_request` из форка секреты не передаются, так что guard — защита в глубину на случай `pull_request_target`.
 
-### D16. Caddy — TLS + headers + rate-limit
-**Решение:**
-- Меняем `:8081 { ... }` на `https://<domain> { tls <email>; ... }` с ACME.
-- Добавляем `header` блок: HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, CSP.
-- Устанавливаем `caddy-ratelimit` module (или фронтируем CDN): лимит `/api/auth/*` 5/мин per-IP.
-**Why:** Edge-level защита дешевле, чем app-level.
+### D20. Маскирование в логах — там, где логи пишутся
+**Решение:** подключить `LoggingService` как логгер приложения, затем добавить маскирование email, полей с токенами и JWT-подобных строк; идентификатор запроса через `AsyncLocalStorage`.
+**Почему порядок такой:** `LoggingService` сейчас **не подключён** — ни `app.useLogger()`, ни инъекций нет, вся запись идёт через `Logger` из `@nestjs/common`. Redactor внутри неиспользуемого сервиса не закроет ничего. Это тем важнее, что при заданном `LOG_COLLECTOR_URL` записи уходят на внешний приёмник.
 
-### D17. CI — OIDC, SAST, audit, branch validation
-**Решение:**
-- Удаляем `FLOW_TOKEN` PAT; мигрируем на GitHub App с OIDC.
-- В `change-bootstrap.yml` и `change-complete.yml` валидируем `${ID}` через regex `^[a-z0-9-]{1,40}$` перед любым `gh`-вызовом.
-- В `ci.yml` добавляем `permissions: contents: read`, блокировку fork-PR в `change-complete` через `if: github.event.pull_request.head_repo.full_name == github.repository`.
-- Добавляем jobs: `gitleaks/gitleaks-action`, `aquasecurity/trivy-action` (repo + image), `pnpm audit --prod --audit-level=high`.
-- `pnpm.overrides`: `"tar": "^7.5.16"`, `"multer": "^2.2.0"`.
-**Why:** CI = ранняя линия обороны.
+### D21. Аутентификация WebSocket — по готовому образцу
+**Решение:** `RunGateway` аутентифицирует handshake и сверяет владельца запуска.
+**Как:** `NotificationsGateway.authenticate` уже делает ровно эту работу для персональной комнаты — читает `access_token` из `handshake.headers.cookie`, проверяет через `JwtService`. Переиспользовать его, а не писать новый guard: иначе в системе появятся два разных способа проверять один и тот же токен.
+**Почему это важнее, чем кажется:** комната называется `runId` из query, то есть значением, которым распоряжается клиент. Сейчас любой, кто знает `runId`, получает снапшот и поток событий чужого запуска — включая тела ответов стороннего API.
 
-### D18. Logging sanitization + Correlation IDs
-**Решение:**
-- В `LoggingService` добавляем redactor: маскируем emails (`a***@b.com`), JWT-паттерны, `password`/`secret`/`token` поля в JSON-логах.
-- В `worker.service.ts` обрезаем upstream error body до 200 символов перед сохранением в `stepResults[].error`.
-- Каждый запрос получает `x-request-id` (UUID), прокидывается в логи и в ответ.
-**Why:** Логи уезжают в `LOG_COLLECTOR_URL`; PII утечка = GDPR/Russian 152-FZ риск.
+### D22. Шаги маркетплейса остаются публичными
+**Решение:** из публичного ответа вырезаются `consts` каждого шага и `blockedReason`; сами `steps` остаются.
+**Почему не «срезать steps»:** публичность шагов — продуктовое решение, зафиксированное и в спеке `marketplace`, и в коде: по ним гость видит превью запуска и playground. `appId`/`endpointId` тоже остаются — они и так публичны во вкладке «Сервисы и endpoints». Секреты лежат именно в `consts`: это словарь, который автор заполняет руками и куда штатно попадает `Authorization: Bearer …`.
 
 ## Risks / Trade-offs
 
-- **[Risk] Breaking-change для существующих dev-сессий при смене cookie-флагов и JWT secret.** → Mitigation: ротация проводится в maintenance window, пользователи логинятся заново. Backward-compat не нужен (pre-launch).
-- **[Risk] Throttler может блокировать легитимных пользователей на /marketplace при ботовом трафике рядом.** → Mitigation: per-user throttler (по userId) + IP-allowlist для CDN в Caddy.
-- **[Risk] DOMPurify на SSR (Nuxt) тормозит first render.** → Mitigation: используем `isomorphic-dompurify` (jsdom только на сервере), кэшируем результат по хэшу контента.
-- **[Risk] Non-root контейнер может сломать healthcheck/port-bind на 80/443.** → Mitigation: bind на 8080/8443 + Caddy `net_bind_service` capability, всё остальное `cap_drop`.
-- **[Risk] DNS-pinning через undici ломает fetch redirect (если upstream делает 302 на другой домен).** → Mitigation: явно обрабатываем redirect в `customLookup`, перересолвим IP с проверкой после каждого redirect.
-- **[Risk] Глобальный `AllExceptionsFilter` может маскировать реальные баги.** → Mitigation: correlation UUID в ответе + stack в server-side логах + alerting на 5xx rate.
-- **[Risk] SAST в CI даёт false positives и тормозит разработку.** → Mitigation: настроить baseline, блокируем только `high`/`critical`.
-- **[Trade-off] SameSite=Lax ломает any cross-site iframe embed (если когда-то понадобится).** → Принимаем: iframe-embed не в roadmap.
-- **[Trade-off] Отказ от external `$ref` dereference снижает гибкость OpenAPI import.** → Принимаем: пользователи должны инлайнить refs сами.
-- **[Trade-off] 15-мин presigned URL может нервировать пользователей на медленном соединении.** → Принимаем: on-demand endpoint решает.
+- **[Risk] Проверка `Origin` ломает SSR.** Nuxt-сервер ходит в API без заголовка `Origin`, в том числе `POST /api/auth/refresh` при рендере. Правило «нет `Origin` и нет `Referer` → 403» выключит рефреш сессии на SSR. → Способ отличить доверенный внутренний вызов фиксируется при реализации и покрывается тестом.
+- **[Risk] Сокращение TTL presigned-ссылок ломает аватары.** → D13: сначала развязать хранение, потом TTL.
+- **[Risk] Fail-fast на секреты ломает локальную разработку.** → D15: проверки обусловлены production.
+- **[Risk] CSP без nonce ломает гидрацию Nuxt.** → D11.
+- **[Risk] Throttler без `trust proxy` считает всех одним клиентом.** → D8.
+- **[Risk] `Path=/api` для кук отрезает socket.io.** → D1.
+- **[Risk] Проверка сессии в `JwtStrategy` добавляет запрос на каждый вызов.** → встроить в существующий запрос за пользователем; при необходимости — кэш с коротким TTL.
+- **[Risk] Непривилегированный контейнер ломает bind на порты ниже 1024.** → слушать нестандартные порты либо оставить `NET_BIND_SERVICE` Caddy.
+- **[Risk] Гейты CI дают ложные срабатывания.** → завести baseline, блокировать только high/critical.
+- **[Trade-off] Отказ от внешних `$ref`.** Пользователь обязан инлайнить ссылки сам. Принимаем.
+- **[Trade-off] Переписывание истории git.** Всем, у кого есть локальные клоны, придётся переклонировать; открытые PR придётся пересоздать. Принимаем: решение владельца репозитория.
 
 ## Migration Plan
 
-Выполнять строго последовательно, каждый этап = отдельный PR + smoke-тест на staging.
+Этапы последовательные, каждый — отдельный PR со smoke-проверкой.
 
-**Этап 0 — Аварийная ротация секретов (T+0, до кода):**
-1. Ротировать MongoDB root, Yandex SQS static keys, Timeweb S3 keys, Yandex OAuth client secret, JWT/NUXT_SESSION secret.
-2. Перевытать OAuth `redirect_uri` на HTTPS origin (после D16).
-3. Зафиксировать скомпрометированные значения в `env.schema.ts` `.refine` (reject).
+**Этап 0 — ротация секретов (до кода):** перевыпустить `JWT_SECRET`, `NUXT_SESSION_SECRET`, креды MongoDB, ключи очереди, ключи S3, `YANDEX_CLIENT_SECRET`; внести хэши отозванных значений; вычистить плейнтекст из истории git.
 
-**Этап 1 — Backend hardening (D7, D8, D9, D13, D14, D18):** helmet, throttler, global filter, env-fail-fast, YAML schema, logging sanitization. Низкий риск, высокий эффект.
+**Этап 1 — backend baseline (D7–D10, D14, D15, D16, D20):** helmet, `trust proxy` + throttler, лимиты тела, фильтр исключений, Swagger по окружению, схема YAML, fail-fast секретов, подключение логгера. Низкий риск, высокий эффект.
 
-**Этап 2 — Auth fixes (D1–D5):** cookie flags, CSRF, OAuth state, refresh rotation. **BREAKING для всех сессий.**
+**Этап 2 — аутентификация (D1–D4):** атрибуты кук, CSRF, `Origin` с учётом SSR, OAuth `state`, ротация refresh. **BREAKING для всех сессий.**
 
-**Этап 3 — IDOR cleanup (D5):** ownership-чеки в execution/uploads/scenarios/apps/websocket. Добавить unit-тесты на каждый `Forbidden`-сценарий.
+**Этап 3 — авторизация (D5, D21):** проверки владельца в загрузках и `manual-inputs`, аутентификация WebSocket. Тест на каждый отказ.
 
-**Этап 4 — SSRF + uploads (D6, D11, D12):** ipaddr.js + DNS pinning, magic-bytes валидация, presigned URL TTL.
+**Этап 4 — SSRF и файлы (D6, D12, D13):** разбор адреса и пиннинг, редиректы, лимиты приёма файлов и сигнатуры, развязка presigned-ссылок, затем TTL.
 
-**Этап 5 — Frontend (D10):** DOMPurify, nuxt-security, замена metrica. Smoke-тест marketplace cards.
+**Этап 5 — фронтенд (D11, D22):** санитайзер, CSP с nonce, allowlist кук, отказ от чтения общего `.env`, вырезание `consts` из публичного ответа.
 
-**Этап 6 — Infra (D15, D16):** non-root Dockerfiles, Caddy TLS + headers. Deploy на staging с валидацией headers через `securityheaders.com`.
+**Этап 6 — инфраструктура (D17, D18):** контейнеры, Caddy с TLS и заголовками, bind dev-инфраструктуры на localhost, перевыпуск `redirect_uri`.
 
-**Этап 7 — CI (D17):** OIDC migration, SAST/Trivy/audit gates, branch-name regex. Удаление `FLOW_TOKEN`.
+**Этап 7 — CI (D19):** GitHub App, устранение подстановки в shell, `permissions`, гейты, пин по SHA, overrides.
 
-**Rollback:** Каждый этап — feature-flagged где возможно (например, throttler можно отключить env-флагом). Для breaking auth-изменений rollback = revert PR + повторная выдача старых сессий (пользователи логинятся заново). Infra-изменения (non-root, Caddy) откатываются revert-ом Dockerfile/Caddyfile.
+**Rollback:** этапы 1 и 7 откатываются revert'ом. Этап 2 ломает сессии в обе стороны — пользователи логинятся заново. Этапы 4 и 5 требуют согласованного откатa фронтенда и бэкенда (CSRF-заголовок, presigned-ссылки). Переписывание истории откату не подлежит.
 
 ## Open Questions
 
-- **Q1:** Где хранить секреты в проде — Vault (Yandex Lockbox), Doppler или `sops`+git-crypt? Зависит от ops-стандартов команды.
-- **Q2:** Использовать `@nestjs/throttler` с in-memory storage или обёрткой над Redis/Mongo? Для single-instance — memory; для HA — Redis.
-- **Q3:** Деплоим Caddy с ACME или используем Yandex Certificate Manager + ALB? Зависит от выбранной сетевой архитектуры.
-- **Q4:** Делаем ли отдельный `/api/health` с auth-токеном для healthcheck, или оставляем `/` открытым (только internal network)?
-- **Q5:** Мигрируем ли metrica на `@nuxt/scripts` сейчас (требует обновления Nuxt) или оставляем как есть с CSP allowlist?
-- **Q6:** Запрещаем ли полностью SVG в аватарах, или парсим через DOMPurify перед upload?
+- **Q1:** Где хранить секреты в production — Yandex Lockbox, Doppler или `sops`? Зависит от стандартов ops.
+- **Q2:** Внешнее хранилище счётчиков лимитов нужно только при горизонтальном масштабировании API. Решение принять до того, как API поедет репликами (воркеры уже едут).
+- **Q3:** TLS — ACME в Caddy или сертификат от провайдера перед балансировщиком? Зависит от сетевой схемы.
+- **Q4:** Health-check `GET /` оставить открытым (внутренняя сеть) или закрыть — с учётом того, что он должен быть исключён из лимитов.
+- **Q5:** Яндекс.Метрика — ручной сниппет с источником в CSP или `@nuxt/scripts`.
+- **Q6:** Сколько хопов доверять в `trust proxy` — зависит от того, стоит ли что-то перед Caddy (CDN, балансировщик провайдера). От ответа зависит корректность ключа лимитов.
