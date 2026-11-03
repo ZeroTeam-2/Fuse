@@ -1,61 +1,71 @@
 ## ADDED Requirements
 
-### Requirement: Non-root runtime в Docker
-Все три Dockerfile (`apps/backend`, `apps/frontend`, `apps/proxy`) SHALL запускать процесс от имени non-root пользователя. Dockerfile MUST содержать `RUN addgroup -S app && adduser -S app -G app` и `USER app` перед `ENTRYPOINT`/`CMD`. Все `COPY` инструкции MUST использовать `--chown=app:app`.
+### Requirement: Процесс в контейнере работает не от root
+Все три Dockerfile (`apps/backend`, `apps/frontend`, `apps/proxy`) SHALL создавать непривилегированного пользователя и переключаться на него перед запуском процесса; `COPY` в runtime-стадии MUST передавать владение этому пользователю. Сейчас ни один из трёх `USER` не задаёт, и процесс идёт от root.
 
-#### Scenario: Backend container non-root
-- **WHEN** backend-контейнер запущен
-- **THEN** процесс `node` выполняется с UID пользователя `app`, а не `root`
+Один и тот же образ backend используется сервисами `backend` и `worker`, поэтому изменение закрывает оба.
 
-#### Scenario: Файлы приложения принадлежат app
-- **WHEN** выполняется `ls -la /app` внутри backend-контейнера
-- **THEN** все файлы и директории принадлежат пользователю `app` и группе `app`
+#### Scenario: Backend работает не от root
+- **WHEN** контейнер backend запущен
+- **THEN** процесс `node` принадлежит непривилегированному пользователю, а не root
 
-### Requirement: tini как PID 1
-Все Dockerfile SHALL использовать `tini` (или эквивалент) как PID 1 через `ENTRYPOINT ["/sbin/tini","--"]` для корректного signal-handling и zombie-reaping.
+#### Scenario: Воркер работает не от root
+- **WHEN** запущена реплика сервиса `worker`
+- **THEN** процесс `node` принадлежит тому же непривилегированному пользователю
 
-#### Scenario: Корректная остановка по SIGTERM
-- **WHEN** контейнеру отправляется `SIGTERM` (например, `docker stop`)
-- **THEN** Node-процесс корректно завершается в течение 10 секунд без `SIGKILL`
+### Requirement: Корректная обработка сигналов
+Образы SHALL запускать процесс так, чтобы `SIGTERM` доходил до него напрямую (init-процесс как PID 1 либо exec-форма без оболочки). Для воркера это не косметика: по `SIGTERM` он останавливает забор сообщений из очереди, и если сигнал не доходит, docker убивает процесс по таймауту вместе с сообщением в полёте.
 
-### Requirement: Least-privilege capabilities в compose
-`docker-compose.yml` SHALL для каждого сервиса определять `cap_drop: [ALL]` и `security_opt: ["no-new-privileges:true"]`. Дополнительные capabilities MUST быть явно перечислены через `cap_add` только при необходимости (например, `NET_BIND_SERVICE` для bind на порт < 1024).
+#### Scenario: Остановка воркера по SIGTERM
+- **WHEN** контейнеру воркера отправляется `SIGTERM`
+- **THEN** процесс завершает текущее сообщение и выходит сам, без `SIGKILL` по таймауту
 
-#### Scenario: Drop всех capabilities
-- **WHEN** выполняется `docker inspect <container>` на любом сервисе
-- **THEN** `EffectiveCaps` содержит минимум capabilities (только явно добавленные через `cap_add`)
+### Requirement: Минимальные привилегии контейнеров
+`docker-compose.yml` SHALL задавать каждому сервису (`caddy`, `backend`, `worker`, `frontend`) `cap_drop: [ALL]` и `security_opt: ["no-new-privileges:true"]`. Нужные capability MUST добавляться точечно — например, `NET_BIND_SERVICE` для Caddy, если он слушает порт ниже 1024.
 
-### Requirement: Read-only filesystem где возможно
-Compose-сервисы SHALL использовать `read_only: true` для файловой системы контейнера, с явным `tmpfs`-маунтом для директорий, куда приложение пишет (`/tmp`, `/app/.cache`).
+#### Scenario: Привилегии сняты
+- **WHEN** инспектируется запущенный контейнер любого из сервисов
+- **THEN** эффективный набор capability пуст или содержит только явно добавленные
 
-#### Scenario: Попытка записи в корень FS
-- **WHEN** злоумышленник через RCE пытается создать файл в `/etc/` внутри контейнера
-- **THEN** операция завершается с `EROFS` (read-only file system)
+### Requirement: Файловая система контейнера только на чтение
+Сервисы SHALL запускаться с `read_only: true` и явными `tmpfs` для путей, куда процессу нужно писать. Применимость проверяется по сервисам: загрузки буферизуются в память, но Nuxt и Caddy пишут в кэш.
 
-### Requirement: Resource limits в compose
-`docker-compose.yml` SHALL для каждого сервиса задавать `mem_limit`, `cpus`, `pids_limit`. Минимальные значения: `mem_limit: 512m`, `cpus: "0.5"`, `pids_limit: 100` (настройки по сервису могут быть больше).
+#### Scenario: Запись вне разрешённых путей
+- **WHEN** процесс пытается создать файл за пределами tmpfs-путей
+- **THEN** запись отклоняется файловой системой
 
-#### Scenario: Memory bomb контейнера
-- **WHEN** процесс в контейнере пытается занять больше памяти, чем `mem_limit`
-- **THEN** OOM-killer убивает процесс, а не роняет host
+### Requirement: Лимиты ресурсов контейнеров
+`docker-compose.yml` SHALL задавать каждому сервису ограничения памяти, CPU и числа процессов. Для воркера лимит памяти MUST учитывать, что он держит до `WORKER_CONCURRENCY` запусков одновременно и буферизует тела ответов стороннего API перед выгрузкой в S3.
 
-### Requirement: Bind dev-инфраструктуры на 127.0.0.1
-`docker-compose.dev.yml` SHALL биндить все порты dev-инфраструктуры (mongo, minio, localstack, mock-api) на `127.0.0.1` (формат `127.0.0.1:HOST_PORT:CONTAINER_PORT`). Биндинг на `0.0.0.0` для dev-сервисов MUST быть запрещён.
+#### Scenario: Исчерпание памяти одним сервисом
+- **WHEN** процесс в контейнере пытается занять больше заданного лимита
+- **THEN** ограничение срабатывает на уровне контейнера, остальные сервисы и хост продолжают работать
 
-#### Scenario: Mongo доступна только с localhost
-- **WHEN** злоумышленник с соседней машины в Wi-Fi сети пытается подключиться к `dev-host:27018`
-- **THEN** подключение отклоняется (порт слушает только 127.0.0.1)
+### Requirement: Dev-инфраструктура слушает только localhost
+`docker-compose.dev.yml` SHALL публиковать порты dev-инфраструктуры в формате `127.0.0.1:HOST:CONTAINER`. Сейчас `mongo` (27018), `localstack` (4566), `garage` (9000) и `mock-api` (8085) опубликованы на все интерфейсы, то есть база разработчика с фиксированным паролем из файла в репозитории доступна всей локальной сети.
 
-### Requirement: Pin image digest для production-образов
-Все `image:` директивы в compose (для образов, не собираемых локально) SHOULD пиниться по digest (`@sha256:...`). Использование `:latest` MUST быть запрещено.
+#### Scenario: Mongo недоступна извне машины
+- **WHEN** с соседней машины в той же сети выполняется подключение к порту Mongo разработчика
+- **THEN** соединение не устанавливается
 
-#### Scenario: Воспроизводимый pull
-- **WHEN** разработчик делает `docker compose pull` на двух разных машинах
-- **THEN** оба получают идентичные образы по digest
+### Requirement: Воспроизводимость образов
+Образы, которые не собираются локально, SHOULD пиниться по digest. Сейчас они пиннуты по тегам (`mongo:7`, `localstack/localstack:4.7.0`, `dxflrs/garage:v2.5.0`, `mccutchen/go-httpbin:v2.15.0`, `caddy:2-alpine`, `node:24-alpine`) — тег защищает от смены мажора, но не от переиздания под тем же именем.
 
-### Requirement: Расширенный .dockerignore
-`.dockerignore` SHALL исключать из build context: `.env*` (кроме `.env.example`), `.claude/`, `.cursor/`, `.opencode/`, `.turbo/`, `**/node_modules`, `**/dist`, `**/.nuxt`, `**/.output`, `**/test`, `**/e2e`, `docs/`, `openspec/`, `scripts/`, `*.md`, `LICENSE`.
+Менеджер пакетов в образах MUST быть зафиксирован тем же значением, что и в репозитории: сейчас `package.json` объявляет `packageManager: pnpm@10.4.1`, а оба Dockerfile ставят `pnpm@9` — сборка идёт не тем pnpm, которым проверяется лок локально и в CI.
 
-#### Scenario: Build context без секретов
-- **WHEN** выполняется `docker build` с актуальным `.dockerignore`
-- **THEN` build context не содержит `.env` файлов или директорий с агентскими транскриптами
+#### Scenario: Одинаковый образ на двух машинах
+- **WHEN** два инженера подтягивают образы по одному и тому же compose-файлу
+- **THEN** они получают идентичные образы
+
+#### Scenario: Сборка тем же pnpm
+- **WHEN** образ собирается из Dockerfile
+- **THEN** используется версия pnpm из поля `packageManager`, а не произвольная из мажора 9
+
+### Requirement: Build context без лишнего
+`.dockerignore` SHALL исключать из контекста сборки всё, что не нужно образу. Уже исключены `.git`, `.env`, `node_modules`, артефакты сборки, `docs`, `openspec`. MUST добавиться: `.env.local` и прочие локальные профили окружения, каталоги агентских инструментов, тесты и e2e, `scripts`, markdown-файлы.
+
+Пропуск `.env.local` существенен: это файл локального профиля, в нём пара локального входа и креды локальной инфраструктуры, и он сейчас уезжает в контекст сборки.
+
+#### Scenario: Контекст без файлов окружения
+- **WHEN** собирается любой из образов
+- **THEN** в контекст не попадает ни один файл окружения, кроме примеров

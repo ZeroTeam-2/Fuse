@@ -1,52 +1,62 @@
 ## ADDED Requirements
 
-### Requirement: Helmet на backend
-Система SHALL подключать `helmet()` middleware на backend со следующими директивами: `Strict-Transport-Security` (max-age ≥ 63072000, includeSubDomains, preload), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, `Cross-Origin-Resource-Policy: same-origin`, `X-DNS-Prefetch-Control: off`, `X-Download-Options: noopen`.
+### Requirement: Security-заголовки на backend
+Система SHALL подключать helmet на backend. Обязательный набор: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, `Cross-Origin-Resource-Policy: same-origin`, `Strict-Transport-Security` в production.
 
-#### Scenario: Headers присутствуют на каждом ответе
-- **WHEN** клиент делает любой HTTP-запрос к backend
-- **THEN** ответ содержит все перечисленные security-заголовки с корректными значениями
+HSTS MUST NOT выставляться вне production: заголовок, однажды полученный браузером с localhost, заставит его требовать HTTPS от всех локальных портов на срок `max-age` — разработка встанет.
+
+Тело запроса MUST быть ограничено по размеру (`json`/`urlencoded` limit). Сейчас лимит не задан и зависит от умолчаний Express; явная граница нужна, чтобы шаги сценария и описания карточек не позволяли отправить произвольно большой документ.
+
+#### Scenario: Заголовки на каждом ответе
+- **WHEN** клиент делает любой запрос к backend
+- **THEN** ответ содержит перечисленные заголовки
 
 #### Scenario: HSTS только в production
-- **WHEN** backend запущен в `NODE_ENV=development`
-- **THEN** заголовок `Strict-Transport-Security` не добавляется (чтобы не сломать localhost HTTP)
+- **WHEN** backend запущен вне production
+- **THEN** `Strict-Transport-Security` в ответе отсутствует
 
-### Requirement: Cache-Control на auth-ответах
-Система SHALL добавлять заголовок `Cache-Control: no-store` на все ответы auth-эндпоинтов (`/api/auth/*`).
+### Requirement: Запрет кэширования auth-ответов
+Ответы маршрутов `/api/auth/*` SHALL содержать `Cache-Control: no-store`: в них приходят `Set-Cookie` с сессией, и промежуточное кэширование делает сессию общей.
 
-#### Scenario: Login ответ не кэшируется
-- **WHEN** клиент получает `200 OK` от `/api/auth/callback`
+#### Scenario: Ответ входа не кэшируется
+- **WHEN** клиент получает ответ от любого маршрута `/api/auth/*`
 - **THEN** ответ содержит `Cache-Control: no-store`
 
-### Requirement: Security headers в Caddy
-Caddyfile SHALL содержать глобальный `header` блок с `Strict-Transport-Security`, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy` (`geolocation=(), microphone=(), camera=()`). Caddy MUST терминировать TLS (ACME) для production-домена.
+### Requirement: TLS и security-заголовки на Caddy
+Caddyfile SHALL терминировать TLS для production-домена и добавлять `Strict-Transport-Security`, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`. Сейчас прокси слушает открытый `:8081` без TLS и без единого заголовка, и именно он — внешняя граница системы.
 
-#### Scenario: TLS в production
-- **WHEN** клиент обращается к production origin по HTTP
-- **THEN** Caddy редиректит на HTTPS (301) и терминирует TLS с валидным сертификатом
+Переход на HTTPS MUST сопровождаться перевыпуском OAuth `redirect_uri` на новый origin, иначе вход сломается в момент выкатки.
 
-#### Scenario: Security headers проходят через прокси
-- **WHEN** клиент делает запрос к frontend или API через Caddy
-- **THEN** финальный ответ содержит все security-заголовки из header-блока
+#### Scenario: HTTP редиректится на HTTPS
+- **WHEN** клиент обращается к production-домену по HTTP
+- **THEN** Caddy отвечает редиректом на HTTPS и обслуживает запрос по TLS с валидным сертификатом
 
-### Requirement: CSP на frontend
-Frontend SHALL устанавливать `Content-Security-Policy` через `nuxt-security` (или Nitro `routeRules`). Базовая CSP MUST быть: `default-src 'self'; script-src 'self' https://mc.yandex.ru; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' wss: ws:; frame-ancestors 'none'; base-uri 'self'`.
+#### Scenario: Заголовки доезжают через прокси
+- **WHEN** клиент запрашивает страницу фронтенда или маршрут API через Caddy
+- **THEN** итоговый ответ содержит заголовки из блока `header`
 
-#### Scenario: Блокировка inline script
-- **WHEN** на странице frontend пытается выполниться `<script>alert(1)</script>` (не из allowlist)
-- **THEN** браузер блокирует выполнение и логирует violation в console
+### Requirement: CSP на фронтенде
+Фронтенд SHALL отдавать `Content-Security-Policy`, запрещающий загрузку скриптов со сторонних источников и встраивание в iframe (`frame-ancestors 'none'`, `base-uri 'self'`).
 
-#### Scenario: Loading Yandex Metrica
-- **WHEN** страница загружает `https://mc.yandex.ru/metrika/tag.js`
-- **THEN** скрипт загружается без CSP violation (входит в `script-src`)
+Политика MUST учитывать, что Nuxt при SSR встраивает инлайновый скрипт с состоянием гидрации: `script-src 'self'` без nonce или хэша ломает гидрацию на всех страницах. Политика MUST выдавать nonce на запрос (штатный механизм модуля безопасности Nuxt) либо разрешать конкретные хэши — `'unsafe-inline'` в `script-src` MUST NOT использоваться. Источники, которые реально нужны: шрифты Google (`style-src`, `font-src`), Яндекс.Метрика (`script-src`, `img-src`), WebSocket того же origin (`connect-src`).
 
-### Requirement: Скрытие Swagger в production
-Система SHALL регистрировать эндпоинты `/api/docs` и `/api/schema.json` только при `NODE_ENV !== 'production'`. В production эти маршруты MUST возвращать `404`.
+#### Scenario: Сторонний скрипт заблокирован
+- **WHEN** в разметку попадает скрипт с источником, которого нет в политике
+- **THEN** браузер блокирует его выполнение и сообщает о нарушении политики
 
-#### Scenario: Production без Swagger
-- **WHEN** клиент запрашивает `/api/docs` на production-инстансе
-- **THEN** система отвечает `404 Not Found`
+#### Scenario: Гидрация не ломается
+- **WHEN** пользователь открывает любую SSR-страницу с включённой CSP
+- **THEN** инлайновый скрипт состояния выполняется (nonce или хэш), страница гидрируется, ошибок CSP в консоли нет
 
-#### Scenario: Dev со Swagger
-- **WHEN** клиент запрашивает `/api/docs` на dev-инстансе
-- **THEN** система отдаёт Scalar API reference UI
+### Requirement: Документация API недоступна в production
+Система SHALL регистрировать `/api/docs` и `/api/schema.json` только вне production. Сейчас оба маршрута открыты без аутентификации и отдают полную карту API вместе со схемами тел запросов.
+
+Генерация типов фронтенда (`pnpm gen:types`) ходит на `/api/schema.json` локального инстанса и этим изменением не затрагивается.
+
+#### Scenario: Production без документации
+- **WHEN** клиент запрашивает `/api/docs` или `/api/schema.json` на production-инстансе
+- **THEN** система отвечает `404`
+
+#### Scenario: Вне production документация доступна
+- **WHEN** разработчик открывает `/api/docs` на локальном инстансе
+- **THEN** страница справочника отдаётся как прежде
