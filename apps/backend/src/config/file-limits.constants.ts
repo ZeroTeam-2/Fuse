@@ -28,6 +28,17 @@ export const DEFAULT_UPLOAD_PART_SIZE_MB = 5;
  */
 export const DEFAULT_RUN_ARTIFACT_MAX_MB = 50;
 
+/**
+ * Лимит тела JSON/urlencoded-запроса. До явной границы действовал неявный
+ * дефолт Express (100 КБ) — он же и потолок, о котором никто не знал. 1 МБ
+ * оставляет запас документу сценария с rich-text описанием и при этом на
+ * порядок ниже потолка документа MongoDB (16 МБ).
+ *
+ * Приём файлов этой границы не касается: multipart разбирает multer со своими
+ * лимитами, чанковая загрузка читает поток напрямую.
+ */
+export const DEFAULT_REQUEST_BODY_MAX_MB = 1;
+
 export function mbToBytes(mb: number): number {
   return mb * BYTES_PER_MB;
 }
