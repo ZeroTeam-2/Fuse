@@ -54,13 +54,13 @@ function closeModal() {
 let devSubmit: () => Promise<void> = async () => {};
 
 if (import.meta.dev) {
-  const apiBase = useApiBase();
-  const devLoginUrl = `${apiBase}/api/auth/dev-login`;
+  const apiFetch = useApiFetch();
+  const devLoginPath = "/api/auth/dev-login";
 
   const probe = async () => {
     if (devAvailable.value !== null) return;
     try {
-      const response = await fetch(devLoginUrl, { credentials: "include" });
+      const response = await apiFetch(devLoginPath);
       devAvailable.value = response.ok;
     } catch {
       devAvailable.value = false;
@@ -78,9 +78,8 @@ if (import.meta.dev) {
     devError.value = "";
     devSubmitting.value = true;
     try {
-      const response = await fetch(devLoginUrl, {
+      const response = await apiFetch(devLoginPath, {
         method: "POST",
-        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: devEmail.value, password: devPassword.value }),
       });
@@ -91,6 +90,8 @@ if (import.meta.dev) {
         return;
       }
 
+      // Сессия сменилась: парный токен, выданный до входа, уже не подходит.
+      useCsrfReset()();
       await authStore.fetchUser();
       closeModal();
     } catch {

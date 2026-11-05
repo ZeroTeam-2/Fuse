@@ -31,7 +31,19 @@ export const useAuthStore = defineStore("auth", {
     },
 
     async logout() {
-      await fetch(`${useApiBase()}/api/auth/logout`, { credentials: "include" });
+      // POST, а не GET: по GET сессию завершала бы любая картинка с чужого
+      // сайта. Запрос идёт через $apiFetch — он подставляет парный CSRF-токен.
+      const apiFetch = useApiFetch();
+      await apiFetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+      useCsrfReset()();
+      this.clearUser();
+    },
+
+    /** Выход на всех устройствах: отзывает все сессии пользователя. */
+    async logoutEverywhere() {
+      const apiFetch = useApiFetch();
+      await apiFetch("/api/auth/logout-all", { method: "POST" }).catch(() => undefined);
+      useCsrfReset()();
       this.clearUser();
     },
   },

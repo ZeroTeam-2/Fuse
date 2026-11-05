@@ -45,6 +45,12 @@ interface UploaderConfig {
   apiBase: string;
   singleMaxBytes: number;
   partSizeBytes: number;
+  /**
+   * Парный CSRF-токен из памяти приложения (`plugins/api.ts`). Передаётся
+   * функцией, а не значением: загрузка живёт долго, а токен за это время может
+   * быть перевыпущен.
+   */
+  csrfToken: () => Promise<string | null>;
 }
 
 /** XHR вместо fetch ради `upload.onprogress` — байтового прогресса исходящего тела. */
@@ -52,6 +58,7 @@ function xhrSend(
   url: string,
   body: XMLHttpRequestBodyInit,
   contentType: string | null,
+  csrfToken: string | null,
   onProgress: (loadedBytes: number) => void,
 ): { promise: Promise<unknown>; abort: () => void } {
   const xhr = new XMLHttpRequest();
@@ -59,6 +66,8 @@ function xhrSend(
     xhr.open("POST", url);
     xhr.withCredentials = true;
     if (contentType) xhr.setRequestHeader("Content-Type", contentType);
+    // Через XHR заголовок ставится руками: общего перехватчика у него нет.
+    if (csrfToken) xhr.setRequestHeader("x-csrf-token", csrfToken);
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onProgress(e.loaded);
     };
@@ -128,9 +137,14 @@ function createUpload(cfg: UploaderConfig, file: File): FileUploadHandle {
   }
 
   async function api(path: string, init: RequestInit): Promise<unknown> {
+    const headers = new Headers(init.headers);
+    const token = await cfg.csrfToken();
+    if (token) headers.set("x-csrf-token", token);
+
     const response = await fetch(`${cfg.apiBase}${path}`, {
       credentials: "include",
       ...init,
+      headers,
     });
     if (!response.ok) {
       const body = (await response.json().catch(() => null)) as { message?: string } | null;
@@ -148,6 +162,7 @@ function createUpload(cfg: UploaderConfig, file: File): FileUploadHandle {
       `${cfg.apiBase}/api/uploads/single`,
       form,
       null,
+      await cfg.csrfToken(),
       setProgress,
     );
     abortCurrent = abort;
@@ -214,6 +229,7 @@ function createUpload(cfg: UploaderConfig, file: File): FileUploadHandle {
           `${cfg.apiBase}/api/uploads/chunked/${uploadId}/part/${part}`,
           chunk,
           "application/octet-stream",
+          await cfg.csrfToken(),
           (loaded) => setProgress(completedBytes + loaded),
         );
         abortCurrent = abort;
@@ -293,11 +309,16 @@ export function useFileUpload() {
   const singleMaxBytes = Number(config.public.fileSingleUploadMaxMb) * 1024 * 1024;
   const partSizeBytes = Number(config.public.uploadPartSizeMb) * 1024 * 1024;
 
+  const csrfToken = useCsrfToken();
+
   return {
     singleMaxBytes,
     /** Стартует загрузку сразу; за ходом следит `handle.state`. */
     upload(file: File): FileUploadHandle {
-      return createUpload({ apiBase, singleMaxBytes, partSizeBytes }, file);
+      return createUpload(
+        { apiBase, singleMaxBytes, partSizeBytes, csrfToken },
+        file,
+      );
     },
   };
 }

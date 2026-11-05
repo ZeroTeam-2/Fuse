@@ -267,9 +267,8 @@ async function onAvatarChange(e: Event) {
   try {
     const body = new FormData();
     body.append("file", file);
-    const res = await fetch(`${useApiBase()}/api/users/me/avatar`, {
+    const res = await useApiFetch()("/api/users/me/avatar", {
       method: "POST",
-      credentials: "include",
       body,
     });
     if (!res.ok) throw new Error();

@@ -41,6 +41,8 @@ interface RunSocketOptions {
 
 export function useRunSocket(runId: string, options: RunSocketOptions = {}) {
   const apiBase = useApiBase();
+  // Команды идут через apiFetch: он подставляет парный CSRF-токен.
+  const apiFetch = useApiFetch();
 
   const socket = shallowRef<Socket | null>(null);
   const isConnected = ref(false);
@@ -118,29 +120,24 @@ export function useRunSocket(runId: string, options: RunSocketOptions = {}) {
    * эндпоинты с авторизацией и валидацией.
    */
   async function submitPage(stepIndex: number, data: Record<string, unknown>) {
-    await fetch(`${apiBase}/api/runs/${runId}/page-submit`, {
+    await apiFetch(`/api/runs/${runId}/page-submit`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      credentials: "include",
       body: JSON.stringify({ stepIndex, data }),
     });
   }
 
   /** Ответ на `input:required`: значения по скоуп-ключам, как их назвал бэкенд. */
   async function submitInputs(stepIndex: number, values: Record<string, unknown>) {
-    await fetch(`${apiBase}/api/runs/${runId}/input-submit`, {
+    await apiFetch(`/api/runs/${runId}/input-submit`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      credentials: "include",
       body: JSON.stringify({ stepIndex, values }),
     });
   }
 
   async function cancelRun() {
-    await fetch(`${apiBase}/api/runs/${runId}/cancel`, {
-      method: "POST",
-      credentials: "include",
-    });
+    await apiFetch(`/api/runs/${runId}/cancel`, { method: "POST" });
   }
 
   function disconnect() {
