@@ -2,8 +2,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NotFoundException, ServiceUnavailableException, UnauthorizedException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type { Response } from "express";
+import type { DoubleCsrfUtilities } from "csrf-csrf";
 import { AuthController } from "../src/auth/auth.controller";
 import { YandexAuthService } from "../src/auth/yandex-auth.service";
+import { SessionService } from "../src/auth/session.service";
 import { UsersService } from "../src/users/users.service";
 import type { UserDocument } from "../src/users/user.schema";
 
@@ -30,13 +32,30 @@ function makeController(env: Record<string, string>, user: UserDocument | null =
     }),
   } as unknown as YandexAuthService;
 
-  const res = { cookie: vi.fn() } as unknown as Response;
+  const sessions = {
+    revoke: vi.fn().mockResolvedValue(undefined),
+    revokeAllForUser: vi.fn().mockResolvedValue(0),
+  } as unknown as SessionService;
+
+  const csrf = {
+    generateCsrfToken: vi.fn().mockReturnValue("csrf-token"),
+    validateRequest: vi.fn().mockReturnValue(true),
+  } as unknown as DoubleCsrfUtilities;
+
+  const res = { cookie: vi.fn(), clearCookie: vi.fn() } as unknown as Response;
 
   return {
-    controller: new AuthController(yandexAuth, usersService, configService),
+    controller: new AuthController(
+      yandexAuth,
+      usersService,
+      sessions,
+      configService,
+      csrf,
+    ),
     res,
     yandexAuth,
     usersService,
+    sessions,
   };
 }
 
@@ -61,12 +80,12 @@ describe("AuthController.devLogin", () => {
     expect(res.cookie).toHaveBeenCalledWith(
       "access_token",
       "access",
-      expect.objectContaining({ httpOnly: true, path: "/" }),
+      expect.objectContaining({ httpOnly: true, path: "/", sameSite: "lax" }),
     );
     expect(res.cookie).toHaveBeenCalledWith(
       "refresh_token",
       "refresh",
-      expect.objectContaining({ httpOnly: true, path: "/" }),
+      expect.objectContaining({ httpOnly: true, path: "/", sameSite: "lax" }),
     );
   });
 

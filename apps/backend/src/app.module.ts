@@ -19,6 +19,9 @@ import { UploadsModule } from "./uploads/uploads.module";
 import { NotificationsModule } from "./notifications/notifications.module";
 import { LoggingModule } from "./logging/logging.module";
 import { JwtAuthGuard } from "./auth/guards/jwt-auth.guard";
+import { SecurityModule } from "./security/security.module";
+import { CsrfGuard } from "./security/csrf.guard";
+import { OriginGuard } from "./security/origin.guard";
 import { EventsModule } from "./events/events.module";
 
 @Module({
@@ -55,6 +58,9 @@ import { EventsModule } from "./events/events.module";
     // который подливает в них события воркер-процессов. Регистрируется ровно
     // здесь — модуль глобальный, потребители токен не импортируют.
     EventsModule.forApi(),
+    // Утилиты CSRF — один экземпляр на приложение; модуль глобальный, его
+    // провайдер нужен и guard'у ниже, и контроллеру аутентификации.
+    SecurityModule,
     MinioModule,
     UsersModule,
     AuthModule,
@@ -78,6 +84,19 @@ import { EventsModule } from "./events/events.module";
     {
       provide: APP_GUARD,
       useClass: JwtAuthGuard,
+    },
+    // После аутентификации: обе проверки относятся к запросам, меняющим
+    // состояние, и ни одна не заменяет другую. OriginGuard смотрит на
+    // заголовок, который браузер проставляет сам и подделать его со страницы
+    // нельзя; CsrfGuard — на парный токен, который невозможно получить, не
+    // прочитав ответ нашего же эндпоинта.
+    {
+      provide: APP_GUARD,
+      useClass: OriginGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: CsrfGuard,
     },
     {
       provide: APP_FILTER,
