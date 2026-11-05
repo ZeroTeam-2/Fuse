@@ -12,8 +12,10 @@ import {
   BadRequestException,
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
+import { Throttle } from "@nestjs/throttler";
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
+import { THROTTLE_UPLOADS } from "../security/throttle.config";
 import { UsersService } from "./users.service";
 import { MinioService } from "../minio/minio.service";
 import { UpdateProfileDto } from "./dto/update-profile.dto";
@@ -48,6 +50,7 @@ export class UsersController {
   @Post("me/avatar")
   @ApiOperation({ summary: "Upload avatar" })
   @ApiConsumes("multipart/form-data")
+  @Throttle({ default: THROTTLE_UPLOADS })
   @UseInterceptors(FileInterceptor("file"))
   async uploadAvatar(
     @Req() req: AuthenticatedRequest,

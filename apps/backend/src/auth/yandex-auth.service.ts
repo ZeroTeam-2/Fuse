@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { Injectable, Logger, UnauthorizedException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { JwtService } from "@nestjs/jwt";
 import { UsersService } from "../users/users.service";
 import type { UserDocument } from "../users/user.schema";
 import type { JwtPayload, TokenPair } from "./auth.types";
+import { SessionService } from "./session.service";
 
 interface YandexTokenResponse {
   access_token: string;
@@ -32,6 +34,7 @@ export class YandexAuthService {
     private readonly configService: ConfigService,
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
+    private readonly sessions: SessionService,
   ) {}
 
   getAuthUrl(state?: string): string {
@@ -122,23 +125,61 @@ export class YandexAuthService {
   /**
    * Проверяет refresh-токен и выпускает новую пару access/refresh (ротация),
    * чтобы пользователь не разлогинивался при истечении access-токена (15 минут).
+   *
+   * Старая сессия при этом отзывается, и предъявить тот же refresh-токен второй
+   * раз уже нельзя. Повторное предъявление означает, что копия токена есть у
+   * кого-то ещё (утечка из хранилища браузера, перехват): различить, кто из
+   * двоих законный владелец, нечем, поэтому отзывается вся цепочка сессий
+   * пользователя — оба идут логиниться заново.
    */
   async refreshTokens(refreshToken: string): Promise<TokenPair> {
     let payload: JwtPayload;
     try {
       payload = await this.jwtService.verifyAsync<JwtPayload>(refreshToken, {
-        secret: this.configService.get<string>("JWT_SECRET") ?? "fallback",
+        secret: this.configService.getOrThrow<string>("JWT_SECRET"),
       });
     } catch {
       throw new UnauthorizedException("Invalid or expired refresh token");
     }
 
-    const user = await this.usersService.findById(payload.userId).catch(() => null);
+    // Токены, выпущенные до появления сессий, идентификатора не несут: ротация
+    // по ним невозможна, сессии в базе за ними нет.
+    if (!payload.jti) {
+      throw new UnauthorizedException("Invalid or expired refresh token");
+    }
+
+    const session = await this.sessions.findByJti(payload.jti);
+    if (!session) {
+      throw new UnauthorizedException("Invalid or expired refresh token");
+    }
+
+    if (session.revokedAt) {
+      await this.revokeChain(session.userId, payload.jti, "предъявлен отозванный токен");
+      throw new UnauthorizedException("Refresh token has already been used");
+    }
+
+    // Подпись верна, а значение — не то, что выдавалось этой сессии: так
+    // выглядит подставленный токен с чужим `jti`.
+    if (!this.sessions.matchesRefreshToken(session, refreshToken)) {
+      await this.revokeChain(session.userId, payload.jti, "значение токена не совпало с выданным");
+      throw new UnauthorizedException("Invalid or expired refresh token");
+    }
+
+    const user = await this.usersService.findById(session.userId).catch(() => null);
     if (!user) {
       throw new UnauthorizedException("User not found");
     }
 
+    await this.sessions.revoke(payload.jti);
+
     return this.issueTokens(user);
+  }
+
+  private async revokeChain(userId: string, jti: string, reason: string): Promise<void> {
+    const revoked = await this.sessions.revokeAllForUser(userId);
+    this.logger.warn(
+      `Отзыв всех сессий пользователя ${userId} (${reason}, jti=${jti}): ${revoked}`,
+    );
   }
 
   /**
@@ -147,21 +188,38 @@ export class YandexAuthService {
    * второй путь выдачи разошёлся бы с этим по TTL и флагам куки.
    */
   async issueTokens(user: UserDocument): Promise<TokenPair> {
-    const payload: JwtPayload = {
-      userId: user._id.toString(),
-      email: user.email,
-    };
+    const userId = user._id.toString();
+    // Один идентификатор на пару: в access-токене он зовётся sId, в
+    // refresh-токене — jti, и обозначает одну и ту же запись сессии.
+    const jti = randomUUID();
 
-    const accessToken = await this.jwtService.signAsync(payload);
-    const refreshToken = await this.jwtService.signAsync(payload, {
-      expiresIn: (this.configService.get<string>("JWT_REFRESH_EXPIRES") ?? "7d") as never,
+    const accessToken = await this.jwtService.signAsync({
+      userId,
+      email: user.email,
+      sId: jti,
+      ver: user.tokenVersion ?? 0,
+    } satisfies JwtPayload);
+    const refreshToken = await this.jwtService.signAsync(
+      { userId, email: user.email, jti } satisfies JwtPayload,
+      {
+        expiresIn: (this.configService.get<string>("JWT_REFRESH_EXPIRES") ?? "7d") as never,
+      },
+    );
+
+    const refreshTokenMaxAge = this.getRemainingMs(refreshToken);
+
+    await this.sessions.create({
+      jti,
+      userId,
+      refreshToken,
+      expiresAt: new Date(Date.now() + refreshTokenMaxAge),
     });
 
     return {
       accessToken,
       refreshToken,
       accessTokenMaxAge: this.getRemainingMs(accessToken),
-      refreshTokenMaxAge: this.getRemainingMs(refreshToken),
+      refreshTokenMaxAge,
     };
   }
 

@@ -1,5 +1,11 @@
 # Reverse proxy: /api/* -> backend (NestJS), остальное -> frontend (Nuxt).
 # Backend использует глобальный префикс "api", поэтому путь не переписывается.
+#
+# reverse_proxy проставляет X-Forwarded-For / X-Forwarded-Proto сам, по
+# умолчанию: адрес клиента дописывается в конец цепочки. От этого зависит ключ
+# ограничения частоты запросов на бэкенде (TRUST_PROXY_HOPS=1 в
+# docker-compose.yml) — убрать проброс нельзя, иначе лимит начнёт считать всех
+# пользователей одним клиентом.
 :8081 {
 	handle /api/* {
 		reverse_proxy backend:3001

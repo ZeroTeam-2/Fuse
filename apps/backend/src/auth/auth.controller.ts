@@ -2,27 +2,43 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
+  Inject,
   NotFoundException,
   Post,
   Query,
   Req,
   Res,
-  Redirect,
   Logger,
   ServiceUnavailableException,
   UnauthorizedException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { Throttle } from "@nestjs/throttler";
 import { ApiTags, ApiExcludeEndpoint } from "@nestjs/swagger";
-import { createHash, timingSafeEqual } from "node:crypto";
+import type { DoubleCsrfUtilities } from "csrf-csrf";
+import { THROTTLE_AUTH, THROTTLE_DEV_LOGIN } from "../security/throttle.config";
+import type { CsrfTokenResponse } from "../security/csrf.config";
+import { CSRF_UTILITIES } from "../security/security.tokens";
+import { SkipCsrf } from "../security/skip-csrf.decorator";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { Request, Response } from "express";
 import { YandexAuthService } from "./yandex-auth.service";
+import { SessionService } from "./session.service";
 import { UsersService } from "../users/users.service";
 import { Public } from "./decorators/public.decorator";
 import { DevLoginDto } from "./dto/dev-login.dto";
-import type { TokenPair } from "./auth.types";
+import type { AuthenticatedRequest, TokenPair } from "./auth.types";
+import {
+  OAUTH_STATE_COOKIE,
+  REFRESH_TOKEN_COOKIE,
+  clearAuthCookies,
+  clearOAuthStateCookie,
+  setAuthCookies,
+  setOAuthStateCookie,
+} from "./auth-cookies";
 
 /**
  * Сравнение за постоянное время. `timingSafeEqual` требует буферов равной
@@ -44,32 +60,77 @@ export class AuthController {
   constructor(
     private readonly yandexAuth: YandexAuthService,
     private readonly usersService: UsersService,
+    private readonly sessions: SessionService,
     private readonly configService: ConfigService,
+    @Inject(CSRF_UTILITIES) private readonly csrf: DoubleCsrfUtilities,
   ) {}
 
+  /**
+   * Выдаёт парный CSRF-токен: куку ставит сервер, сам токен уходит **телом**
+   * ответа. Телом, а не кукой, потому что кука `HttpOnly` и из JS не читается —
+   * клиент держит токен в памяти и присылает заголовком `x-csrf-token`.
+   *
+   * Маршрут публичный: токен нужен и до входа, форме локального входа.
+   */
+  @Get("csrf-token")
+  @Public()
+  @ApiExcludeEndpoint()
+  @Header("Cache-Control", "no-store")
+  csrfToken(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): CsrfTokenResponse {
+    return { csrfToken: this.csrf.generateCsrfToken(req, res) };
+  }
+
+  /**
+   * Старт входа через Yandex. `state` — случайное значение, которое уходит в
+   * OAuth-запрос и одновременно кладётся в короткоживущую httpOnly-куку: без
+   * него callback принимает любой код авторизации, в том числе полученный
+   * атакующим на свою учётку и подсунутый жертве (подмена аккаунта).
+   *
+   * Обработчик отвечает через `@Res`, а не `@Redirect`: декоратор до объекта
+   * ответа не дотягивается, а куку ставить нужно именно здесь.
+   */
   @Get("login")
   @Public()
   @ApiExcludeEndpoint()
-  @Redirect()
-  login() {
-    return { url: this.yandexAuth.getAuthUrl(), statusCode: 302 };
+  @Header("Cache-Control", "no-store")
+  login(@Res() res: Response) {
+    const state = randomBytes(32).toString("hex");
+    setOAuthStateCookie(res, state, this.isProd);
+
+    return res.redirect(HttpStatus.FOUND, this.yandexAuth.getAuthUrl(state));
   }
 
   @Get("callback")
   @Public()
   @ApiExcludeEndpoint()
+  @Header("Cache-Control", "no-store")
+  @Throttle({ default: THROTTLE_AUTH })
   async callback(
     @Query("code") code: string | undefined,
     @Query("error") error: string | undefined,
+    @Query("state") state: string | undefined,
+    @Req() req: Request,
     @Res() res: Response,
   ) {
     const appUrl = this.configService.get<string>("APP_URL") ?? "http://localhost:5173";
+
+    // Кука одноразовая: убирается при любом исходе, иначе значение остаётся
+    // пригодным для второй попытки.
+    const expectedState = this.readCookie(req, OAUTH_STATE_COOKIE);
+    clearOAuthStateCookie(res, this.isProd);
 
     if (error) {
       return res.redirect(`${appUrl}/login?error=cancelled`);
     }
     if (!code) {
       return res.redirect(`${appUrl}/login?error=missing_code`);
+    }
+    if (!state || !expectedState || !safeEqual(state, expectedState)) {
+      this.logger.warn("OAuth callback: state не совпал с выданным");
+      return res.redirect(`${appUrl}/login?error=invalid_state`);
     }
 
     try {
@@ -103,6 +164,8 @@ export class AuthController {
   @Get("dev-login")
   @Public()
   @ApiExcludeEndpoint()
+  @Header("Cache-Control", "no-store")
+  @Throttle({ default: THROTTLE_DEV_LOGIN })
   devLoginAvailable() {
     this.assertDevLoginConfigured();
     return { available: true };
@@ -111,6 +174,8 @@ export class AuthController {
   @Post("dev-login")
   @Public()
   @ApiExcludeEndpoint()
+  @Header("Cache-Control", "no-store")
+  @Throttle({ default: THROTTLE_DEV_LOGIN })
   @HttpCode(HttpStatus.OK)
   async devLogin(
     @Body() dto: DevLoginDto,
@@ -143,28 +208,80 @@ export class AuthController {
     return { success: true };
   }
 
+  /**
+   * Обновление сессии. `@SkipCsrf` — единственное исключение из проверки
+   * парного токена: этот маршрут вызывает не только браузер, но и SSR-сервер
+   * Nuxt при рендере страницы, а держать парный токен ему негде. Защита при
+   * этом остаётся: кука `SameSite=lax` на межсайтовый POST не уходит (без неё
+   * здесь 401), и проверка `Origin` на маршрут по-прежнему распространяется.
+   */
   @Post("refresh")
   @Public()
+  @SkipCsrf()
   @ApiExcludeEndpoint()
+  @Header("Cache-Control", "no-store")
+  @Throttle({ default: THROTTLE_AUTH })
   async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
-    const refreshToken = (req.cookies as Record<string, string> | undefined)?.["refresh_token"];
+    const refreshToken = this.readCookie(req, REFRESH_TOKEN_COOKIE);
     if (!refreshToken) {
       throw new UnauthorizedException("No refresh token");
     }
 
-    const tokens = await this.yandexAuth.refreshTokens(refreshToken);
+    let tokens: TokenPair;
+    try {
+      tokens = await this.yandexAuth.refreshTokens(refreshToken);
+    } catch (err) {
+      // Сессии больше нет: куки с мёртвыми токенами убираем, иначе браузер
+      // присылает их до истечения срока и каждый запрос снова идёт в отказ.
+      clearAuthCookies(res, this.isProd);
+      throw err;
+    }
+
     this.setAuthCookies(res, tokens);
 
     return { success: true };
   }
 
-  @Get("logout")
-  @Public()
+  /**
+   * Выход. `POST`, а не `GET`: по `GET` сессию завершает любая картинка с
+   * чужого сайта (`<img src=".../auth/logout">`). Маршрут не публичный —
+   * отзывать нужно конкретную сессию, а её идентификатор приходит из
+   * проверенного токена.
+   */
+  @Post("logout")
   @ApiExcludeEndpoint()
-  logout(@Res({ passthrough: true }) res: Response) {
-    res.clearCookie("access_token");
-    res.clearCookie("refresh_token");
+  @Header("Cache-Control", "no-store")
+  @Throttle({ default: THROTTLE_AUTH })
+  @HttpCode(HttpStatus.OK)
+  async logout(
+    @Req() req: AuthenticatedRequest,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    await this.sessions.revoke(req.user.sId);
+    clearAuthCookies(res, this.isProd);
+
     return { success: true };
+  }
+
+  /**
+   * Выход на всех устройствах: отзываются все сессии пользователя, и версия
+   * токенов увеличивается — выданные access-токены перестают действовать, не
+   * дожидаясь истечения своих 15 минут.
+   */
+  @Post("logout-all")
+  @ApiExcludeEndpoint()
+  @Header("Cache-Control", "no-store")
+  @Throttle({ default: THROTTLE_AUTH })
+  @HttpCode(HttpStatus.OK)
+  async logoutAll(
+    @Req() req: AuthenticatedRequest,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const revoked = await this.sessions.revokeAllForUser(req.user.userId);
+    await this.usersService.bumpTokenVersion(req.user.userId);
+    clearAuthCookies(res, this.isProd);
+
+    return { success: true, revokedSessions: revoked };
   }
 
   /**
@@ -182,22 +299,15 @@ export class AuthController {
     return { expectedEmail, expectedPassword };
   }
 
-  private setAuthCookies(res: Response, tokens: TokenPair) {
-    const isProd = process.env.NODE_ENV === "production";
-    const cookieOpts = {
-      httpOnly: true,
-      secure: isProd,
-      sameSite: isProd ? ("none" as const) : ("lax" as const),
-      path: "/",
-    };
+  private get isProd(): boolean {
+    return this.configService.get<string>("NODE_ENV") === "production";
+  }
 
-    res.cookie("access_token", tokens.accessToken, {
-      ...cookieOpts,
-      maxAge: tokens.accessTokenMaxAge,
-    });
-    res.cookie("refresh_token", tokens.refreshToken, {
-      ...cookieOpts,
-      maxAge: tokens.refreshTokenMaxAge,
-    });
+  private readCookie(req: Request, name: string): string | undefined {
+    return (req.cookies as Record<string, string> | undefined)?.[name];
+  }
+
+  private setAuthCookies(res: Response, tokens: TokenPair) {
+    setAuthCookies(res, tokens, this.isProd);
   }
 }

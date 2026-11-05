@@ -1,11 +1,16 @@
 import { Controller, Get, Param, Query } from "@nestjs/common";
+import { Throttle } from "@nestjs/throttler";
 import { ApiTags, ApiOperation } from "@nestjs/swagger";
+import { THROTTLE_MARKETPLACE } from "../security/throttle.config";
 import { Public } from "../auth/decorators/public.decorator";
 import { MarketplaceService } from "./marketplace.service";
 import { MarketplaceQueryDto } from "./dto/marketplace-query.dto";
 
 @ApiTags("marketplace")
 @Public()
+// Единственные маршруты без аутентификации, и каждый делает запрос в базу с
+// пользовательским фильтром. Лимит на весь контроллер, включая :id/manual-inputs.
+@Throttle({ default: THROTTLE_MARKETPLACE })
 @Controller("marketplace")
 export class MarketplaceController {
   constructor(private readonly marketplaceService: MarketplaceService) {}

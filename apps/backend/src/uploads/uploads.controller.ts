@@ -13,7 +13,9 @@ import {
 } from "@nestjs/common";
 import type { Response } from "express";
 import { FileInterceptor } from "@nestjs/platform-express";
+import { Throttle } from "@nestjs/throttler";
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from "@nestjs/swagger";
+import { THROTTLE_UPLOADS } from "../security/throttle.config";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import type { AuthenticatedRequest } from "../auth/auth.types";
 import { UploadsService } from "./uploads.service";
@@ -22,6 +24,9 @@ import { InitChunkedUploadDto } from "./dto/init-chunked-upload.dto";
 @ApiTags("uploads")
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
+// Каждый запрос здесь буферизует тело в памяти процесса, поэтому частота
+// ограничивает не трафик, а потребление памяти.
+@Throttle({ default: THROTTLE_UPLOADS })
 @Controller("uploads")
 export class UploadsController {
   constructor(private readonly uploadsService: UploadsService) {}

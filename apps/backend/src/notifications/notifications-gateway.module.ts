@@ -26,7 +26,7 @@ import { NotificationsGateway } from "./notifications.gateway";
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
-        secret: configService.get<string>("JWT_SECRET") ?? "fallback",
+        secret: configService.getOrThrow<string>("JWT_SECRET"),
       }),
       inject: [ConfigService],
     }),

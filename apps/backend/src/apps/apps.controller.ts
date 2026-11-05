@@ -14,6 +14,7 @@ import {
   BadRequestException,
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
+import { Throttle } from "@nestjs/throttler";
 import {
   ApiTags,
   ApiOperation,
@@ -24,6 +25,7 @@ import {
 import { ALLOWED_SPEC_EXTENSIONS, getExtension } from "@fuse/shared";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import type { AuthenticatedRequest } from "../auth/auth.types";
+import { THROTTLE_UPLOADS } from "../security/throttle.config";
 import { AppsService } from "./apps.service";
 import { CreateAppDto } from "./dto/create-app.dto";
 import { ImportPreviewDto } from "./dto/import-preview.dto";
@@ -104,6 +106,7 @@ export class AppsController {
   })
   // Лимит размера (SPEC_FILE_MAX_MB) задаётся через MulterModule.registerAsync
   // в AppsModule — конфиг-driven, без магического числа в декораторе.
+  @Throttle({ default: THROTTLE_UPLOADS })
   @UseInterceptors(FileInterceptor("file"))
   async importPreviewFile(
     @UploadedFile() file: Express.Multer.File,
@@ -148,6 +151,7 @@ export class AppsController {
   })
   // Лимит размера (SPEC_FILE_MAX_MB) задаётся через MulterModule.registerAsync
   // в AppsModule — конфиг-driven, без магического числа в декораторе.
+  @Throttle({ default: THROTTLE_UPLOADS })
   @UseInterceptors(FileInterceptor("file"))
   async createFromFile(
     @UploadedFile() file: Express.Multer.File,
@@ -203,6 +207,7 @@ export class AppsController {
       required: ["file"],
     },
   })
+  @Throttle({ default: THROTTLE_UPLOADS })
   @UseInterceptors(FileInterceptor("file"))
   reimportFile(
     @Param("id") id: string,
@@ -237,6 +242,7 @@ export class AppsController {
       required: ["file"],
     },
   })
+  @Throttle({ default: THROTTLE_UPLOADS })
   @UseInterceptors(FileInterceptor("file"))
   applyReimportFile(
     @Param("id") id: string,

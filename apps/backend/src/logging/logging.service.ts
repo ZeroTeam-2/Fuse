@@ -1,11 +1,14 @@
 import { Injectable, LoggerService } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { currentRequestId } from "../common/request-context";
+import { redactString, redactValue } from "./redact";
 
 interface LogEntry {
   timestamp: string;
   level: string;
   message: string;
   context?: string;
+  requestId?: string;
   [key: string]: unknown;
 }
 
@@ -58,12 +61,18 @@ export class LoggingService implements LoggerService {
     context?: string,
     meta?: Record<string, unknown>,
   ): void {
+    // Маскирование — здесь, на единственном пути записи: и stdout, и внешний
+    // приёмник получают уже обработанную запись, и ни один вызывающий не обязан
+    // об этом помнить.
     const entry: LogEntry = {
       timestamp: new Date().toISOString(),
       level,
-      message,
+      message: redactString(String(message)),
       context,
-      ...meta,
+      // Идентификатор запроса берётся из AsyncLocalStorage: по нему запись
+      // находится по значению, которое клиент получил в ответе 500.
+      requestId: currentRequestId(),
+      ...(meta ? (redactValue(meta) as Record<string, unknown>) : undefined),
     };
 
     const json = JSON.stringify(entry);

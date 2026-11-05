@@ -16,6 +16,7 @@
     "seed": "node scripts/seed-local.mts"
   },
   "dependencies": {
+    "@aws-sdk/client-sqs": "^3.731.0",
     "@fuse/shared": "workspace:*",
     "@nestjs/common": "^11.1.27",
     "@nestjs/config": "^4.0.4",
@@ -27,13 +28,18 @@
     "@nestjs/platform-socket.io": "^11.1.28",
     "@nestjs/serve-static": "^5.0.5",
     "@nestjs/swagger": "^11.4.5",
+    "@nestjs/throttler": "^6.7.1",
     "@nestjs/websockets": "^11.1.28",
     "@readme/openapi-parser": "^6.2.1",
     "@scalar/nestjs-api-reference": "^1.2.8",
-    "@aws-sdk/client-sqs": "^3.731.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.2",
     "cookie-parser": "^1.4.7",
+    "csrf-csrf": "^4.1.0",
+    "express": "5.2.1",
+    "file-type": "^22.3.0",
+    "helmet": "^8.3.0",
+    "ipaddr.js": "^2.5.0",
     "js-yaml": "^4.1.0",
     "minio": "^8.0.7",
     "mongoose": "^8.15.0",
@@ -44,6 +50,7 @@
     "rxjs": "^7.8.2",
     "socket.io": "^4.8.3",
     "sqs-consumer": "^11.5.1",
+    "undici": "^8.12.3",
     "zod": "^3.25.67"
   },
   "devDependencies": {

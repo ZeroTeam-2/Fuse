@@ -38,9 +38,59 @@ function mergeCookieHeader(cookieHeader: string, updates: Record<string, string>
   return parts.join("; ");
 }
 
+/** Методы, у которых бэкенд требует парный CSRF-токен. */
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
 export default defineNuxtPlugin(() => {
   const apiBase = useApiBase();
   const requestEvent = import.meta.server ? useRequestEvent() : undefined;
+
+  /**
+   * Парный CSRF-токен живёт здесь, в памяти приложения, и нигде больше: кука с
+   * его парой — `HttpOnly`, из JS не читается, и это в схеме главное. Токен в
+   * localStorage или в своей читаемой куке означал бы, что XSS снимает защиту
+   * целиком.
+   *
+   * Состояние объявлено внутри фабрики плагина, а не в модуле: на SSR модуль
+   * один на процесс, и токен одного пользователя уходил бы другому.
+   */
+  let csrfToken: string | null = null;
+
+  async function fetchCsrfToken(): Promise<string | null> {
+    try {
+      const response = await fetch(`${apiBase}/api/auth/csrf-token`, {
+        credentials: "include",
+      });
+      if (!response.ok) return null;
+
+      const body = (await response.json()) as { csrfToken?: string };
+      csrfToken = body.csrfToken ?? null;
+      return csrfToken;
+    } catch {
+      return null;
+    }
+  }
+
+  function ensureCsrfToken(): Promise<string | null> {
+    return csrfToken ? Promise.resolve(csrfToken) : fetchCsrfToken();
+  }
+
+  /**
+   * Сбрасывает токен, когда меняется сессия (вход, выход): бэкенд привязывает
+   * парный токен к пользователю, и выданный до входа после входа уже не
+   * подходит. Повтор при 403 ниже вытащил бы приложение и без этого, но ценой
+   * лишнего отказа на каждом первом действии после входа.
+   */
+  function resetCsrfToken(): void {
+    csrfToken = null;
+  }
+
+  /**
+   * На сервере токен не нужен и взять его негде: единственный изменяющий вызов
+   * с SSR — `POST /api/auth/refresh`, и он от проверки освобождён (@SkipCsrf).
+   */
+  const csrfApplies = (method: string) =>
+    import.meta.client && MUTATING_METHODS.has(method.toUpperCase());
 
   /**
    * На SSR у нас нет браузерного cookie-jar: Set-Cookie от бэкенда нужно
@@ -93,6 +143,41 @@ export default defineNuxtPlugin(() => {
     return refreshPromise;
   }
 
+  /** Копия запроса с заголовком `x-csrf-token`; для GET — тот же запрос. */
+  async function withCsrfToken(request: Request): Promise<Request> {
+    if (!csrfApplies(request.method)) return request;
+
+    const token = await ensureCsrfToken();
+    if (!token) return request;
+
+    const headers = new Headers(request.headers);
+    headers.set("x-csrf-token", token);
+    return new Request(request, { headers });
+  }
+
+  /**
+   * Запрос к API вне типизированного клиента: загрузка файлов, вход, команды
+   * запуска. Нужен затем, чтобы парный токен подставлялся в одном месте, —
+   * иначе каждый новый `fetch` по месту оказывается без него и падает с 403
+   * уже на пользователе.
+   */
+  async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+    const method = (init.method ?? "GET").toUpperCase();
+    const url = path.startsWith("http") ? path : `${apiBase}${path}`;
+
+    const send = async (token: string | null) => {
+      const headers = new Headers(init.headers);
+      if (token) headers.set("x-csrf-token", token);
+      return fetch(url, { credentials: "include", ...init, headers });
+    };
+
+    const response = await send(csrfApplies(method) ? await ensureCsrfToken() : null);
+    if (response.status !== 403 || !csrfApplies(method)) return response;
+
+    const refreshed = await fetchCsrfToken();
+    return refreshed ? send(refreshed) : response;
+  }
+
   /**
    * Custom fetch для openapi-fetch: access-токен живёт всего 15 минут и
    * ничего его не обновляло, из-за чего после простоя (или SSR-рефреша
@@ -102,7 +187,17 @@ export default defineNuxtPlugin(() => {
   const authFetch = async (request: Request): Promise<Response> => {
     const isRefreshCall = request.url.includes("/api/auth/refresh");
     const retryRequest = isRefreshCall ? null : request.clone();
-    const response = await fetch(request);
+
+    let response = await fetch(await withCsrfToken(request));
+
+    // Токен мог устареть: сессия сменилась (вход, «выйти везде») или кука
+    // истекла. Один повтор со свежим токеном, дальше — ошибка как есть.
+    if (response.status === 403 && csrfApplies(request.method) && retryRequest) {
+      const refreshed = await fetchCsrfToken();
+      if (refreshed) {
+        response = await fetch(await withCsrfToken(retryRequest.clone()));
+      }
+    }
 
     if (response.status !== 401 || isRefreshCall || !retryRequest) {
       return response;
@@ -147,6 +242,11 @@ export default defineNuxtPlugin(() => {
   return {
     provide: {
       api: client,
+      apiFetch,
+      /** Парный токен для запросов, которые уходят не через fetch (XHR). */
+      csrfToken: ensureCsrfToken,
+      /** Вызывается при смене сессии: вход, выход. */
+      csrfReset: resetCsrfToken,
     },
   };
 });
