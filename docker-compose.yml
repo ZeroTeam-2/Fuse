@@ -31,24 +31,31 @@ services:
       MONGODB_URL: ${MONGODB_URL:?MONGODB_URL is required}
       AWS_REGION: ${AWS_REGION:-us-east-1}
       AWS_SQS_QUEUE_URL: ${AWS_SQS_QUEUE_URL:-http://localstack:4566/000000000000/scenario-execution}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID is required}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY is required}
       AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL:-http://localstack:4566}
-      S3_URL: ${S3_URL:-minio}
+      S3_URL: ${S3_URL:?S3_URL is required}
       # Пусто для внешнего S3 (порт и TLS берутся из схемы в S3_URL).
       S3_PORT: ${S3_PORT:-}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY is required}
       S3_BUCKET: ${S3_BUCKET:-fuse}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       YANDEX_CLIENT_ID: ${YANDEX_CLIENT_ID:-}
       YANDEX_CLIENT_SECRET: ${YANDEX_CLIENT_SECRET:-}
       YANDEX_REDIRECT_URI: ${YANDEX_REDIRECT_URI:-}
       APP_URL: ${APP_URL:-http://localhost:${HTTP_PORT:-8081}}
+      # Сколько прокси-хопов перед backend считать доверенными при разборе
+      # X-Forwarded-For. В этом стеке перед ним ровно один Caddy. Без доверия к
+      # заголовку req.ip равен адресу контейнера прокси и лимит частоты считает
+      # всех пользователей одним клиентом.
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
       # Локальный вход по логину и паролю (в обход OAuth) для случая, когда весь
       # стек поднят в докере. По умолчанию пусто — маршрут отвечает 404.
-      # Непустой пароль при NODE_ENV=production роняет бэкенд на старте, так что
-      # для этого профиля нужно явно задать NODE_ENV=development.
+      # Непустой пароль роняет бэкенд на старте в строгом режиме — то есть при
+      # NODE_ENV=production ИЛИ когда адреса в конфигурации смотрят наружу
+      # (см. config/external-config.ts). Для входа по паролю нужен локальный
+      # профиль: NODE_ENV=development и инфраструктура на локальных адресах.
       DEV_LOGIN_EMAIL: ${DEV_LOGIN_EMAIL:-}
       DEV_LOGIN_PASSWORD: ${DEV_LOGIN_PASSWORD:-}
     expose:
@@ -81,17 +88,17 @@ services:
       MONGODB_URL: ${MONGODB_URL:?MONGODB_URL is required}
       AWS_REGION: ${AWS_REGION:-us-east-1}
       AWS_SQS_QUEUE_URL: ${AWS_SQS_QUEUE_URL:-http://localstack:4566/000000000000/scenario-execution}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID is required}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY is required}
       AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL:-http://localstack:4566}
       # Сколько запусков держит ОДИН воркер (1–10). Больше — через число
       # реплик: docker compose up -d --scale worker=N.
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-5}
-      S3_URL: ${S3_URL:-minio}
+      S3_URL: ${S3_URL:?S3_URL is required}
       # Пусто для внешнего S3 (порт и TLS берутся из схемы в S3_URL).
       S3_PORT: ${S3_PORT:-}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY is required}
       S3_BUCKET: ${S3_BUCKET:-fuse}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       YANDEX_CLIENT_ID: ${YANDEX_CLIENT_ID:-}
